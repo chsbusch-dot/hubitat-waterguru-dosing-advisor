@@ -37,21 +37,32 @@ It adds the two things the integration cannot do:
 - One or more `capability.notification` devices to receive the recommendation
   (e.g. a Pushover device).
 
-## Install
+This is a **parent/child** app: you install one parent (*WaterGuru Dosing
+Advisor*) and add one child per pool, so several pools live under a single app
+instead of a separate top-level app each.
 
 ### Via Hubitat Package Manager (recommended)
 
-Search HPM for **WaterGuru Dosing Advisor** and install.
+Search HPM for **WaterGuru Dosing Advisor** and install — HPM installs both the
+parent and the child app for you.
 
 ### Manually
 
-1. In Hubitat, go to **Apps Code → New App**, paste the contents of
-   [`apps/WaterGuru-Dosing-Advisor.groovy`](apps/WaterGuru-Dosing-Advisor.groovy),
-   and **Save**. (Or use the **Import** button with the raw file URL.)
-2. Go to **Apps → Add User App → WaterGuru Dosing Advisor**.
-3. Configure it (below) and **Done**.
+Install **both** app files under **Apps Code → New App** (or use the **Import**
+button with the raw file URL), and **Save** each:
+
+1. Parent — [`apps/WaterGuru-Dosing-Advisor.groovy`](apps/WaterGuru-Dosing-Advisor.groovy)
+2. Child — [`apps/WaterGuru-Dosing-Advisor-Child.groovy`](apps/WaterGuru-Dosing-Advisor-Child.groovy)
+
+Then go to **Apps → Add User App → WaterGuru Dosing Advisor** (the parent) and
+use **Add a WaterGuru pool** to create an advisor for each pool.
 
 ## Configure
+
+Each pool is one child app. Fields that read from the WaterGuru device show the
+current live value in their label (e.g. *"Pool volume (gallons) — blank uses
+WaterGuru's value (currently 25000)"*), so you can see what "blank" will use
+without pinning it.
 
 | Setting | What it does |
 | --- | --- |
