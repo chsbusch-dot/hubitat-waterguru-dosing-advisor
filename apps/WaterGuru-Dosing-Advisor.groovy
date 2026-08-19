@@ -20,6 +20,8 @@
  *           capability.notification devices.
  *   1.1.0 - Each child can now maintain a dashboard tile device and send an
  *           optional daily summary. (Parent unchanged except this version bump.)
+ *   1.2.0 - Children surface the WaterGuru cassette type (C2/C5) in messages and
+ *           on the tile. (Parent unchanged except this version bump.)
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy
@@ -34,7 +36,7 @@
  * under the License.
  */
 
-def appVersion() { "1.1.0" }
+def appVersion() { "1.2.0" }
 
 definition(
     name:        "WaterGuru Dosing Advisor",

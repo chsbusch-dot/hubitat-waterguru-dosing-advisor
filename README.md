@@ -105,7 +105,7 @@ to see, at a glance, what the pool needs. The device exposes:
 | `status` | `GREEN` / `YELLOW` / `RED` — see the colour key below. Use it to colour the tile. |
 | `recommendation` | The concise one-liner, e.g. *"Add 4.8 gal chlorine · 1.2 lb baking soda"* or *"All in range"*. |
 | `detail` | The full multi-line recommendation (same text as the notification). |
-| `tileHtml` | A formatted HTML snippet (pool, status pill, FC current→target, one-liner, timestamp). |
+| `tileHtml` | A formatted HTML snippet (pool, status pill, FC current→target, one-liner, cassette type when reported, timestamp). |
 | `lastCalc` | When the tile was last updated. |
 
 **Colour key**

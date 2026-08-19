@@ -32,6 +32,11 @@
  *           "WaterGuru Dosing Tile" device with status/recommendation/detail/
  *           tileHtml/lastCalc attributes) and an optional daily summary
  *           notification at a chosen time.
+ *   1.2.0 - Show the WaterGuru cassette type (C2/C5) — when the source device's
+ *           driver reports it — in the message/tile-detail header and as a badge
+ *           on the tile (degrades silently on older drivers). Also redesigns the
+ *           dashboard tile as a card: a status-colored header band and a free-
+ *           chlorine-vs-target progress bar, theme-robust for light/dark boards.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy
@@ -48,7 +53,7 @@
 
 import groovy.transform.Field
 
-def appVersion() { "1.1.0" }
+def appVersion() { "1.2.0" }
 
 definition(
     name:        "WaterGuru Dosing Advisor Pool",
@@ -368,6 +373,8 @@ private Map computeAdvice() {
     out << "🌊 WaterGuru Dosing Advisor — ${label}"
     def sampled = attrRaw("LastMeasurementHuman") ?: attrRaw("LastMeasurement")
     if (sampled) out << "Sampled: ${sampled}"
+    def cassette = cassetteText()
+    if (cassette) out << "Cassette: ${cassette}"
 
     if (!volume || volume <= 0) {
         out << ""
@@ -436,7 +443,9 @@ private Map computeAdvice() {
     else headline = "Review details"
 
     return [text: out.join("\n"), anyAction: anyAction, status: status,
-            headline: headline, fcSummary: fcResult.fcSummary, sampled: sampled, label: label]
+            headline: headline, fcSummary: fcResult.fcSummary,
+            fcVal: fcResult.fcVal, fcTarget: fcResult.target,
+            sampled: sampled, label: label]
 }
 
 /** Free-chlorine dose: SLAM/CYA-aware target, converted to liquid chlorine. */
@@ -656,19 +665,42 @@ private void updateTileDevice(Map r) {
     }
 }
 
-/** Compact, dashboard-friendly HTML for an "Attribute" tile bound to tileHtml. */
+/**
+ * Compact, dashboard-friendly HTML card for an "Attribute" tile bound to
+ * tileHtml: a status-colored header band, a free-chlorine-vs-target progress
+ * bar, and a cassette badge. Single-quoted HTML attributes keep it terse; the
+ * whole card stays well under Hubitat's 1024-char attribute limit. The header
+ * band forces white text (readable on any color), while the body inherits the
+ * dashboard's own text color so the card looks right on light AND dark
+ * dashboards. pH / CYA aren't shown here — the dashboard already has dedicated
+ * number tiles for those.
+ */
 private String buildTileHtml(Map r) {
     String color = tileColor(r.status)
     String word  = (r.status ?: "").toString()
-    String ts = new Date().format("EEE h:mm a", location?.timeZone ?: TimeZone.getDefault())
+    String ts    = new Date().format("EEE h:mm a", location?.timeZone ?: TimeZone.getDefault())
+    String label = clip((r.label ?: "pool").toString(), 24)
+    String head  = clip((r.headline ?: "").toString(), 46)
+    String cass  = attrRaw("cassetteType")
+    boolean haveCass = cass && cass.trim() && !cass.trim().equalsIgnoreCase("unknown")
+
     def sb = new StringBuilder()
-    sb << "<div style=\"font-family:sans-serif;padding:8px 10px;border-left:6px solid ${color};line-height:1.35\">"
-    sb << "<div style=\"font-weight:bold;font-size:15px\">🌊 ${esc(r.label)}</div>"
-    sb << "<div style=\"margin:4px 0\"><span style=\"display:inline-block;padding:1px 9px;border-radius:10px;background:${color};color:#fff;font-weight:bold;font-size:12px\">${esc(word)}</span></div>"
-    sb << "<div style=\"font-size:14px\">${esc(r.headline)}</div>"
-    if (r.fcSummary) sb << "<div style=\"font-size:12px;opacity:.8\">${esc(r.fcSummary)}</div>"
-    sb << "<div style=\"font-size:11px;opacity:.6;margin-top:4px\">Updated ${esc(ts)}${r.sampled ? ' · sampled ' + esc(r.sampled) : ''}</div>"
-    sb << "</div>"
+    sb << "<div style='font-family:sans-serif;border:1px solid #8884;border-radius:12px;overflow:hidden;line-height:1.3'>"
+    sb << "<div style='background:${color};color:#fff;padding:8px 11px;display:flex;justify-content:space-between;align-items:center'>"
+    sb << "<b style='font-size:15px'>🌊 ${esc(label)}</b>"
+    sb << "<span style='background:#fff4;padding:1px 8px;border-radius:9px;font-size:11px;font-weight:700'>${esc(word)}</span></div>"
+    sb << "<div style='padding:9px 11px'>"
+    if (head) sb << "<div style='font-size:13px;margin-bottom:8px'>${esc(head)}</div>"
+    if (r.fcVal != null && r.fcTarget != null && (r.fcTarget as BigDecimal) > 0) {
+        int pct = Math.max(0, Math.min(100, (int) Math.round(
+            (r.fcVal as BigDecimal).doubleValue() / (r.fcTarget as BigDecimal).doubleValue() * 100)))
+        sb << "<div style='font-size:12px;opacity:.75'>Free chlorine <b>${n1(r.fcVal)}</b> → ${n1(r.fcTarget)} ppm</div>"
+        sb << "<div style='height:6px;background:#8884;border-radius:3px;margin:5px 0 9px'><div style='width:${pct}%;height:100%;background:${color};border-radius:3px'></div></div>"
+    }
+    if (haveCass)
+        sb << "<div style='margin-bottom:7px'><span style='background:#8884;padding:2px 8px;border-radius:9px;font-size:11px'>🧪 ${esc(cass.trim())}</span></div>"
+    sb << "<div style='font-size:10px;opacity:.5'>Updated ${esc(ts)}${r.sampled ? ' · sampled ' + esc(r.sampled) : ''}</div>"
+    sb << "</div></div>"
     return sb.toString()
 }
 
@@ -745,6 +777,18 @@ private BigDecimal firstNum(Object... candidates) {
 
 private BigDecimal attrNum(String attr) { toBD(sourceDevice?.currentValue(attr)) }
 private String     attrRaw(String attr) { def v = sourceDevice?.currentValue(attr); v == null ? null : v.toString() }
+
+/** WaterGuru cassette descriptor for the header/tile, or null when the source
+ *  driver (older WaterGuru Integration) doesn't report it or it's unknown.
+ *  Prefers the richer cassetteInfo (e.g. "C5 · installed Aug 12, 2026 ·
+ *  28/30 pads") and falls back to the bare cassetteType. */
+private String cassetteText() {
+    def info = attrRaw("cassetteInfo")
+    if (info && info.trim() && !info.trim().equalsIgnoreCase("unknown")) return info.trim()
+    def type = attrRaw("cassetteType")
+    if (type && type.trim() && !type.trim().equalsIgnoreCase("unknown")) return type.trim()
+    return null
+}
 
 private BigDecimal toBD(def v) {
     if (v == null) return null
