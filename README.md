@@ -78,6 +78,7 @@ without pinning it.
 | **SLAM factor** | The multiplier used in SLAM mode. |
 | **Manual FC target override** | Pin the FC target directly (ppm); blank = compute it from CYA. |
 | **Pool volume / chlorine strength %** | Blank = read from the device (`poolVolume`, `chlorineProductPct`). |
+| **Chlorine runway** | Show an estimate of the days until FC drops below the algae floor. Optional manual daily-loss override (ppm/day); blank = auto (measured from your samples, else a cover-aware estimate). |
 | **Use WaterGuru advice** | Pass through WaterGuru's own pH/TA/CH/CYA dose lines. |
 | **Also include WaterGuru's chlorine advice** | Off by default — this app computes FC, so WaterGuru's (CYA-blind) chlorine line is dropped to avoid a conflicting recommendation. |
 | **Target overrides** | pH / TA / CYA / CH targets; blank = read the device's targets. |
@@ -147,6 +148,29 @@ fl oz = (targetFC − FC) × (volume ÷ 10000) × 10.7 × (12.5 ÷ chlorine%)
 result is reported in fl oz, cups (÷8) and gallons (÷128). When FC is at or above
 target the app advises holding (in SLAM mode, maintaining the SLAM level and
 retesting) rather than dosing.
+
+### Chlorine runway (algae forecast)
+
+Algae is held off by keeping FC above a CYA-linked floor — the [TFP](https://www.troublefreepool.com/)
+minimum, `floor = 0.075 × CYA`. The runway estimate is:
+
+```
+days = (FC − floor) ÷ dailyLoss
+```
+
+`dailyLoss` (ppm/day) is, in order of preference:
+
+1. **Your manual override**, if set.
+2. **Measured** — the average decline across your recent samples. The app keeps a
+   rolling history of each new FC reading and averages the intervals where FC
+   *fell* (intervals where FC rose are chlorine additions and are skipped). This
+   needs a couple of days of samples to appear.
+3. **Estimated** — a modeled default (3 ppm/day, scaled to 60% when the device
+   reports a cover) used until measured history exists.
+
+pH is not part of the clock — it modulates how *effective* a given FC is (high pH
+lowers the active-chlorine fraction) rather than how fast FC decays. The estimate
+is a planning aid, not a guarantee; confirm with your own test kit.
 
 ### pH / TA / CH / CYA
 
