@@ -37,6 +37,12 @@
  *           on the tile (degrades silently on older drivers). Also redesigns the
  *           dashboard tile as a card: a status-colored header band and a free-
  *           chlorine-vs-target progress bar, theme-robust for light/dark boards.
+ *   1.3.0 - Chlorine runway (algae forecast): estimate days until free chlorine
+ *           falls below the algae-prevention floor (0.075 x CYA). Learns your
+ *           pool's daily FC loss from a rolling history of samples (ignoring
+ *           chlorine additions); until a few days accumulate it uses a cover-
+ *           aware estimate, or a manual ppm/day override. Shown in the message,
+ *           the tile detail, and the tile footer.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy
@@ -53,7 +59,7 @@
 
 import groovy.transform.Field
 
-def appVersion() { "1.2.0" }
+def appVersion() { "1.3.0" }
 
 definition(
     name:        "WaterGuru Dosing Advisor Pool",
@@ -91,6 +97,14 @@ preferences {
 @Field static final BigDecimal DRY_ACID_BASE_PCT       = 93.2G
 @Field static final BigDecimal DRY_ACID_OZ_PER_MURIATIC_FLOZ = 1.12G
 
+// Chlorine-runway forecast: how many FC samples to keep, and the modeled daily
+// FC loss (ppm/day) used until enough measured decay history has accumulated.
+// A cover slows UV burn-off, so the modeled loss is scaled down when the source
+// device reports one.
+@Field static final int        RUNWAY_HISTORY_MAX      = 30
+@Field static final BigDecimal FC_LOSS_MODELED_DEFAULT = 3.0G
+@Field static final BigDecimal FC_LOSS_COVER_FACTOR    = 0.6G
+
 // ---------------------------------------------------------------------------
 // UI
 // ---------------------------------------------------------------------------
@@ -122,6 +136,21 @@ def mainPage() {
             input "fcTargetOverride", "decimal",
                 title: "Manual FC target override (ppm) — blank = compute from CYA above",
                 required: false
+        }
+
+        section("<b>Chlorine runway (algae forecast)</b>") {
+            input "showRunway", "bool",
+                title: "Show a chlorine-runway estimate — days until FC drops below the algae floor",
+                defaultValue: true, submitOnChange: true
+            if (showRunway != false) {
+                input "fcLossPerDay", "decimal",
+                    title: "Daily FC loss rate (ppm/day) — blank = auto (measured from samples, else estimated)",
+                    required: false
+                paragraph "The floor is the algae-prevention minimum (${TFP_MIN_FACTOR} × CYA). " +
+                          "Runway = (FC − floor) ÷ daily loss. The loss rate is measured from your own " +
+                          "samples once a few have accumulated; until then a cover-aware estimate is used. " +
+                          runwayStatusLine()
+            }
         }
 
         section("<b>Pool volume &amp; product strengths</b>") {
@@ -299,6 +328,7 @@ def initialize() {
 
 def onNewSample(evt) {
     logDebug "New WaterGuru sample (${evt?.value}); computing dose advice"
+    recordFcSample(evt)
     runAndDeliver(true)
 }
 
@@ -362,6 +392,9 @@ private Map computeAdvice() {
     BigDecimal cya = attrNum("cyanuricAcid")
     BigDecimal ta  = attrNum("totalAlkalinity")
     BigDecimal ch  = attrNum("calciumHardness")
+
+    // Chlorine-runway forecast (days until FC hits the CYA-based algae floor).
+    Map runway = (showRunway != false) ? computeRunway(fc, cya) : null
 
     def out = []
     def warnings = []
@@ -430,6 +463,7 @@ private Map computeAdvice() {
 
     // ---- Footer ------------------------------------------------------------
     out << ""
+    if (runway) { out << runwayLine(runway); out << "" }
     warnings.unique().each { out << "⚠ ${it}" }
     out << "⚠ Estimates only — confirm with your own test kit before adding chemicals."
     if (!anyAction) out << "✅ No chemical additions indicated right now."
@@ -445,7 +479,7 @@ private Map computeAdvice() {
     return [text: out.join("\n"), anyAction: anyAction, status: status,
             headline: headline, fcSummary: fcResult.fcSummary,
             fcVal: fcResult.fcVal, fcTarget: fcResult.target,
-            sampled: sampled, label: label]
+            runway: runway, sampled: sampled, label: label]
 }
 
 /** Free-chlorine dose: SLAM/CYA-aware target, converted to liquid chlorine. */
@@ -699,7 +733,14 @@ private String buildTileHtml(Map r) {
     }
     if (haveCass)
         sb << "<div style='margin-bottom:7px'><span style='background:#8884;padding:2px 8px;border-radius:9px;font-size:11px'>🧪 ${esc(cass.trim())}</span></div>"
-    sb << "<div style='font-size:10px;opacity:.5'>Updated ${esc(ts)}${r.sampled ? ' · sampled ' + esc(r.sampled) : ''}</div>"
+    String foot
+    if (r.runway?.state == "ok" && r.runway.days != null)
+        foot = "⏳ ~${n1(r.runway.days)} d to algae floor · ${esc(ts)}"
+    else if (r.runway?.state == "below")
+        foot = "⏳ FC below algae floor · ${esc(ts)}"
+    else
+        foot = "Updated ${esc(ts)}${r.sampled ? ' · sampled ' + esc(r.sampled) : ''}"
+    sb << "<div style='font-size:10px;opacity:.5'>${foot}</div>"
     sb << "</div></div>"
     return sb.toString()
 }
@@ -788,6 +829,109 @@ private String cassetteText() {
     def type = attrRaw("cassetteType")
     if (type && type.trim() && !type.trim().equalsIgnoreCase("unknown")) return type.trim()
     return null
+}
+
+// ---------------------------------------------------------------------------
+// Chlorine runway (algae forecast)
+// ---------------------------------------------------------------------------
+
+/** Append the current free-chlorine reading to the rolling sample history the
+ *  runway forecast learns its decay rate from. Keyed by the sample's
+ *  measurement time so repeated polls of the same sample don't double-count;
+ *  bounded to RUNWAY_HISTORY_MAX entries. */
+private void recordFcSample(evt) {
+    BigDecimal fc = attrNum("freeChlorine")
+    if (fc == null) return
+    Long t = toEpochMs(evt?.value) ?: now()
+    def hist = (state.fcHistory instanceof List) ? state.fcHistory : []
+    if (hist && hist[-1]?.t == t) return   // same sample already recorded
+    hist << [t: t, fc: fc.toString()]
+    if (hist.size() > RUNWAY_HISTORY_MAX) hist = hist[(hist.size() - RUNWAY_HISTORY_MAX)..-1]
+    state.fcHistory = hist
+    logDebug "Recorded FC sample ${fc} ppm @ ${t} (${hist.size()} in history)"
+}
+
+/** Days until free chlorine falls below the algae-prevention floor
+ *  (TFP_MIN_FACTOR x CYA). Loss rate: manual override > measured (from the
+ *  sample history) > a cover-aware modeled default. Returns null when the floor
+ *  can't be placed (no CYA) or FC is unknown. */
+private Map computeRunway(BigDecimal fc, BigDecimal cya) {
+    if (fc == null || cya == null || cya <= 0) return null
+    BigDecimal floor = cya * TFP_MIN_FACTOR
+
+    BigDecimal loss
+    String basis
+    boolean measured = false
+    if (numSet(fcLossPerDay) && (fcLossPerDay as BigDecimal) > 0) {
+        loss  = fcLossPerDay as BigDecimal
+        basis = "your set rate ${n1(loss)} ppm/day"
+    } else {
+        def m = measuredFcLoss()
+        if (m != null) {
+            loss = m.rate; measured = true
+            basis = "measured ${n1(loss)} ppm/day over ${m.n} sample${m.n == 1 ? '' : 's'}"
+        } else {
+            loss  = hasCover() ? (FC_LOSS_MODELED_DEFAULT * FC_LOSS_COVER_FACTOR) : FC_LOSS_MODELED_DEFAULT
+            basis = "estimated ${n1(loss)} ppm/day${hasCover() ? ' (cover)' : ''} — no sample history yet"
+        }
+    }
+
+    if (fc <= floor) return [state: "below",   floor: floor, loss: loss, basis: basis, measured: measured, days: 0d]
+    if (loss <= 0)   return [state: "holding", floor: floor, loss: loss, basis: basis, measured: measured, days: null]
+    double days = (fc - floor).doubleValue() / loss.doubleValue()
+    return [state: "ok", floor: floor, loss: loss, basis: basis, measured: measured, days: days]
+}
+
+/** Average daily FC loss over recent decay intervals — consecutive samples where
+ *  FC fell (i.e. not across a chlorine addition) and that are at least ~6 h apart.
+ *  Uses up to the last 5 such intervals. Returns [rate, n] or null. */
+private Map measuredFcLoss() {
+    def hist = (state.fcHistory instanceof List) ? state.fcHistory : []
+    if (hist.size() < 2) return null
+    def rates = []
+    for (int i = 1; i < hist.size(); i++) {
+        BigDecimal fa = toBD(hist[i-1]?.fc), fb = toBD(hist[i]?.fc)
+        def ta = hist[i-1]?.t, tb = hist[i]?.t
+        if (fa == null || fb == null || !(ta instanceof Number) || !(tb instanceof Number)) continue
+        double dtDays = ((tb as Long) - (ta as Long)) / 86400000.0d
+        if (dtDays < 0.25d) continue     // too close together to be a fresh sample
+        if (fb >= fa) continue           // FC rose = chlorine added, not decay
+        rates << (fa - fb).doubleValue() / dtDays
+    }
+    if (!rates) return null
+    def recent = rates.size() > 5 ? rates[-5..-1] : rates
+    double avg = recent.sum() / recent.size()
+    return [rate: avg as BigDecimal, n: recent.size()]
+}
+
+/** Whether the source device reports a pool cover (slows chlorine burn-off). */
+private boolean hasCover() {
+    def eq = attrRaw("equipment")
+    return eq != null && eq.toLowerCase().contains("cover")
+}
+
+/** One-line runway summary for the notification / tile-detail text. */
+private String runwayLine(Map r) {
+    switch (r?.state) {
+        case "below":   return "⏳ Chlorine runway: FC is at/below the algae floor (${n1(r.floor)} ppm) — add chlorine now."
+        case "holding": return "⏳ Chlorine runway: FC is holding or rising — nothing to project (floor ${n1(r.floor)} ppm)."
+        case "ok":      return "⏳ Chlorine runway: ~${n1(r.days)} days until FC drops below the ${n1(r.floor)} ppm algae floor (${r.basis})."
+        default:        return ""
+    }
+}
+
+/** Config-page status: how much sample history the forecast has learned from. */
+private String runwayStatusLine() {
+    def hist = (state.fcHistory instanceof List) ? state.fcHistory : []
+    def m = measuredFcLoss()
+    if (m != null) return "Currently using your measured loss (~${n1(m.rate)} ppm/day from ${hist.size()} samples)."
+    return "Samples recorded so far: ${hist.size()} (a couple of days of declines are needed before a measured rate replaces the estimate)."
+}
+
+/** Parse a WaterGuru/Hubitat ISO-8601 timestamp string to epoch millis, or null. */
+private Long toEpochMs(def s) {
+    if (!s) return null
+    try { return toDateTime(s.toString())?.getTime() } catch (ignored) { return null }
 }
 
 private BigDecimal toBD(def v) {

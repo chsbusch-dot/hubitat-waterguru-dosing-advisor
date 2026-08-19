@@ -1,13 +1,13 @@
 {
     "packageName": "WaterGuru Dosing Advisor",
     "author": "Chris Busch",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "minimumHEVersion": "2.3.0",
     "dateReleased": "2026-08-18",
     "documentationLink": "https://github.com/chsbusch-dot/hubitat-waterguru-dosing-advisor/blob/main/README.md",
     "communityLink": "https://github.com/chsbusch-dot/hubitat-waterguru-dosing-advisor",
     "licenseFile": "https://raw.githubusercontent.com/chsbusch-dot/hubitat-waterguru-dosing-advisor/main/LICENSE",
-    "releaseNotes": "1.2.0 - Show the WaterGuru cassette type (C2/C5) — when the source device's WaterGuru Integration driver reports it (cassetteType/cassetteInfo) — in the notification/tile-detail header and as a line on the dashboard tile. Degrades silently on older drivers that don't expose it.\n\n1.1.0 - At-a-glance features: each pool advisor can now maintain a dashboard tile device (a WaterGuru Dosing Tile device exposing status/recommendation/detail/tileHtml/lastCalc) and send an optional daily summary notification at a chosen time. Adds the WaterGuru Dosing Tile driver.\n\n1.0.0 - Initial release. Parent/child: one advisor per WaterGuru pool. SLAM/CYA-aware free-chlorine dosing, pass-through of WaterGuru's own pH/TA/CH/CYA advice, generic fallback formulas, and single-message delivery to notification devices.",
+    "releaseNotes": "1.3.0 - Chlorine runway (algae forecast): estimate days until free chlorine drops below the algae-prevention floor (0.075 x CYA), learning your pool's daily FC loss from a rolling sample history (ignoring chlorine additions), with a cover-aware estimate until history builds up or a manual ppm/day override. Shown in the message, the tile detail, and the tile footer.\n\n1.2.0 - Show the WaterGuru cassette type (C2/C5) — when the source device's WaterGuru Integration driver reports it (cassetteType/cassetteInfo) — in the notification/tile-detail header and as a line on the dashboard tile. Degrades silently on older drivers that don't expose it.\n\n1.1.0 - At-a-glance features: each pool advisor can now maintain a dashboard tile device (a WaterGuru Dosing Tile device exposing status/recommendation/detail/tileHtml/lastCalc) and send an optional daily summary notification at a chosen time. Adds the WaterGuru Dosing Tile driver.\n\n1.0.0 - Initial release. Parent/child: one advisor per WaterGuru pool. SLAM/CYA-aware free-chlorine dosing, pass-through of WaterGuru's own pH/TA/CH/CYA advice, generic fallback formulas, and single-message delivery to notification devices.",
     "apps": [
         {
             "id": "2644cf65-7fd6-4f3a-9bad-cd7f47393c11",
