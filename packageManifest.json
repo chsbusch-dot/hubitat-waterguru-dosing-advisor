@@ -1,0 +1,31 @@
+{
+    "packageName": "WaterGuru Dosing Advisor",
+    "author": "Chris Busch",
+    "version": "1.0.0",
+    "minimumHEVersion": "2.3.0",
+    "dateReleased": "2026-08-18",
+    "documentationLink": "https://github.com/chsbusch-dot/hubitat-waterguru-dosing-advisor/blob/main/README.md",
+    "communityLink": "https://github.com/chsbusch-dot/hubitat-waterguru-dosing-advisor",
+    "licenseFile": "https://raw.githubusercontent.com/chsbusch-dot/hubitat-waterguru-dosing-advisor/main/LICENSE",
+    "releaseNotes": "1.0.0 - Initial release. Parent/child: one advisor per WaterGuru pool. SLAM/CYA-aware free-chlorine dosing, pass-through of WaterGuru's own pH/TA/CH/CYA advice, generic fallback formulas, and single-message delivery to notification devices.",
+    "apps": [
+        {
+            "id": "2644cf65-7fd6-4f3a-9bad-cd7f47393c11",
+            "name": "WaterGuru Dosing Advisor",
+            "namespace": "chsbusch-dot",
+            "location": "https://raw.githubusercontent.com/chsbusch-dot/hubitat-waterguru-dosing-advisor/main/apps/WaterGuru-Dosing-Advisor.groovy",
+            "required": true,
+            "oauth": false,
+            "primary": true
+        },
+        {
+            "id": "55cd2f71-6e4f-4144-8563-522e8245523c",
+            "name": "WaterGuru Dosing Advisor Pool",
+            "namespace": "chsbusch-dot",
+            "location": "https://raw.githubusercontent.com/chsbusch-dot/hubitat-waterguru-dosing-advisor/main/apps/WaterGuru-Dosing-Advisor-Child.groovy",
+            "required": true,
+            "oauth": false,
+            "primary": false
+        }
+    ]
+}
