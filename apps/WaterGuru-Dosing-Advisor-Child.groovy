@@ -513,6 +513,10 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
 private List filterWgAdvice(String doseAdvice) {
     if (!doseAdvice || doseAdvice.trim().equalsIgnoreCase("None")) return []
     def lines = doseAdvice.split("\n").collect { it.trim() }.findAll { it }
+    // Drop WaterGuru's non-actionable placeholder lines (e.g. "Measure again to
+    // see the advice") — they carry no dose and just add noise to tile/message.
+    def skipPhrases = ["measure again", "see the advice"]
+    lines = lines.findAll { line -> def ll = line.toLowerCase(); !skipPhrases.any { ll.contains(it) } }
     if (wgAdviceIncludeChlorine == true) return lines.unique()
     // We compute FC ourselves — strip WaterGuru's chlorine/shock lines so the
     // user does not get two conflicting chlorine recommendations.
