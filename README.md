@@ -43,8 +43,8 @@ instead of a separate top-level app each.
 
 ### Via Hubitat Package Manager (recommended)
 
-Search HPM for **WaterGuru Dosing Advisor** and install — HPM installs both the
-parent and the child app for you.
+Search HPM for **WaterGuru Dosing Advisor** and install — HPM installs the
+parent app, the child app, and the tile driver for you.
 
 ### Manually
 
@@ -53,6 +53,13 @@ button with the raw file URL), and **Save** each:
 
 1. Parent — [`apps/WaterGuru-Dosing-Advisor.groovy`](apps/WaterGuru-Dosing-Advisor.groovy)
 2. Child — [`apps/WaterGuru-Dosing-Advisor-Child.groovy`](apps/WaterGuru-Dosing-Advisor-Child.groovy)
+
+Then install the tile driver under **Drivers Code → New Driver** and **Save** it:
+
+3. Driver — [`drivers/WaterGuru-Dosing-Tile.groovy`](drivers/WaterGuru-Dosing-Tile.groovy)
+
+The driver backs the optional dashboard tile (below). If you don't install it,
+the apps still work — only the tile device can't be created.
 
 Then go to **Apps → Add User App → WaterGuru Dosing Advisor** (the parent) and
 use **Add a WaterGuru pool** to create an advisor for each pool.
@@ -74,12 +81,52 @@ without pinning it.
 | **Use WaterGuru advice** | Pass through WaterGuru's own pH/TA/CH/CYA dose lines. |
 | **Also include WaterGuru's chlorine advice** | Off by default — this app computes FC, so WaterGuru's (CYA-blind) chlorine line is dropped to avoid a conflicting recommendation. |
 | **Target overrides** | pH / TA / CYA / CH targets; blank = read the device's targets. |
-| **Delivery** | The notification device(s) to send to, and whether to notify automatically on each new sample. |
+| **Delivery** | The notification device(s) to send to, whether to notify automatically on each new sample, and an optional **daily summary** at a set time. |
+| **Dashboard tile** | Whether to create/maintain a companion tile device for this pool (on by default). |
 | **Run now** | *Calculate & send now* and *Preview (log only)* buttons. |
+
+Both delivery triggers are independent: you can notify on every new sample, send
+a once-a-day summary at a fixed time, or both. The daily summary runs the same
+calculation and sends it to the same notification device(s).
 
 When **Use WaterGuru advice** is off (or the source device does not report
 `doseAdvice`), the app falls back to generic formulas for pH/TA/CH/CYA and uses
 the acid type / strength settings.
+
+## Dashboard tile
+
+Hubitat apps can't draw on a dashboard, so each pool advisor maintains its own
+small companion device — **"Dosing Tile: &lt;pool&gt;"** (driver *WaterGuru Dosing
+Tile*) — and refreshes it on every calculation. Add that device to a dashboard
+to see, at a glance, what the pool needs. The device exposes:
+
+| Attribute | What it holds |
+| --- | --- |
+| `status` | `GREEN` / `YELLOW` / `RED` — see the colour key below. Use it to colour the tile. |
+| `recommendation` | The concise one-liner, e.g. *"Add 4.8 gal chlorine · 1.2 lb baking soda"* or *"All in range"*. |
+| `detail` | The full multi-line recommendation (same text as the notification). |
+| `tileHtml` | A formatted HTML snippet (pool, status pill, FC current→target, one-liner, timestamp). |
+| `lastCalc` | When the tile was last updated. |
+
+**Colour key**
+
+- 🔴 **RED** — a chemical addition is indicated, or **SLAM mode** is active.
+- 🟡 **YELLOW** — only optional / advisory items (an optional top-up, a
+  "too-high, consider draining" note), or a reading is missing so the result is
+  uncertain.
+- 🟢 **GREEN** — everything is in range; nothing to add.
+
+**Adding it to a dashboard** (Hubitat's built-in dashboards):
+
+1. Add the *Dosing Tile: …* device to the dashboard's device list.
+2. Add a tile, pick that device, and choose the **Attribute** template.
+3. Point it at one of:
+   - `recommendation` — a clean one-line summary, or
+   - `tileHtml` — the richer formatted layout (the Attribute template renders the HTML), or
+   - `status` — just GREEN/YELLOW/RED (handy for driving tile colour with your own dashboard CSS, e.g. keying off the attribute value).
+
+The tile is per-pool: each child advisor creates and updates its own device. Turn
+the **Dashboard tile** toggle off to remove this pool's tile device.
 
 ## The dosing model
 
@@ -119,9 +166,13 @@ available, the app estimates generically:
 
 - **Automatically** on each new WaterGuru sample (it subscribes to the device's
   `LastMeasurement` change), if that toggle is on.
+- **As a daily summary** at a time you pick, if that toggle is on (independent of
+  new samples — you can run both).
 - **On demand** with the *Calculate & send now* button.
 - **Preview** with the *Preview (log only)* button, which logs the message without
   sending it.
+
+Every one of these also refreshes the dashboard tile (if enabled).
 
 ## License
 

@@ -26,6 +26,13 @@
  *
  * All doses are ESTIMATES. Always confirm with your own test kit before adding.
  *
+ * Version history
+ *   1.0.0 - Initial release (parent/child dosing advisor).
+ *   1.1.0 - At-a-glance features: a per-pool dashboard tile (a companion
+ *           "WaterGuru Dosing Tile" device with status/recommendation/detail/
+ *           tileHtml/lastCalc attributes) and an optional daily summary
+ *           notification at a chosen time.
+ *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy
  * of the License at:
@@ -41,7 +48,7 @@
 
 import groovy.transform.Field
 
-def appVersion() { "1.0.0" }
+def appVersion() { "1.1.0" }
 
 definition(
     name:        "WaterGuru Dosing Advisor Pool",
@@ -153,6 +160,34 @@ def mainPage() {
             input "autoRun", "bool",
                 title: "Notify automatically on each new WaterGuru sample",
                 defaultValue: true
+            input "dailyDigest", "bool",
+                title: "Also send a daily summary at a set time (independent of new samples)",
+                defaultValue: false, submitOnChange: true
+            if (dailyDigest == true) {
+                input "digestTime", "time",
+                    title: "Daily summary time",
+                    required: true
+            }
+        }
+
+        section("<b>Dashboard tile</b>") {
+            input "createTile", "bool",
+                title: "Create/maintain a dashboard tile device for this pool",
+                defaultValue: true, submitOnChange: true
+            if (createTile != false) {
+                def tdev = getTileDevice()
+                if (tdev) {
+                    paragraph "Tile device: <b>${tdev.displayName}</b> — current status " +
+                              "<b>${tdev.currentValue('status') ?: '—'}</b>. Add it to a dashboard as an " +
+                              "<b>Attribute</b> tile bound to <code>recommendation</code> (one-liner), " +
+                              "<code>tileHtml</code> (formatted), or <code>status</code> " +
+                              "(GREEN / YELLOW / RED, for coloring)."
+                } else {
+                    paragraph "A device named \"Dosing Tile: …\" is created for this pool when you save. " +
+                              "It needs the <b>WaterGuru Dosing Tile</b> driver installed under " +
+                              "<i>Drivers Code</i> first."
+                }
+            }
         }
 
         section("<b>Run now</b>") {
@@ -228,20 +263,42 @@ def updated() {
     initialize()
 }
 
+def uninstalled() { removeTileDevice() }
+
 def initialize() {
+    unschedule()   // clear any previous daily-digest job before (re)scheduling
+
     // Give the child a meaningful name in the parent's list if unnamed.
     if (sourceDevice && (!app.label || app.label == "WaterGuru Dosing Advisor Pool")) {
         app.updateLabel("Dosing: ${sourceDevice.displayName}")
     }
+
+    // Companion dashboard-tile device (created/removed per the toggle).
+    ensureTileDevice()
+
     if (autoRun != false && sourceDevice) {
         // New WaterGuru sample => LastMeasurement (a DATE attribute) changes.
         subscribe(sourceDevice, "LastMeasurement", "onNewSample")
         logDebug "Subscribed to new-sample events on ${sourceDevice.displayName}"
     }
+
+    if (dailyDigest == true && digestTime) {
+        // A time-of-day input schedules a daily recurring job at that clock time.
+        schedule(digestTime, "dailyDigestHandler")
+        logDebug "Scheduled daily summary at ${digestTime}"
+    }
+
+    // Populate the tile right away so it is never blank after a save.
+    refreshTile()
 }
 
 def onNewSample(evt) {
     logDebug "New WaterGuru sample (${evt?.value}); computing dose advice"
+    runAndDeliver(true)
+}
+
+def dailyDigestHandler() {
+    logDebug "Daily summary firing"
     runAndDeliver(true)
 }
 
@@ -261,6 +318,9 @@ private void runAndDeliver(boolean send) {
     def result = computeAdvice()
     def text = result.text
     state.lastPreview = text
+
+    // Refresh the dashboard tile on every calculation (send or preview).
+    updateTileDevice(result)
 
     if (!send) {
         log.info "WaterGuru Dosing Advisor (preview):\n${text}"
@@ -300,7 +360,10 @@ private Map computeAdvice() {
 
     def out = []
     def warnings = []
+    def chips = []
     boolean anyAction = false
+    boolean red = false      // a chemical is needed, or SLAM is active
+    boolean yellow = false   // optional / advisory / uncertain
 
     out << "🌊 WaterGuru Dosing Advisor — ${label}"
     def sampled = attrRaw("LastMeasurementHuman") ?: attrRaw("LastMeasurement")
@@ -309,7 +372,8 @@ private Map computeAdvice() {
     if (!volume || volume <= 0) {
         out << ""
         out << "⚠ Pool volume unknown. Set a volume override or point at a device that reports poolVolume."
-        return [text: out.join("\n"), anyAction: false]
+        return [text: out.join("\n"), anyAction: false, status: "YELLOW",
+                headline: "Set pool volume", fcSummary: null, sampled: sampled, label: label]
     }
 
     // ---- 1) FREE CHLORINE — computed here, SLAM/CYA aware -------------------
@@ -322,6 +386,10 @@ private Map computeAdvice() {
     out << "FREE CHLORINE (computed)${fcResult.slam ? ' — 🚨 SLAM MODE' : ''}"
     out.addAll(fcResult.lines)
     anyAction = anyAction || fcResult.action
+    red    = red    || fcResult.required || fcResult.slam
+    yellow = yellow || fcResult.optional || (fc == null)
+    if (fcResult.chip) chips << fcResult.chip
+    else if (fcResult.slam) chips << "SLAM: hold FC level"
     out << ""
 
     // ---- 2) pH / TA / CH / CYA --------------------------------------------
@@ -334,6 +402,8 @@ private Map computeAdvice() {
         if (kept) {
             kept.each { out << "  • ${it}" }
             anyAction = true
+            red = true
+            kept.each { chips << shortenWg(it) }
         } else {
             out << "  • None — WaterGuru reports no pH / TA / CH / CYA adjustment needed."
         }
@@ -343,6 +413,9 @@ private Map computeAdvice() {
         if (gen.lines) {
             out.addAll(gen.lines)
             anyAction = anyAction || gen.action
+            red    = red    || gen.additions
+            yellow = yellow || gen.advisories
+            chips.addAll(gen.chips)
         } else {
             out << "  • All within target (or readings unavailable) — nothing to add."
         }
@@ -354,7 +427,16 @@ private Map computeAdvice() {
     out << "⚠ Estimates only — confirm with your own test kit before adding chemicals."
     if (!anyAction) out << "✅ No chemical additions indicated right now."
 
-    return [text: out.join("\n"), anyAction: anyAction]
+    // ---- At-a-glance status + one-liner (for the tile & digest) ------------
+    if (warnings) yellow = true
+    String status = red ? "RED" : (yellow ? "YELLOW" : "GREEN")
+    String headline
+    if (chips) headline = chips.join(" · ")
+    else if (status == "GREEN") headline = "All in range"
+    else headline = "Review details"
+
+    return [text: out.join("\n"), anyAction: anyAction, status: status,
+            headline: headline, fcSummary: fcResult.fcSummary, sampled: sampled, label: label]
 }
 
 /** Free-chlorine dose: SLAM/CYA-aware target, converted to liquid chlorine. */
@@ -362,6 +444,9 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
     def lines = []
     boolean action = false
     boolean slam = false
+    boolean required = false   // a dose that should be added now (drives RED)
+    boolean optional = false   // above the TFP minimum but below target (drives YELLOW)
+    String chip = null         // short fragment for the one-liner, e.g. "Add 4.8 gal chlorine"
     String banner = null
 
     // Determine the FC target.
@@ -393,7 +478,9 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
     if (fc == null) {
         lines << "  • Free chlorine reading unavailable from the source device."
         lines << "  • Would target ${n1(target)} ppm (${basis})."
-        return [lines: lines, action: false, slam: slam, banner: banner]
+        return [lines: lines, action: false, slam: slam, banner: banner,
+                required: false, optional: false, chip: null, fcVal: null, target: target,
+                fcSummary: "FC — → ${n1(target)} ppm"]
     }
 
     lines << "  FC ${n1(fc)} ppm  →  target ${n1(target)} ppm  (${basis})"
@@ -402,9 +489,11 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
         BigDecimal ppmGap = target - fc
         BigDecimal pctFactor = (chlorinePct && chlorinePct > 0) ? (12.5G / chlorinePct) : 1G
         BigDecimal floz = ppmGap * (volume / 10000G) * CL_FLOZ_PER_PPM_PER_10K_AT_12_5 * pctFactor
-        boolean optional = (minFc != null && fc >= minFc)   // non-SLAM: above min but below target
+        optional = (minFc != null && fc >= minFc)   // non-SLAM: above min but below target
+        required = !optional
         String verb = optional ? "Optional top-up" : "Add"
         lines << "  ➕ ${verb}: ${flozUnits(floz)} of liquid chlorine (${n1(chlorinePct)}%) to raise FC ${n1(ppmGap)} ppm to target."
+        chip = "${optional ? 'Top up' : 'Add'} ${shortVol(floz)} chlorine"
         action = true
         if (ppmGap > 8G) warnings << "Large chlorine addition (+${n1(ppmGap)} ppm) — add in stages and retest between doses."
         if (floz > 640G) warnings << "Very large chlorine dose (${n0(floz)} fl oz) — double-check pool volume and the FC reading."
@@ -415,13 +504,19 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
             lines << "  ✔ FC ${n1(fc)} ≥ target ${n1(target)} ppm — hold, no chlorine needed."
         }
     }
-    return [lines: lines, action: action, slam: slam, banner: banner]
+    return [lines: lines, action: action, slam: slam, banner: banner,
+            required: required, optional: optional, chip: chip, fcVal: fc, target: target,
+            fcSummary: "FC ${n1(fc)} → ${n1(target)} ppm"]
 }
 
 /** Keep WaterGuru advice lines; drop chlorine lines unless the user opts in. */
 private List filterWgAdvice(String doseAdvice) {
     if (!doseAdvice || doseAdvice.trim().equalsIgnoreCase("None")) return []
     def lines = doseAdvice.split("\n").collect { it.trim() }.findAll { it }
+    // Drop WaterGuru's non-actionable placeholder lines (e.g. "Measure again to
+    // see the advice") — they carry no dose and just add noise to tile/message.
+    def skipPhrases = ["measure again", "see the advice"]
+    lines = lines.findAll { line -> def ll = line.toLowerCase(); !skipPhrases.any { ll.contains(it) } }
     if (wgAdviceIncludeChlorine == true) return lines.unique()
     // We compute FC ourselves — strip WaterGuru's chlorine/shock lines so the
     // user does not get two conflicting chlorine recommendations.
@@ -437,7 +532,9 @@ private Map computeGeneric(BigDecimal ph, BigDecimal ta, BigDecimal ch, BigDecim
                            BigDecimal phTarget, BigDecimal taTarget, BigDecimal chTarget, BigDecimal cyaTarget,
                            BigDecimal volume, List warnings) {
     def lines = []
-    boolean action = false
+    def chips = []
+    boolean additions  = false   // a chemical should be added (drives RED)
+    boolean advisories = false   // in-water advice with no additive / drain (drives YELLOW)
     BigDecimal v10k = volume / 10000G
 
     // pH / TA down via acid (also used when pH high).
@@ -450,55 +547,174 @@ private Map computeGeneric(BigDecimal ph, BigDecimal ta, BigDecimal ch, BigDecim
             BigDecimal pct = firstNum(bisulfatePctOverride, attrNum("acidBisulfatePct"), DRY_ACID_BASE_PCT)
             BigDecimal oz = muriaticFloz * DRY_ACID_OZ_PER_MURIATIC_FLOZ * (DRY_ACID_BASE_PCT / pct)
             lines << "  ➕ pH ${n1(ph)} → target ${n1(phTarget)}: add ~${n1(oz)} oz dry acid / sodium bisulfate (${n1(pct)}%)."
+            chips << "${chipOz(oz)} dry acid"
         } else {
             BigDecimal pct = firstNum(muriaticPctOverride, attrNum("acidMuriaticPct"), MURIATIC_BASE_PCT)
             BigDecimal floz = muriaticFloz * (MURIATIC_BASE_PCT / pct)
             lines << "  ➕ pH ${n1(ph)} → target ${n1(phTarget)}: add ~${flozUnits(floz)} of muriatic acid (${n1(pct)}%)."
+            chips << "${shortVol(floz)} muriatic acid"
         }
-        action = true
+        additions = true
     } else if (ph != null && ph < phTarget) {
         lines << "  • pH ${n1(ph)} low (target ${n1(phTarget)}): aerate to raise, or add soda ash per product directions (no amount estimated — base is easy to overshoot)."
-        action = true
+        chips << "raise pH"
+        additions = true
     }
 
     // TA low -> baking soda.
     if (ta != null && ta < taTarget) {
         BigDecimal lb = ((taTarget - ta) / 10G) * BAKING_SODA_LB_PER_10PPM_TA_PER_10K * v10k
         lines << "  ➕ TA ${n0(ta)} → target ${n0(taTarget)}: add ~${n2(lb)} lb baking soda (sodium bicarbonate)."
-        action = true
+        chips << "${n1(lb)} lb baking soda"
+        additions = true
     } else if (ta != null && ta > taTarget + 20G) {
         lines << "  • TA ${n0(ta)} high (target ${n0(taTarget)}): lower by adding acid and aerating (this also lowers pH); repeat gradually."
-        action = true
+        chips << "lower TA"
+        advisories = true
     }
 
     // CH low -> calcium chloride; CH very high -> partial drain.
     if (ch != null && ch < chTarget) {
         BigDecimal oz = (chTarget - ch) * CAL_CL_OZ_PER_PPM_CH_PER_10K * v10k
         lines << "  ➕ CH ${n0(ch)} → target ${n0(chTarget)}: add ~${ozLbUnits(oz)} calcium chloride."
-        action = true
+        chips << "${chipOz(oz)} calcium"
+        additions = true
     } else if (ch != null && ch > chTarget + 50G) {
         BigDecimal frac = (1G - (chTarget / ch)) * 100G
         lines << "  • CH ${n0(ch)} high (target ${n0(chTarget)}): no additive lowers CH — partial drain/refill ~${n0(frac)}% (~${n0(volume * frac / 100G)} gal)."
-        action = true
+        chips << "CH high: partial drain"
+        advisories = true
     }
 
     // CYA low -> stabilizer; CYA high -> partial drain.
     if (cya != null && cya < cyaTarget) {
         BigDecimal oz = ((cyaTarget - cya) / 10G) * CYA_OZ_PER_10PPM_PER_10K * v10k
         lines << "  ➕ CYA ${n0(cya)} → target ${n0(cyaTarget)}: add ~${ozLbUnits(oz)} cyanuric acid (stabilizer)."
-        action = true
+        chips << "${chipOz(oz)} stabilizer"
+        additions = true
     } else if (cya != null && cya > cyaTarget) {
         BigDecimal frac = (1G - (cyaTarget / cya)) * 100G
         lines << "  • CYA ${n0(cya)} high (target ${n0(cyaTarget)}): no additive lowers CYA — partial drain/refill ~${n0(frac)}% (~${n0(volume * frac / 100G)} gal)."
-        action = true
+        chips << "CYA high: partial drain"
+        advisories = true
     }
 
-    return [lines: lines, action: action]
+    return [lines: lines, action: (additions || advisories),
+            additions: additions, advisories: advisories, chips: chips]
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard tile (companion device)
+// ---------------------------------------------------------------------------
+
+private String tileDni()   { "wgda-tile-${app.id}" }
+private def    getTileDevice() { getChildDevice(tileDni()) }
+private String tileLabel()     { "Dosing Tile: ${sourceDevice?.displayName ?: (app?.label ?: 'pool')}" }
+
+/** Create the companion tile device (or remove it when the toggle is off). */
+private void ensureTileDevice() {
+    if (createTile == false) { removeTileDevice(); return }
+    if (getTileDevice()) return
+    try {
+        addChildDevice("chsbusch-dot", "WaterGuru Dosing Tile", tileDni(),
+            [name: "WaterGuru Dosing Tile", label: tileLabel(), isComponent: false])
+        log.info "WaterGuru Dosing Advisor: created tile device '${tileLabel()}'"
+    } catch (e) {
+        log.error "WaterGuru Dosing Advisor: could not create the tile device — ${e.message}. " +
+                  "Install the 'WaterGuru Dosing Tile' driver under Drivers Code, then save this pool again."
+    }
+}
+
+private void removeTileDevice() {
+    if (getTileDevice()) {
+        try { deleteChildDevice(tileDni()); log.info "WaterGuru Dosing Advisor: removed tile device" }
+        catch (e) { log.warn "WaterGuru Dosing Advisor: could not remove the tile device — ${e.message}" }
+    }
+}
+
+/** Recompute and push to the tile without sending a notification (used on save). */
+private void refreshTile() {
+    if (createTile == false || !sourceDevice || !getTileDevice()) return
+    try { updateTileDevice(computeAdvice()) }
+    catch (e) { logDebug "refreshTile failed: ${e.message}" }
+}
+
+/** Push the latest advice into the tile device's attributes. */
+private void updateTileDevice(Map r) {
+    if (createTile == false) return
+    def dev = getTileDevice()
+    if (!dev) { ensureTileDevice(); dev = getTileDevice() }
+    if (!dev) return   // driver missing — ensureTileDevice already logged why
+    try {
+        dev.sendEvent(name: "status",         value: (r.status ?: "YELLOW"))
+        dev.sendEvent(name: "recommendation", value: clip(r.headline ?: "—", 190))
+        dev.sendEvent(name: "detail",         value: clip(r.text ?: "", 1000))
+        dev.sendEvent(name: "tileHtml",       value: clip(buildTileHtml(r), 1024))
+        dev.sendEvent(name: "lastCalc",       value: new Date())
+    } catch (e) {
+        log.warn "WaterGuru Dosing Advisor: could not update the tile device — ${e.message}"
+    }
+}
+
+/** Compact, dashboard-friendly HTML for an "Attribute" tile bound to tileHtml. */
+private String buildTileHtml(Map r) {
+    String color = tileColor(r.status)
+    String word  = (r.status ?: "").toString()
+    String ts = new Date().format("EEE h:mm a", location?.timeZone ?: TimeZone.getDefault())
+    def sb = new StringBuilder()
+    sb << "<div style=\"font-family:sans-serif;padding:8px 10px;border-left:6px solid ${color};line-height:1.35\">"
+    sb << "<div style=\"font-weight:bold;font-size:15px\">🌊 ${esc(r.label)}</div>"
+    sb << "<div style=\"margin:4px 0\"><span style=\"display:inline-block;padding:1px 9px;border-radius:10px;background:${color};color:#fff;font-weight:bold;font-size:12px\">${esc(word)}</span></div>"
+    sb << "<div style=\"font-size:14px\">${esc(r.headline)}</div>"
+    if (r.fcSummary) sb << "<div style=\"font-size:12px;opacity:.8\">${esc(r.fcSummary)}</div>"
+    sb << "<div style=\"font-size:11px;opacity:.6;margin-top:4px\">Updated ${esc(ts)}${r.sampled ? ' · sampled ' + esc(r.sampled) : ''}</div>"
+    sb << "</div>"
+    return sb.toString()
+}
+
+private String tileColor(String status) {
+    switch (status) {
+        case "RED":   return "#c0392b"
+        case "GREEN": return "#2e7d32"
+        default:      return "#e08600"   // YELLOW / unknown
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** Short single-unit volume for the one-liner: gal, else cups, else fl oz. */
+private String shortVol(BigDecimal floz) {
+    if (floz == null) return "?"
+    if (floz >= 128G) return "${n1(floz / 128G)} gal"
+    if (floz >= 8G)   return "${n1(floz / 8G)} cups"
+    return "${n0(floz)} fl oz"
+}
+
+/** Short dry weight for the one-liner: lb when large, else oz. */
+private String chipOz(BigDecimal oz) {
+    if (oz == null) return "?"
+    return oz >= 16G ? "${n1(oz / 16G)} lb" : "${n0(oz)} oz"
+}
+
+/** Trim a WaterGuru advice line down to a one-liner fragment. */
+private String shortenWg(String line) {
+    String s = (line ?: "").trim().replaceAll(/^[-•*\s]+/, "")
+    return s.length() > 42 ? (s.substring(0, 41) + "…") : s
+}
+
+/** Minimal HTML escaping for values placed into tileHtml. */
+private String esc(def s) {
+    if (s == null) return ""
+    return s.toString().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+}
+
+/** Cap a string to n characters (Hubitat truncates attribute values at ~1024). */
+private String clip(String s, int n) {
+    if (s == null) return ""
+    return s.length() > n ? (s.substring(0, n - 1) + "…") : s
+}
 
 /** Format a liquid volume in fl oz, adding cups and gallons when meaningful. */
 private String flozUnits(BigDecimal floz) {
