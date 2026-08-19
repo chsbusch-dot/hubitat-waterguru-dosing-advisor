@@ -1,13 +1,13 @@
 {
     "packageName": "WaterGuru Dosing Advisor",
     "author": "Chris Busch",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "minimumHEVersion": "2.3.0",
     "dateReleased": "2026-08-18",
     "documentationLink": "https://github.com/chsbusch-dot/hubitat-waterguru-dosing-advisor/blob/main/README.md",
     "communityLink": "https://github.com/chsbusch-dot/hubitat-waterguru-dosing-advisor",
     "licenseFile": "https://raw.githubusercontent.com/chsbusch-dot/hubitat-waterguru-dosing-advisor/main/LICENSE",
-    "releaseNotes": "1.0.0 - Initial release. Parent/child: one advisor per WaterGuru pool. SLAM/CYA-aware free-chlorine dosing, pass-through of WaterGuru's own pH/TA/CH/CYA advice, generic fallback formulas, and single-message delivery to notification devices.",
+    "releaseNotes": "1.1.0 - At-a-glance features: each pool advisor can now maintain a dashboard tile device (a WaterGuru Dosing Tile device exposing status/recommendation/detail/tileHtml/lastCalc) and send an optional daily summary notification at a chosen time. Adds the WaterGuru Dosing Tile driver.\n\n1.0.0 - Initial release. Parent/child: one advisor per WaterGuru pool. SLAM/CYA-aware free-chlorine dosing, pass-through of WaterGuru's own pH/TA/CH/CYA advice, generic fallback formulas, and single-message delivery to notification devices.",
     "apps": [
         {
             "id": "2644cf65-7fd6-4f3a-9bad-cd7f47393c11",
@@ -26,6 +26,15 @@
             "required": true,
             "oauth": false,
             "primary": false
+        }
+    ],
+    "drivers": [
+        {
+            "id": "31058835-a7b1-4d3c-9437-0927b5250615",
+            "name": "WaterGuru Dosing Tile",
+            "namespace": "chsbusch-dot",
+            "location": "https://raw.githubusercontent.com/chsbusch-dot/hubitat-waterguru-dosing-advisor/main/drivers/WaterGuru-Dosing-Tile.groovy",
+            "required": true
         }
     ]
 }

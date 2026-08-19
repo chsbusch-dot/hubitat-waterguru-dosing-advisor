@@ -18,6 +18,8 @@
  *           SLAM/CYA-aware free-chlorine dosing, WaterGuru doseAdvice
  *           pass-through, generic fallback formulas, single-message delivery to
  *           capability.notification devices.
+ *   1.1.0 - Each child can now maintain a dashboard tile device and send an
+ *           optional daily summary. (Parent unchanged except this version bump.)
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy
@@ -32,7 +34,7 @@
  * under the License.
  */
 
-def appVersion() { "1.0.0" }
+def appVersion() { "1.1.0" }
 
 definition(
     name:        "WaterGuru Dosing Advisor",
