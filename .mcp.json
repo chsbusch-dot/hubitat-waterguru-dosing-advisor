@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "hubitat": {
+      "type": "stdio",
+      "command": "/Users/christian/.config/mcp-launchers/hubitat-ai-connector.zsh",
+      "args": [],
+      "env": {}
+    }
+  }
+}
