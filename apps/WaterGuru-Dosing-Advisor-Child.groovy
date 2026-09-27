@@ -27,6 +27,15 @@
  * All doses are ESTIMATES. Always confirm with your own test kit before adding.
  *
  * Version history
+ *   2.3.1 - Stop-lifecycle safety. A stop is only "stopped" once the switch positively reports off,
+ *           so a failed or ignored OFF keeps the independent emergency cutoff armed and keeps
+ *           retrying, and the notices distinguish "stop requested" from "stopped". A re-arm never
+ *           postpones a cutoff that is already due sooner, and a queue reset (saving configuration)
+ *           recreates the cutoff JOB using the time remaining instead of leaving a stored deadline
+ *           with no timer behind it. A confirmed off releases the dose on every path, so a later
+ *           dose is no longer blocked by "a dose is already running". A failed start is routed
+ *           through the same confirmed-OFF handling, so a relay that energised before the ON
+ *           command errored keeps its dose record and its cutoff.
  *   2.3.0 - Expose lastCalcEpochMs beside lastCalc so an external historian can timestamp a
  *           target snapshot at its calculation time rather than at collection time, and
  *           re-render the tank lines in the stored preview after a dose so the human-readable
@@ -102,7 +111,7 @@
 
 import groovy.transform.Field
 
-def appVersion() { "2.3.0" }
+def appVersion() { "2.3.1" }
 
 definition(
     name:        "WaterGuru Dosing Advisor Pool",
