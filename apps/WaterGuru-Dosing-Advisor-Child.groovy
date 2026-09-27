@@ -1334,10 +1334,12 @@ private void recordTankUse(BigDecimal ml) {
  * human-readable detail still advertises the pre-dose inventory - a full tank beside an
  * attribute that is one dose short of it.
  *
- * Deliberately NOT computeAdvice(): that function also decides whether to dose and, in AUTO
- * mode, starts the pump. Refreshing a display string must not be able to do that. The chemistry
- * lines are also left alone on purpose - they are still as-of the last WaterGuru sample, which
- * has not changed, so rewriting them would be less accurate rather than more.
+ * This splices the two tank lines rather than calling computeAdvice() to rebuild the whole text.
+ * computeAdvice() is a pure computation -- it reads devices and writes no state, and dosing is
+ * gated separately by runAndDeliver(allowDose) -- so either approach would be correct. The
+ * splice is used because the chemistry lines are still as-of the last WaterGuru sample, which a
+ * dose does not change, so regenerating them would be churn at best. Only the two lines that
+ * actually moved are replaced.
  */
 private void refreshTankLinesInPreview() {
     String prior = state.lastPreview
