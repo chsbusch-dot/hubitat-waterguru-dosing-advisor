@@ -27,6 +27,30 @@
  * All doses are ESTIMATES. Always confirm with your own test kit before adding.
  *
  * Version history
+ *   2.2.0 - Publish numeric dose, tank, and FC telemetry on the companion tile
+ *           device so an external historian such as InfluxDB/Grafana can store
+ *           actual pump-started doses and calculate durable usage totals.
+ *   2.1.9 - Match the WaterGuru driver's capitalized raw cassette-life
+ *           attribute names so checks, days and percent render in the preview.
+ *   2.1.8 - Add the exact date/time beside sample age, show WaterGuru cassette
+ *           checks/days remaining, and estimate chlorine-tank runway from
+ *           recorded app-controlled dose volumes.
+ *   2.1.7 - Move the current FC/pH/CYA/TA/CH snapshot from the Source section
+ *           into the top preview, immediately above its sample-age line.
+ *   2.1.6 - Remove the duplicate remaining-tank paragraph below the top
+ *           preview; the preview itself retains the full/remaining line.
+ *   2.1.5 - Move the detailed preview to the top of the app page, repeat the
+ *           remaining-tank estimate below it, and show the next measurement
+ *           and guarded automatic-dosing times.
+ *   2.1.4 - Show full and remaining chlorine-tank amounts in every detailed
+ *           preview, and regenerate the preview immediately after a refill.
+ *   2.1.3 - Add a one-AUTO-dose-per-day guard so extra/manual WaterGuru
+ *           measurements cannot cause a second automatic dose that day.
+ *   2.1.2 - Restrict AUTO pump starts to a configurable daily time window so
+ *           manual morning measurements can update history without dosing.
+ *   2.1.1 - Add one daily, user-selected WaterGuru refresh so an evening
+ *           measurement is imported promptly instead of waiting for the
+ *           integration's next interval poll.
  *   1.0.0 - Initial release (parent/child dosing advisor).
  *   1.1.0 - At-a-glance features: a per-pool dashboard tile (a companion
  *           "WaterGuru Dosing Tile" device with status/recommendation/detail/
@@ -37,6 +61,21 @@
  *           on the tile (degrades silently on older drivers). Also redesigns the
  *           dashboard tile as a card: a status-colored header band and a free-
  *           chlorine-vs-target progress bar, theme-robust for light/dark boards.
+ *   2.1.0 - Track chlorine-tank inventory for common container sizes, warn at a
+ *           configurable low level, and block doses larger than the estimate.
+ *   2.0.4 - Send PushOver notices for pump start/stop and arm an independent,
+ *           configurable emergency cutoff for every pump start.
+ *   2.0.3 - Explicitly support a continuously running circulation pump when no
+ *           Hubitat interlock switch exists; approval/auto dosing requires this
+ *           confirmation or a live circulation-switch interlock.
+ *   2.0.2 - Concise PushOver summary follows each new daily WaterGuru sample;
+ *           the scheduled time is a once-per-day fallback if the event is missed.
+ *   2.0.1 - Concise scheduled PushOver summary always reports the calculated
+ *           chlorine amount and pump runtime, including a zero-dose result.
+ *   2.0.0 - Guarded liquid-chlorine pump automation: advisory, approval and
+ *           automatic modes; 185 mL/min runtime conversion; freshness, pH,
+ *           per-dose, daily-dose and runtime limits; duplicate-sample lock;
+ *           circulation interlock; scheduled stop and emergency watchdog.
  *   1.3.0 - Chlorine runway (algae forecast): estimate days until free chlorine
  *           falls below the algae-prevention floor (0.075 x CYA). Learns your
  *           pool's daily FC loss from a rolling history of samples (ignoring
@@ -59,7 +98,7 @@
 
 import groovy.transform.Field
 
-def appVersion() { "1.3.0" }
+def appVersion() { "2.2.0" }
 
 definition(
     name:        "WaterGuru Dosing Advisor Pool",
@@ -83,6 +122,15 @@ preferences {
 
 // Liquid chlorine: fl oz of 12.5% product that raises FC by 1 ppm per 10,000 gal.
 @Field static final BigDecimal CL_FLOZ_PER_PPM_PER_10K_AT_12_5 = 10.7G
+@Field static final BigDecimal ML_PER_FLOZ = 29.5735G
+@Field static final BigDecimal ML_PER_US_GALLON = 3785.411784G
+@Field static final BigDecimal DEFAULT_PUMP_RATE_ML_MIN = 185G
+// WaterGuru's configured schedule. Hubitat refreshes the integration at the
+// user-selected sourceRefreshTime (currently 19:45) after this 19:20 reading.
+@Field static final int WATERGURU_MEASUREMENT_HOUR = 19
+@Field static final int WATERGURU_MEASUREMENT_MINUTE = 20
+@Field static final int DEFAULT_DOSING_CHECK_HOUR = 19
+@Field static final int DEFAULT_DOSING_CHECK_MINUTE = 45
 // TFP FC/CYA model (SLAM off): FC min and target as a fraction of CYA.
 @Field static final BigDecimal TFP_MIN_FACTOR    = 0.075G
 @Field static final BigDecimal TFP_TARGET_FACTOR = 0.115G
@@ -102,6 +150,7 @@ preferences {
 // A cover slows UV burn-off, so the modeled loss is scaled down when the source
 // device reports one.
 @Field static final int        RUNWAY_HISTORY_MAX      = 30
+@Field static final int        TANK_DOSE_HISTORY_MAX   = 30
 @Field static final BigDecimal FC_LOSS_MODELED_DEFAULT = 3.0G
 @Field static final BigDecimal FC_LOSS_COVER_FACTOR    = 0.6G
 
@@ -112,12 +161,29 @@ preferences {
 def mainPage() {
     dynamicPage(name: "mainPage", title: "WaterGuru Dosing Advisor — pool", uninstall: true, install: true) {
 
+        section("<b>Current dosing preview</b>") {
+            paragraph nextCycleHtml()
+            if (state.lastPreview) {
+                paragraph "<pre style='white-space:pre-wrap'>${state.lastPreview}</pre>"
+            } else {
+                paragraph "No preview has been calculated yet."
+            }
+        }
+
         section("<b>Source</b>") {
             input "sourceDevice", "capability.pHMeasurement",
                 title: "WaterGuru pool device (the WaterGuru Integration Driver child device)",
                 required: true, multiple: false, submitOnChange: true
             if (sourceDevice) {
-                paragraph currentReadingsSummary()
+                input "refreshSourceDaily", "bool",
+                    title: "Refresh WaterGuru once daily after its scheduled measurement",
+                    defaultValue: false, submitOnChange: true
+                if (refreshSourceDaily == true) {
+                    input "sourceRefreshTime", "time",
+                        title: "Daily WaterGuru refresh time",
+                        required: true
+                    paragraph "Choose a time after WaterGuru finishes measuring. A new sample triggers the normal duplicate lock and every dosing safety check."
+                }
             }
         }
 
@@ -160,6 +226,85 @@ def mainPage() {
                 title: "Liquid chlorine strength %" + hint("chlorineProductPct", "12.5"), required: false
         }
 
+        section("<b>Liquid-chlorine tank inventory</b>") {
+            input "chlorineTankGallons", "enum",
+                title: "Chlorine container capacity (US gallons)",
+                options: ["1":"1 gal", "2.5":"2.5 gal", "5":"5 gal", "10":"10 gal", "15":"15 gal", "30":"30 gal", "55":"55 gal"],
+                defaultValue: "1", required: true, submitOnChange: true
+            input "tankLowPercent", "decimal",
+                title: "PushOver low-tank warning at remaining percent",
+                defaultValue: 20, required: true
+            paragraph tankStatusHtml()
+        }
+
+        section("<b>Automated liquid-chlorine dosing</b>") {
+            input "dosingMode", "enum",
+                title: "Dosing mode",
+                options: ["ADVISORY", "APPROVAL", "AUTO"],
+                defaultValue: "ADVISORY", required: true, submitOnChange: true
+            paragraph dosingModeHelp()
+
+            input "pumpSwitch", "capability.switch",
+                title: "Dedicated chlorine pump switch",
+                required: false, multiple: false, submitOnChange: true
+            input "pumpRateMlPerMin", "decimal",
+                title: "Pump delivery rate (mL/min)",
+                defaultValue: 185, required: true
+
+            input "circulationSwitch", "capability.switch",
+                title: "Pool circulation/filter switch (recommended interlock)",
+                required: false, multiple: false
+            if (circulationSwitch) {
+                input "requireCirculationOn", "bool",
+                    title: "Require circulation/filter switch to already be on",
+                    defaultValue: true
+            } else {
+                input "circulationAlwaysOn", "bool",
+                    title: "I confirm the circulation/filter pump runs continuously (24/7)",
+                    defaultValue: false
+                paragraph "Select a circulation switch if one becomes available. APPROVAL/AUTO dosing is blocked unless a switch reports on or continuous circulation is explicitly confirmed."
+            }
+
+            input "doseOptionalTopUps", "bool",
+                title: "Allow automatic dosing when FC is above the minimum but below target",
+                defaultValue: false
+
+            input "limitAutoDoseWindow", "bool",
+                title: "Only allow AUTO dosing during an evening time window",
+                defaultValue: false, submitOnChange: true
+            if (limitAutoDoseWindow == true) {
+                input "autoDoseWindowStart", "time",
+                    title: "AUTO dosing window starts",
+                    required: true
+                input "autoDoseWindowEnd", "time",
+                    title: "AUTO dosing window ends",
+                    required: true
+                paragraph "New samples outside this window are recorded but cannot start the pump. APPROVAL mode remains available for an intentional dose at another time."
+            }
+            input "oneAutoDosePerDay", "bool",
+                title: "Limit AUTO mode to one completed dose per calendar day",
+                defaultValue: true
+
+            paragraph "<b>Safety limits</b> — every limit must pass before the pump can start. A blocked dose is logged and notified."
+            input "maxSampleAgeHours", "decimal", title: "Maximum WaterGuru sample age (hours)", defaultValue: 18, required: true
+            input "minDoseMl", "decimal", title: "Minimum dose to run (mL)", defaultValue: 50, required: true
+            input "maxSingleDoseMl", "decimal", title: "Maximum single dose (mL)", defaultValue: 3000, required: true
+            input "maxDailyDoseMl", "decimal", title: "Maximum total dose per day (mL)", defaultValue: 3500, required: true
+            input "maxPumpRunMinutes", "decimal", title: "Absolute maximum pump runtime (minutes)", defaultValue: 20, required: true
+            input "minSafePh", "decimal", title: "Block dosing below pH", defaultValue: 6.8, required: true
+            input "maxSafePh", "decimal", title: "Block dosing above pH", defaultValue: 8.2, required: true
+            input "watchdogAnyPumpRun", "bool",
+                title: "Arm an independent emergency cutoff for every pump run",
+                defaultValue: true, submitOnChange: true
+            if (watchdogAnyPumpRun != false) {
+                input "failsafePumpRunMinutes", "decimal",
+                    title: "Independent emergency cutoff after this many minutes",
+                    defaultValue: 20, required: true
+            }
+
+            paragraph dosingStatusHtml()
+        }
+
         section("<b>WaterGuru advice pass-through (pH / TA / CH / CYA)</b>") {
             input "useWgAdvice", "bool",
                 title: "Use WaterGuru's own dose advice for pH / TA / CH / CYA",
@@ -195,11 +340,11 @@ def mainPage() {
                 title: "Notify automatically on each new WaterGuru sample",
                 defaultValue: true
             input "dailyDigest", "bool",
-                title: "Also send a daily summary at a set time (independent of new samples)",
+                title: "Send a concise daily chlorine amount + pump runtime summary",
                 defaultValue: false, submitOnChange: true
             if (dailyDigest == true) {
                 input "digestTime", "time",
-                    title: "Daily summary time",
+                    title: "Fallback summary time (only if today's sample did not trigger one)",
                     required: true
             }
         }
@@ -227,8 +372,13 @@ def mainPage() {
         section("<b>Run now</b>") {
             input name: "btnCalcNow", type: "button", title: "Calculate &amp; send now"
             input name: "btnPreview", type: "button", title: "Preview (log only)"
-            if (state.lastPreview) {
-                paragraph "<b>Last preview:</b>\n<pre style='white-space:pre-wrap'>${state.lastPreview}</pre>"
+            input name: "btnDailySummaryNow", type: "button", title: "Send concise daily summary now"
+            input name: "btnTankFull", type: "button", title: "Mark chlorine tank full / reset inventory"
+            if (dosingMode == "APPROVAL" && state.pendingDose) {
+                input name: "btnRunPending", type: "button", title: "Run the pending chlorine dose now"
+            }
+            if (pumpSwitch) {
+                input name: "btnStopPump", type: "button", title: "STOP chlorine pump now"
             }
         }
 
@@ -268,7 +418,73 @@ private String slamPageBanner() {
            "Switch it off once the pool is clear and holds chlorine overnight.</div>"
 }
 
-private String currentReadingsSummary() {
+private String dosingModeHelp() {
+    switch ((dosingMode ?: "ADVISORY").toString()) {
+        case "AUTO":
+            return "<b>AUTO:</b> a new, valid WaterGuru sample may start the pump after every safety check passes. Daily summaries and manual calculations never start it."
+        case "APPROVAL":
+            return "<b>APPROVAL:</b> a valid new sample queues a dose. Open this page and press <i>Run the pending chlorine dose now</i>."
+        default:
+            return "<b>ADVISORY:</b> calculate and notify only. The pump will never be started by this app."
+    }
+}
+
+private String dosingStatusHtml() {
+    String sw = pumpSwitch ? (pumpSwitch.currentValue("switch") ?: "unknown") : "not selected"
+    String active = state.activeDose ? "RUNNING ${state.activeDose.ml} mL; scheduled stop ${state.activeDose.stopAt}" : "idle"
+    String pending = state.pendingDose ? "${state.pendingDose.ml} mL / ${formatDuration((state.pendingDose.seconds ?: 0) as Integer)} from sample ${state.pendingDose.sample}" : "none"
+    String last = state.lastDose ? "${state.lastDose.ml} mL on ${new Date((state.lastDose.time ?: 0) as Long)}" : "none"
+    String circulation = circulationSwitch ? "${circulationSwitch.displayName} (${circulationSwitch.currentValue('switch') ?: 'unknown'})" :
+                         (circulationAlwaysOn == true ? "confirmed continuous (24/7)" : "not confirmed")
+    return "Pump: <b>${pumpSwitch?.displayName ?: 'not selected'}</b> (${sw}) · controller: <b>${active}</b><br>" +
+           "Circulation: <b>${circulation}</b><br>" +
+           "Pending dose: <b>${pending}</b><br>Last started dose: <b>${last}</b>"
+}
+
+private String tankStatusHtml() {
+    BigDecimal cap = tankCapacityMl()
+    BigDecimal remaining = tankRemainingMl()
+    if (cap == null) return "Select a chlorine container size."
+    if (remaining == null) {
+        return "Tank inventory is <b>not initialized</b>. Press <i>Mark chlorine tank full / reset inventory</i> after confirming the container is full. AUTO dosing will remain blocked until then."
+    }
+    BigDecimal pct = cap > 0 ? (remaining * 100G / cap) : 0G
+    return "Estimated remaining: <b>${n0(remaining)} mL / ${n2(remaining / ML_PER_US_GALLON)} gal (${n0(pct)}%)</b>. " +
+           "This estimate subtracts pump-planned volume; reset it whenever the container is replaced or refilled."
+}
+
+private String nextCycleHtml() {
+    Date measurement = nextDailyTime(null, WATERGURU_MEASUREMENT_HOUR, WATERGURU_MEASUREMENT_MINUTE)
+    Date dosing = nextDailyTime(sourceRefreshTime, DEFAULT_DOSING_CHECK_HOUR, DEFAULT_DOSING_CHECK_MINUTE)
+    TimeZone tz = location?.timeZone ?: TimeZone.getDefault()
+    String measurementText = measurement.format("EEE, MMM d 'at' h:mm a", tz)
+    String dosingText = dosing.format("EEE, MMM d 'at' h:mm a", tz)
+    return "Next WaterGuru measurement: <b>${measurementText}</b><br>" +
+           "Next dosing time: <b>${dosingText}</b> (only if the new reading needs chlorine and every safety check passes)."
+}
+
+private Date nextDailyTime(def configuredTime, int fallbackHour, int fallbackMinute) {
+    TimeZone tz = location?.timeZone ?: TimeZone.getDefault()
+    Date scheduled = null
+    if (configuredTime) {
+        try { scheduled = timeToday(configuredTime, tz) }
+        catch (ignored) { scheduled = null }
+    }
+    Calendar cal = Calendar.getInstance(tz)
+    if (scheduled) {
+        cal.setTime(scheduled)
+    } else {
+        cal.setTime(new Date())
+        cal.set(Calendar.HOUR_OF_DAY, fallbackHour)
+        cal.set(Calendar.MINUTE, fallbackMinute)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+    }
+    if (cal.timeInMillis <= now()) cal.add(Calendar.DATE, 1)
+    return cal.time
+}
+
+private String currentReadingsSummary(boolean includeSampleTime = true) {
     def d = sourceDevice
     if (!d) return ""
     def parts = []
@@ -283,7 +499,14 @@ private String currentReadingsSummary() {
     add("CH", "calciumHardness", " ppm")
     def sampled = d.currentValue("LastMeasurementHuman") ?: d.currentValue("LastMeasurement")
     def s = parts ? parts.join(" · ") : "no readings yet"
-    return "Current: ${s}${sampled ? "  (sampled ${sampled})" : ''}"
+    return "Current: ${s}${includeSampleTime && sampled ? "  (sampled ${sampled})" : ''}"
+}
+
+private String sampleTimestampText() {
+    Long epoch = toEpochMs(attrRaw("LastMeasurement"))
+    if (epoch == null) return null
+    TimeZone tz = location?.timeZone ?: TimeZone.getDefault()
+    return new Date(epoch).format("MMM d, yyyy h:mm a z", tz)
 }
 
 // ---------------------------------------------------------------------------
@@ -293,14 +516,20 @@ private String currentReadingsSummary() {
 def installed() { initialize() }
 
 def updated() {
+    safeStopPump("configuration changed")
     unsubscribe()
     initialize()
 }
 
-def uninstalled() { removeTileDevice() }
+def uninstalled() {
+    safeStopPump("app removed")
+    unsubscribe()
+    unschedule()
+    removeTileDevice()
+}
 
 def initialize() {
-    unschedule()   // clear any previous daily-digest job before (re)scheduling
+    unschedule()   // clear previous digest, sample-delay, dose and watchdog jobs
 
     // Give the child a meaningful name in the parent's list if unnamed.
     if (sourceDevice && (!app.label || app.label == "WaterGuru Dosing Advisor Pool")) {
@@ -310,10 +539,16 @@ def initialize() {
     // Companion dashboard-tile device (created/removed per the toggle).
     ensureTileDevice()
 
-    if (autoRun != false && sourceDevice) {
+    if (sourceDevice) {
         // New WaterGuru sample => LastMeasurement (a DATE attribute) changes.
-        subscribe(sourceDevice, "LastMeasurement", "onNewSample")
-        logDebug "Subscribed to new-sample events on ${sourceDevice.displayName}"
+        // Always subscribe when dosing is enabled, even if advice notifications are disabled.
+        if (autoRun != false || dailyDigest == true || (dosingMode ?: "ADVISORY") != "ADVISORY") {
+            subscribe(sourceDevice, "LastMeasurement", "onNewSample")
+            logDebug "Subscribed to new-sample events on ${sourceDevice.displayName}"
+        }
+    }
+    if (pumpSwitch) {
+        subscribe(pumpSwitch, "switch", "pumpSwitchHandler")
     }
 
     if (dailyDigest == true && digestTime) {
@@ -321,26 +556,99 @@ def initialize() {
         schedule(digestTime, "dailyDigestHandler")
         logDebug "Scheduled daily summary at ${digestTime}"
     }
+    if (refreshSourceDaily == true && sourceRefreshTime) {
+        if (sourceDevice?.hasCommand("refresh")) {
+            schedule(sourceRefreshTime, "refreshWaterGuruSource")
+            logDebug "Scheduled daily WaterGuru refresh at ${sourceRefreshTime}"
+        } else {
+            log.warn "WaterGuru Dosing Advisor: selected source device has no refresh command"
+        }
+    }
 
     // Populate the tile right away so it is never blank after a save.
     refreshTile()
 }
 
+def refreshWaterGuruSource() {
+    if (!sourceDevice) {
+        log.warn "WaterGuru Dosing Advisor: scheduled refresh skipped; no source device is configured"
+        return
+    }
+    if (!sourceDevice.hasCommand("refresh")) {
+        log.warn "WaterGuru Dosing Advisor: scheduled refresh skipped; ${sourceDevice.displayName} has no refresh command"
+        return
+    }
+    log.info "WaterGuru Dosing Advisor: refreshing ${sourceDevice.displayName} after its scheduled measurement"
+    sourceDevice.refresh()
+}
+
 def onNewSample(evt) {
-    logDebug "New WaterGuru sample (${evt?.value}); computing dose advice"
+    logDebug "New WaterGuru sample (${evt?.value}); waiting briefly for all attributes"
     recordFcSample(evt)
-    runAndDeliver(true)
+    String key = evt?.value?.toString() ?: attrRaw("LastMeasurement") ?: now().toString()
+    runIn(20, "processNewSample", [data: [sampleKey: key], overwrite: true])
+}
+
+def processNewSample(Map data = [:]) {
+    String key = attrRaw("LastMeasurement") ?: data?.sampleKey?.toString()
+    if (key && state.lastProcessedSample == key) {
+        logDebug "Ignoring duplicate WaterGuru sample ${key}"
+        return
+    }
+    state.lastProcessedSample = key
+    if (dailyDigest == true && autoDoseWindowOpen()) {
+        sendDailyChlorineSummary(false, "new WaterGuru sample")
+    } else if (dailyDigest == true) {
+        logDebug "Skipping new-sample chlorine summary outside the AUTO dosing window"
+    }
+    runAndDeliver(autoRun != false, true, "new WaterGuru sample")
 }
 
 def dailyDigestHandler() {
-    logDebug "Daily summary firing"
-    runAndDeliver(true)
+    sendDailyChlorineSummary(false, "scheduled fallback")
+}
+
+private void sendDailyChlorineSummary(boolean force = false, String trigger = "daily") {
+    String today = new Date().format("yyyy-MM-dd", location.timeZone)
+    if (!force && state.lastDailySummaryDate == today) {
+        logDebug "Skipping ${trigger} chlorine summary; already sent for ${today}"
+        return
+    }
+    logDebug "Daily chlorine summary firing (${trigger})"
+    if (!sourceDevice) {
+        sendNotice("Daily pool chlorine: no WaterGuru source device is configured.")
+        state.lastDailySummaryDate = today
+        return
+    }
+    Map result = computeAdvice()
+    state.lastPreview = result.text
+    updateTileDevice(result)
+    String msg = dailyChlorineSummary(result)
+    log.info "WaterGuru Dosing Advisor: ${msg}"
+    sendNotice(msg)
+    state.lastDailySummaryDate = today
+}
+
+private String dailyChlorineSummary(Map result) {
+    String sampled = result?.sampled ? " Sample: ${result.sampled}." : ""
+    String readings = "FC ${n1(result?.fcVal)} ppm; target ${n1(result?.fcTarget)} ppm; pH ${n2(result?.pH)}."
+    String tank = tankSummaryPlain()
+    if (result?.doseMl != null && result?.runSeconds != null) {
+        BigDecimal rate = firstNum(pumpRateMlPerMin, DEFAULT_PUMP_RATE_ML_MIN)
+        String kind = result.doseOptional == true ? "optional top-up" : "dose"
+        return "Daily pool chlorine: add ${n0(result.doseMl)} mL of ${n1(firstNum(chlorinePctOverride, attrNum('chlorineProductPct'), 12.5G))}% liquid chlorine; run ${pumpSwitch?.displayName ?: 'the pump'} for ${formatDuration(result.runSeconds as Integer)} at ${n1(rate)} mL/min (${kind}). ${readings} ${tank}${sampled}"
+    }
+    return "Daily pool chlorine: add 0 mL; pump runtime 0 seconds. ${readings} ${tank}${sampled}"
 }
 
 void appButtonHandler(String btn) {
     switch (btn) {
-        case "btnCalcNow": runAndDeliver(true);  break
-        case "btnPreview": runAndDeliver(false); break
+        case "btnCalcNow":   runAndDeliver(true, false, "manual calculation");  break
+        case "btnPreview":   runAndDeliver(false, false, "preview"); break
+        case "btnDailySummaryNow": sendDailyChlorineSummary(true, "manual test"); break
+        case "btnTankFull": resetTankFull(); break
+        case "btnRunPending": runPendingDose(); break
+        case "btnStopPump":  safeStopPump("STOP button pressed", true); break
     }
 }
 
@@ -348,26 +656,25 @@ void appButtonHandler(String btn) {
 // Orchestration
 // ---------------------------------------------------------------------------
 
-private void runAndDeliver(boolean send) {
-    if (!sourceDevice) { log.warn "WaterGuru Dosing Advisor: no source device selected"; return }
-    def result = computeAdvice()
-    def text = result.text
+private Map runAndDeliver(boolean send, boolean allowDose = false, String trigger = "manual") {
+    if (!sourceDevice) { log.warn "WaterGuru Dosing Advisor: no source device selected"; return null }
+    Map result = computeAdvice()
+    String text = result.text
     state.lastPreview = text
 
     // Refresh the dashboard tile on every calculation (send or preview).
     updateTileDevice(result)
 
+    if (allowDose) handleDoseDecision(result, trigger)
+
     if (!send) {
         log.info "WaterGuru Dosing Advisor (preview):\n${text}"
-        return
+        return result
     }
 
     log.info "WaterGuru Dosing Advisor:\n${text}"
-    if (!notifyDevices) { log.warn "WaterGuru Dosing Advisor: no notification device selected — nothing sent"; return }
-    notifyDevices.each { dev ->
-        try { dev.deviceNotification(text) }
-        catch (e) { log.error "WaterGuru Dosing Advisor: failed to notify ${dev?.displayName} — ${e.message}" }
-    }
+    sendNotice(text)
+    return result
 }
 
 // ---------------------------------------------------------------------------
@@ -404,8 +711,12 @@ private Map computeAdvice() {
     boolean yellow = false   // optional / advisory / uncertain
 
     out << "🌊 WaterGuru Dosing Advisor — ${label}"
+    out << currentReadingsSummary(false)
     def sampled = attrRaw("LastMeasurementHuman") ?: attrRaw("LastMeasurement")
-    if (sampled) out << "Sampled: ${sampled}"
+    if (sampled) {
+        String exactSample = sampleTimestampText()
+        out << "Sampled: ${sampled}${exactSample ? ' · ' + exactSample : ''}"
+    }
     def cassette = cassetteText()
     if (cassette) out << "Cassette: ${cassette}"
 
@@ -463,6 +774,10 @@ private Map computeAdvice() {
 
     // ---- Footer ------------------------------------------------------------
     out << ""
+    out << tankInventoryLine()
+    Map tankRunway = computeTankRunway()
+    if (tankRunway) out << tankRunwayLine(tankRunway)
+    out << ""
     if (runway) { out << runwayLine(runway); out << "" }
     warnings.unique().each { out << "⚠ ${it}" }
     out << "⚠ Estimates only — confirm with your own test kit before adding chemicals."
@@ -479,6 +794,9 @@ private Map computeAdvice() {
     return [text: out.join("\n"), anyAction: anyAction, status: status,
             headline: headline, fcSummary: fcResult.fcSummary,
             fcVal: fcResult.fcVal, fcTarget: fcResult.target,
+            doseMl: fcResult.doseMl, runSeconds: fcResult.runSeconds,
+            doseRequired: fcResult.required, doseOptional: fcResult.optional,
+            pH: ph, sampleKey: attrRaw("LastMeasurement"),
             runway: runway, sampled: sampled, label: label]
 }
 
@@ -491,15 +809,19 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
     boolean optional = false   // above the TFP minimum but below target (drives YELLOW)
     String chip = null         // short fragment for the one-liner, e.g. "Add 4.8 gal chlorine"
     String banner = null
+    BigDecimal doseMl = null
+    Integer runSeconds = null
 
     // Determine the FC target.
     BigDecimal target
     BigDecimal minFc = null
     String basis
-    if (numSet(fcTargetOverride)) {
-        target = fcTargetOverride as BigDecimal
+    BigDecimal manualTarget = numSet(fcTargetOverride) ? toBD(fcTargetOverride) : null
+    if (manualTarget != null && manualTarget > 0 && manualTarget <= 50G) {
+        target = manualTarget
         basis = "manual target ${n1(target)} ppm"
     } else if (cya != null && cya > 0) {
+        if (manualTarget != null) warnings << "Ignored invalid manual FC target ${manualTarget}; target must be greater than 0 and at most 50 ppm."
         if (slamMode != false) {
             BigDecimal factor = numSet(slamFactor) ? (slamFactor as BigDecimal) : 0.40G
             target = (cya * factor)
@@ -523,6 +845,7 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
         lines << "  • Would target ${n1(target)} ppm (${basis})."
         return [lines: lines, action: false, slam: slam, banner: banner,
                 required: false, optional: false, chip: null, fcVal: null, target: target,
+                doseMl: null, runSeconds: null,
                 fcSummary: "FC — → ${n1(target)} ppm"]
     }
 
@@ -535,7 +858,13 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
         optional = (minFc != null && fc >= minFc)   // non-SLAM: above min but below target
         required = !optional
         String verb = optional ? "Optional top-up" : "Add"
-        lines << "  ➕ ${verb}: ${flozUnits(floz)} of liquid chlorine (${n1(chlorinePct)}%) to raise FC ${n1(ppmGap)} ppm to target."
+        doseMl = floz * ML_PER_FLOZ
+        BigDecimal pumpRate = firstNum(pumpRateMlPerMin, DEFAULT_PUMP_RATE_ML_MIN)
+        if (pumpRate != null && pumpRate > 0) {
+            runSeconds = Math.max(1, Math.ceil((doseMl / pumpRate * 60G).doubleValue()) as Integer)
+        }
+        lines << "  ➕ ${verb}: ${flozUnits(floz)} / ${n0(doseMl)} mL of liquid chlorine (${n1(chlorinePct)}%) to raise FC ${n1(ppmGap)} ppm to target."
+        if (runSeconds != null) lines << "  ⏱ Pump plan: ${formatDuration(runSeconds)} at ${n0(pumpRate)} mL/min."
         chip = "${optional ? 'Top up' : 'Add'} ${shortVol(floz)} chlorine"
         action = true
         if (ppmGap > 8G) warnings << "Large chlorine addition (+${n1(ppmGap)} ppm) — add in stages and retest between doses."
@@ -549,6 +878,7 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
     }
     return [lines: lines, action: action, slam: slam, banner: banner,
             required: required, optional: optional, chip: chip, fcVal: fc, target: target,
+            doseMl: doseMl, runSeconds: runSeconds,
             fcSummary: "FC ${n1(fc)} → ${n1(target)} ppm"]
 }
 
@@ -647,6 +977,419 @@ private Map computeGeneric(BigDecimal ph, BigDecimal ta, BigDecimal ch, BigDecim
 }
 
 // ---------------------------------------------------------------------------
+// Chlorine pump controller
+// ---------------------------------------------------------------------------
+
+private void handleDoseDecision(Map result, String trigger) {
+    if (result?.doseMl == null || result?.runSeconds == null) {
+        state.remove("pendingDose")
+        return
+    }
+    if (result.doseOptional == true && doseOptionalTopUps != true) {
+        log.info "WaterGuru Dosing Advisor: optional FC top-up not pumped (doseOptionalTopUps is off)"
+        state.remove("pendingDose")
+        return
+    }
+
+    String mode = (dosingMode ?: "ADVISORY").toString()
+    if (mode == "ADVISORY") {
+        state.remove("pendingDose")
+        log.info "WaterGuru Dosing Advisor: advisory mode — calculated ${n0(result.doseMl)} mL but pump is locked out"
+        return
+    }
+    if (mode == "APPROVAL") {
+        state.pendingDose = doseState(result)
+        sendPumpNotice("WaterGuru queued ${n0(result.doseMl)} mL chlorine (${formatDuration(result.runSeconds as Integer)}). Open the dosing app to approve it.")
+        return
+    }
+    if (mode == "AUTO") startDose(result, trigger)
+}
+
+private Map doseState(Map result) {
+    return [ml: n0(result.doseMl), mlRaw: (result.doseMl as BigDecimal).toString(),
+            seconds: result.runSeconds as Integer, sample: result.sampleKey?.toString(),
+            fc: result.fcVal?.toString(), target: result.fcTarget?.toString(),
+            pH: result.pH?.toString(), created: now()]
+}
+
+private void runPendingDose() {
+    Map pending = state.pendingDose instanceof Map ? state.pendingDose : null
+    if (!pending) {
+        sendPumpNotice("No pending chlorine dose is available.")
+        return
+    }
+    Map current = computeAdvice()
+    if (!current?.sampleKey || current.sampleKey.toString() != pending.sample?.toString()) {
+        state.remove("pendingDose")
+        sendPumpNotice("Pending chlorine dose cancelled because the WaterGuru sample changed.")
+        return
+    }
+    startDose(current, "approved from app")
+}
+
+private void startDose(Map result, String trigger) {
+    List blocks = doseSafetyBlocks(result)
+    if (blocks) {
+        String msg = "Chlorine dose BLOCKED: ${blocks.join('; ')}"
+        log.warn "WaterGuru Dosing Advisor: ${msg}"
+        sendPumpNotice(msg)
+        return
+    }
+
+    Integer seconds = result.runSeconds as Integer
+    BigDecimal ml = result.doseMl as BigDecimal
+    String sample = result.sampleKey?.toString()
+    Long stopAt = now() + (seconds * 1000L)
+
+    // Establish the stop job and state before energizing the physical output.
+    state.activeDose = [ml: n0(ml), mlRaw: ml.toString(), seconds: seconds,
+                        sample: sample, started: now(), stopAt: stopAt]
+    runIn(seconds, "stopDose", [overwrite: true])
+    runIn(seconds + 15, "verifyPumpOff", [overwrite: true])
+    armEmergencyPumpCutoff("app-started dose")
+    try {
+        pumpSwitch.on()
+    } catch (e) {
+        unschedule("stopDose")
+        unschedule("verifyPumpOff")
+        unschedule("emergencyPumpOff")
+        state.remove("activeDose")
+        try { pumpSwitch.off() } catch (ignored) { }
+        String msg = "Chlorine pump failed to start: ${e.message}"
+        log.error "WaterGuru Dosing Advisor: ${msg}"
+        sendPumpNotice(msg)
+        return
+    }
+
+    recordDoseLedger(ml, sample, seconds)
+    publishTileTelemetry(result)
+    state.remove("pendingDose")
+    String msg = "Chlorine pump started: ${n0(ml)} mL for ${formatDuration(seconds)} at ${n1(firstNum(pumpRateMlPerMin, DEFAULT_PUMP_RATE_ML_MIN))} mL/min (${trigger}). ${tankSummaryPlain()}"
+    log.warn "WaterGuru Dosing Advisor: ${msg}"
+    sendPumpNotice(msg)
+}
+
+def stopDose() {
+    Map active = state.activeDose instanceof Map ? state.activeDose : null
+    try { if (pumpSwitch) pumpSwitch.off() }
+    catch (e) { log.error "WaterGuru Dosing Advisor: pump OFF command failed — ${e.message}" }
+    unschedule("emergencyPumpOff")
+    state.remove("activeDose")
+    if (active) {
+        String msg = "Chlorine pump stopped after scheduled ${formatDuration((active.seconds ?: 0) as Integer)} dose (${active.ml} mL planned). ${tankSummaryPlain()}"
+        log.info "WaterGuru Dosing Advisor: ${msg}"
+        sendPumpNotice(msg)
+    }
+}
+
+def verifyPumpOff() {
+    if (!pumpSwitch) return
+    if (pumpSwitch.currentValue("switch")?.toString() == "on") {
+        try { pumpSwitch.off() } catch (ignored) { }
+        unschedule("emergencyPumpOff")
+        state.remove("activeDose")
+        String msg = "EMERGENCY: chlorine pump was still on after its stop time; another OFF command was sent."
+        log.error "WaterGuru Dosing Advisor: ${msg}"
+        sendPumpNotice(msg)
+    }
+}
+
+private void safeStopPump(String reason, boolean notify = false) {
+    unschedule("stopDose")
+    unschedule("verifyPumpOff")
+    unschedule("emergencyPumpOff")
+    try { if (pumpSwitch && pumpSwitch.currentValue("switch")?.toString() == "on") pumpSwitch.off() }
+    catch (e) { log.error "WaterGuru Dosing Advisor: unable to stop chlorine pump — ${e.message}" }
+    boolean wasActive = state.activeDose != null
+    state.remove("activeDose")
+    if (notify || wasActive) sendPumpNotice("Chlorine pump stopped: ${reason}.")
+}
+
+def pumpSwitchHandler(evt) {
+    if (evt?.value?.toString() == "on") {
+        if (state.activeDose) return
+        if (watchdogAnyPumpRun == true) {
+            armEmergencyPumpCutoff("pump start outside this app")
+        }
+    } else if (evt?.value?.toString() == "off") {
+        unschedule("emergencyPumpOff")
+        if (state.activeDose) {
+            Long stopAt = (state.activeDose.stopAt ?: 0) as Long
+            if (now() + 3000L < stopAt) {
+                unschedule("stopDose")
+                unschedule("verifyPumpOff")
+                state.remove("activeDose")
+                sendPumpNotice("Chlorine pump stopped before the planned dose completed.")
+            }
+        }
+    }
+}
+
+private void armEmergencyPumpCutoff(String reason) {
+    if (watchdogAnyPumpRun == false) return
+    Integer seconds = Math.max(60, Math.round((firstNum(failsafePumpRunMinutes, 20G) * 60G).doubleValue()) as Integer)
+    runIn(seconds, "emergencyPumpOff", [overwrite: true])
+    log.warn "WaterGuru Dosing Advisor: ${reason}; independent emergency cutoff armed for ${formatDuration(seconds)}"
+}
+
+def emergencyPumpOff() {
+    if (!pumpSwitch || pumpSwitch.currentValue("switch")?.toString() != "on") return
+    try { pumpSwitch.off() } catch (ignored) { }
+    state.remove("activeDose")
+    String msg = "EMERGENCY cutoff stopped the chlorine pump after ${n1(firstNum(failsafePumpRunMinutes, 20G))} minutes."
+    log.error "WaterGuru Dosing Advisor: ${msg}"
+    sendPumpNotice(msg)
+}
+
+private List doseSafetyBlocks(Map result) {
+    def blocks = []
+    if (!pumpSwitch) blocks << "no dedicated pump switch selected"
+    if (state.activeDose) blocks << "a dose is already running"
+    if (pumpSwitch?.currentValue("switch")?.toString() == "on") blocks << "pump switch is already on"
+    if ((dosingMode ?: "ADVISORY").toString() == "AUTO" && !autoDoseWindowOpen()) {
+        blocks << "outside the configured AUTO dosing window"
+    }
+    if ((dosingMode ?: "ADVISORY").toString() == "AUTO" && oneAutoDosePerDay != false && autoDoseAlreadyRanToday()) {
+        blocks << "an AUTO dose already ran today"
+    }
+
+    BigDecimal ml = toBD(result?.doseMl)
+    Integer seconds = result?.runSeconds != null ? (result.runSeconds as Integer) : null
+    BigDecimal rate = firstNum(pumpRateMlPerMin, DEFAULT_PUMP_RATE_ML_MIN)
+    BigDecimal minMl = firstNum(minDoseMl, 50G)
+    BigDecimal maxSingle = firstNum(maxSingleDoseMl, 3000G)
+    BigDecimal maxDaily = firstNum(maxDailyDoseMl, 3500G)
+    BigDecimal maxMinutes = firstNum(maxPumpRunMinutes, 20G)
+
+    if (rate == null || rate <= 0) blocks << "pump rate must be greater than zero"
+    if (ml == null || ml <= 0) blocks << "calculated dose is not positive"
+    if (ml != null && minMl != null && ml < minMl) blocks << "${n0(ml)} mL is below the ${n0(minMl)} mL minimum"
+    if (ml != null && maxSingle != null && ml > maxSingle) blocks << "${n0(ml)} mL exceeds the ${n0(maxSingle)} mL single-dose limit"
+    if (seconds == null || seconds <= 0) blocks << "pump runtime is invalid"
+    if (seconds != null && maxMinutes != null && seconds > (maxMinutes * 60G)) blocks << "${formatDuration(seconds)} exceeds the ${n1(maxMinutes)} minute runtime limit"
+
+    BigDecimal ph = toBD(result?.pH)
+    BigDecimal loPh = firstNum(minSafePh, 6.8G), hiPh = firstNum(maxSafePh, 8.2G)
+    if (ph == null) blocks << "pH reading is unavailable"
+    else if ((loPh != null && ph < loPh) || (hiPh != null && ph > hiPh)) blocks << "pH ${n2(ph)} is outside ${n2(loPh)}–${n2(hiPh)}"
+
+    Long measured = toEpochMs(result?.sampleKey)
+    BigDecimal maxAge = firstNum(maxSampleAgeHours, 18G)
+    if (measured == null) blocks << "measurement timestamp is unavailable"
+    else if (maxAge != null && (now() - measured) > (maxAge * 3600000G)) blocks << "WaterGuru sample is older than ${n1(maxAge)} hours"
+
+    if (result?.sampleKey && state.lastDosedSample?.toString() == result.sampleKey.toString()) blocks << "this WaterGuru sample was already dosed"
+
+    BigDecimal today = doseMlToday()
+    if (ml != null && maxDaily != null && today + ml > maxDaily) blocks << "daily total would be ${n0(today + ml)} mL, above the ${n0(maxDaily)} mL limit"
+
+    BigDecimal tankCap = tankCapacityMl()
+    BigDecimal tankRemaining = tankRemainingMl()
+    if (tankCap != null && tankRemaining == null) {
+        blocks << "chlorine tank inventory is not initialized; mark the tank full"
+    } else if (ml != null && tankRemaining != null && ml > tankRemaining) {
+        blocks << "chlorine tank has only ${n0(tankRemaining)} mL remaining; dose needs ${n0(ml)} mL"
+    }
+
+    if (circulationSwitch && requireCirculationOn != false && circulationSwitch.currentValue("switch")?.toString() != "on") {
+        blocks << "circulation/filter switch is not on"
+    }
+    if (!circulationSwitch && circulationAlwaysOn != true) {
+        blocks << "no circulation interlock or 24/7 circulation confirmation"
+    }
+    return blocks
+}
+
+private boolean autoDoseWindowOpen() {
+    if (limitAutoDoseWindow != true) return true
+    if (!autoDoseWindowStart || !autoDoseWindowEnd) return false
+    try {
+        Date start = timeToday(autoDoseWindowStart, location.timeZone)
+        Date end = timeToday(autoDoseWindowEnd, location.timeZone)
+        long current = now(), startMs = start.time, endMs = end.time
+        return startMs <= endMs ? (current >= startMs && current <= endMs) :
+                                  (current >= startMs || current <= endMs)
+    } catch (e) {
+        log.error "WaterGuru Dosing Advisor: invalid AUTO dosing window — ${e.message}"
+        return false
+    }
+}
+
+private boolean autoDoseAlreadyRanToday() {
+    Long lastRun = state.lastDose?.time != null ? (state.lastDose.time as Long) : null
+    if (lastRun == null) return false
+    String today = new Date().format("yyyy-MM-dd", location.timeZone)
+    String runDay = new Date(lastRun).format("yyyy-MM-dd", location.timeZone)
+    return runDay == today
+}
+
+private void recordDoseLedger(BigDecimal ml, String sample, Integer seconds) {
+    String day = doseDayKey()
+    BigDecimal prior = (state.doseDay == day) ? (toBD(state.doseMlToday) ?: 0G) : 0G
+    state.doseDay = day
+    state.doseMlToday = (prior + ml).toString()
+    state.lastDosedSample = sample
+    state.lastDose = [time: now(), ml: n0(ml), mlRaw: ml.toString(), seconds: seconds, sample: sample]
+    recordTankUse(ml)
+}
+
+private BigDecimal tankCapacityMl() {
+    BigDecimal gallons = toBD(chlorineTankGallons)
+    return gallons != null && gallons > 0 ? gallons * ML_PER_US_GALLON : null
+}
+
+private BigDecimal tankRemainingMl() {
+    BigDecimal selected = toBD(chlorineTankGallons)
+    BigDecimal initialized = toBD(state.tankCapacityGallons)
+    BigDecimal cap = tankCapacityMl()
+    BigDecimal remaining = toBD(state.tankRemainingMl)
+    if (selected == null || initialized == null || selected.compareTo(initialized) != 0 || cap == null || remaining == null) return null
+    if (remaining < 0) return 0G
+    return remaining > cap ? cap : remaining
+}
+
+private String tankSummaryPlain() {
+    BigDecimal cap = tankCapacityMl()
+    BigDecimal remaining = tankRemainingMl()
+    if (cap == null) return "Tank capacity not configured."
+    if (remaining == null) return "Tank inventory not initialized."
+    BigDecimal pct = cap > 0 ? remaining * 100G / cap : 0G
+    return "Tank ${n0(remaining)} mL remaining (${n0(pct)}%)."
+}
+
+private String tankInventoryLine() {
+    BigDecimal cap = tankCapacityMl()
+    BigDecimal remaining = tankRemainingMl()
+    if (cap == null) return "🧴 Chlorine tank: capacity not configured."
+    if (remaining == null) return "🧴 Chlorine tank: full ${n0(cap)} mL (${n2(cap / ML_PER_US_GALLON)} gal) · remaining not initialized."
+    BigDecimal pct = cap > 0 ? remaining * 100G / cap : 0G
+    return "🧴 Chlorine tank: full ${n0(cap)} mL (${n2(cap / ML_PER_US_GALLON)} gal) · remaining ${n0(remaining)} mL (${n2(remaining / ML_PER_US_GALLON)} gal, ${n0(pct)}%)."
+}
+
+private void resetTankFull() {
+    BigDecimal gallons = toBD(chlorineTankGallons)
+    BigDecimal cap = tankCapacityMl()
+    if (gallons == null || cap == null) {
+        sendPumpNotice("Cannot reset tank inventory: select a valid container size.")
+        return
+    }
+    state.tankCapacityGallons = gallons.toString()
+    state.tankRemainingMl = cap.toString()
+    state.tankLastRefill = now()
+    state.tankLowAlerted = false
+    Map refreshed = computeAdvice()
+    state.lastPreview = refreshed.text
+    updateTileDevice(refreshed)
+    String msg = "Chlorine tank marked full: ${n2(gallons)} gal / ${n0(cap)} mL available."
+    log.info "WaterGuru Dosing Advisor: ${msg}"
+    sendPumpNotice(msg)
+}
+
+private void recordTankUse(BigDecimal ml) {
+    BigDecimal cap = tankCapacityMl()
+    BigDecimal before = tankRemainingMl()
+    if (cap == null || before == null || ml == null || ml <= 0) return
+    BigDecimal after = before - ml
+    if (after < 0) after = 0G
+    state.tankRemainingMl = after.toString()
+
+    Long doseTime = state.lastDose?.time != null ? (state.lastDose.time as Long) : now()
+    def history = tankDoseHistory()
+    boolean duplicate = history.any { h ->
+        h?.t instanceof Number && (h.t as Long) == doseTime && toBD(h?.ml)?.compareTo(ml) == 0
+    }
+    if (!duplicate) history << [t: doseTime, ml: ml.toString()]
+    if (history.size() > TANK_DOSE_HISTORY_MAX) history = history[(history.size() - TANK_DOSE_HISTORY_MAX)..-1]
+    state.tankDoseHistory = history
+
+    BigDecimal lowPct = firstNum(tankLowPercent, 20G)
+    if (lowPct < 0) lowPct = 0G
+    if (lowPct > 100) lowPct = 100G
+    BigDecimal threshold = cap * lowPct / 100G
+    if (after <= threshold && state.tankLowAlerted != true) {
+        state.tankLowAlerted = true
+        String msg = "Chlorine tank LOW: ${n0(after)} mL remaining (${n0(after * 100G / cap)}%) in the ${n2(toBD(chlorineTankGallons))}-gal container. Refill or replace it, then press Mark chlorine tank full."
+        log.warn "WaterGuru Dosing Advisor: ${msg}"
+        sendPumpNotice(msg)
+    }
+}
+
+private List tankDoseHistory() {
+    def history = (state.tankDoseHistory instanceof List) ? state.tankDoseHistory : []
+    if (!history && state.lastDose instanceof Map) {
+        Long t = state.lastDose.time != null ? (state.lastDose.time as Long) : null
+        BigDecimal ml = toBD(state.lastDose.mlRaw ?: state.lastDose.ml)
+        if (t != null && ml != null && ml > 0) {
+            history = [[t: t, ml: ml.toString()]]
+            state.tankDoseHistory = history
+        }
+    }
+    return history
+}
+
+private Map computeTankRunway() {
+    BigDecimal cap = tankCapacityMl()
+    BigDecimal remaining = tankRemainingMl()
+    if (cap == null || remaining == null || cap <= 0) return null
+
+    BigDecimal lowPct = firstNum(tankLowPercent, 20G)
+    if (lowPct < 0) lowPct = 0G
+    if (lowPct > 100) lowPct = 100G
+    BigDecimal threshold = cap * lowPct / 100G
+    if (remaining <= threshold) return [state: "below", pct: lowPct, days: 0G]
+
+    def doses = tankDoseHistory().collect { toBD(it?.ml) }.findAll { it != null && it > 0 }
+    if (!doses) return [state: "learning", pct: lowPct, n: 0]
+    BigDecimal dailyUse = doses.sum(0G) / doses.size()
+    if (dailyUse <= 0) return [state: "learning", pct: lowPct, n: doses.size()]
+    BigDecimal days = (remaining - threshold) / dailyUse
+    return [state: "ok", pct: lowPct, days: days, dailyUse: dailyUse, n: doses.size()]
+}
+
+private String tankRunwayLine(Map runway) {
+    switch (runway?.state) {
+        case "below":
+            return "⏳ Tank runway: inventory is at/below the ${n0(runway.pct)}% low-tank threshold."
+        case "learning":
+            return "⏳ Tank runway: learning — a completed app-controlled dose is needed to estimate days until ${n0(runway.pct)}%."
+        case "ok":
+            String samples = runway.n == 1 ? "dose sample" : "dose samples"
+            return "⏳ Tank runway: ~${n1(runway.days)} days until inventory drops below ${n0(runway.pct)}% (average ${n0(runway.dailyUse)} mL/day over ${runway.n} ${samples})."
+        default:
+            return ""
+    }
+}
+
+private BigDecimal doseMlToday() {
+    if (state.doseDay != doseDayKey()) return 0G
+    return toBD(state.doseMlToday) ?: 0G
+}
+
+private String doseDayKey() {
+    return new Date().format("yyyy-MM-dd", location?.timeZone ?: TimeZone.getDefault())
+}
+
+private void sendNotice(String msg) {
+    if (!notifyDevices) {
+        log.warn "WaterGuru Dosing Advisor: no notification device selected — ${msg}"
+        return
+    }
+    notifyDevices.each { dev ->
+        try { dev.deviceNotification(msg) }
+        catch (e) { log.error "WaterGuru Dosing Advisor: failed to notify ${dev?.displayName} — ${e.message}" }
+    }
+}
+
+private void sendPumpNotice(String msg) { sendNotice("WaterGuru dosing: ${msg}") }
+
+private String formatDuration(Integer seconds) {
+    if (seconds == null) return "?"
+    int mins = (int)(seconds / 60)
+    int secs = seconds % 60
+    return mins > 0 ? "${mins}m ${secs}s" : "${secs}s"
+}
+
+// ---------------------------------------------------------------------------
 // Dashboard tile (companion device)
 // ---------------------------------------------------------------------------
 
@@ -694,9 +1437,40 @@ private void updateTileDevice(Map r) {
         dev.sendEvent(name: "detail",         value: clip(r.text ?: "", 1000))
         dev.sendEvent(name: "tileHtml",       value: clip(buildTileHtml(r), 1024))
         dev.sendEvent(name: "lastCalc",       value: new Date())
+        publishTileTelemetry(r, dev)
     } catch (e) {
         log.warn "WaterGuru Dosing Advisor: could not update the tile device — ${e.message}"
     }
+}
+
+/**
+ * Publish machine-readable values separately from the human preview. The last
+ * dose is recorded only after the pump ON command succeeds, so external totals
+ * represent commanded pump runs rather than recommendations or previews.
+ */
+private void publishTileTelemetry(Map r = null, def tile = null) {
+    if (createTile == false) return
+    def dev = tile ?: getTileDevice()
+    if (!dev) return
+
+    Map last = state.lastDose instanceof Map ? state.lastDose : [:]
+    BigDecimal cap = tankCapacityMl()
+    BigDecimal remaining = tankRemainingMl()
+    Map tankRunway = computeTankRunway()
+
+    if (last.time != null)       dev.sendEvent(name: "lastDoseEpochMs", value: last.time as Long)
+    if (last.mlRaw != null || last.ml != null)
+        dev.sendEvent(name: "lastDoseMl", value: toBD(last.mlRaw ?: last.ml), unit: "mL")
+    if (last.seconds != null)    dev.sendEvent(name: "lastDoseRuntimeSeconds", value: last.seconds as Integer, unit: "s")
+    if (cap != null)             dev.sendEvent(name: "tankCapacityMl", value: cap, unit: "mL")
+    if (remaining != null) {
+        dev.sendEvent(name: "tankRemainingMl", value: remaining, unit: "mL")
+        dev.sendEvent(name: "tankPercent", value: cap > 0 ? remaining * 100G / cap : 0G, unit: "%")
+    }
+    if (tankRunway?.days != null)
+        dev.sendEvent(name: "tankRunwayDays", value: tankRunway.days as BigDecimal, unit: "days")
+    if (r?.fcVal != null)        dev.sendEvent(name: "freeChlorine", value: r.fcVal as BigDecimal, unit: "ppm")
+    if (r?.fcTarget != null)     dev.sendEvent(name: "targetFreeChlorine", value: r.fcTarget as BigDecimal, unit: "ppm")
 }
 
 /**
@@ -825,10 +1599,18 @@ private String     attrRaw(String attr) { def v = sourceDevice?.currentValue(att
  *  28/30 pads") and falls back to the bare cassetteType. */
 private String cassetteText() {
     def info = attrRaw("cassetteInfo")
-    if (info && info.trim() && !info.trim().equalsIgnoreCase("unknown")) return info.trim()
     def type = attrRaw("cassetteType")
-    if (type && type.trim() && !type.trim().equalsIgnoreCase("unknown")) return type.trim()
-    return null
+    String base = (info && info.trim() && !info.trim().equalsIgnoreCase("unknown")) ? info.trim() :
+                  ((type && type.trim() && !type.trim().equalsIgnoreCase("unknown")) ? type.trim() : null)
+    if (!base) return null
+    def parts = [base]
+    def checks = attrRaw("CassetteChecksLeft")
+    def timeLeft = attrRaw("CassetteTimeLeft")
+    def percent = attrRaw("CassettePercent")
+    if (checks && checks.trim() && !checks.trim().equalsIgnoreCase("unknown")) parts << "${checks.trim()} tests left"
+    if (timeLeft && timeLeft.trim() && !timeLeft.trim().equalsIgnoreCase("unknown")) parts << timeLeft.trim()
+    if (percent && percent.trim() && !percent.trim().equalsIgnoreCase("unknown")) parts << "${percent.trim()}%"
+    return parts.join(" · ")
 }
 
 // ---------------------------------------------------------------------------
