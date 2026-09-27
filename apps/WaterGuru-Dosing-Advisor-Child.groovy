@@ -27,6 +27,10 @@
  * All doses are ESTIMATES. Always confirm with your own test kit before adding.
  *
  * Version history
+ *   2.3.0 - Expose lastCalcEpochMs beside lastCalc so an external historian can timestamp a
+ *           target snapshot at its calculation time rather than at collection time, and
+ *           re-render the tank lines in the stored preview after a dose so the human-readable
+ *           detail cannot lag the numeric attributes.
  *   2.2.0 - Publish numeric dose, tank, and FC telemetry on the companion tile
  *           device so an external historian such as InfluxDB/Grafana can store
  *           actual pump-started doses and calculate durable usage totals.
@@ -98,7 +102,7 @@
 
 import groovy.transform.Field
 
-def appVersion() { "2.2.0" }
+def appVersion() { "2.3.0" }
 
 definition(
     name:        "WaterGuru Dosing Advisor Pool",
@@ -1312,6 +1316,48 @@ private void recordTankUse(BigDecimal ml) {
         log.warn "WaterGuru Dosing Advisor: ${msg}"
         sendPumpNotice(msg)
     }
+
+    // Display-only, but this runs on the dose-completion path after the pump has already run,
+    // so it must not be able to throw into the ledger bookkeeping above it.
+    try {
+        refreshTankLinesInPreview()
+    } catch (e) {
+        logDebug "refreshTankLinesInPreview failed: ${e.message}"
+    }
+}
+
+/**
+ * Re-render the tank-derived lines in the stored preview, then re-push `detail`.
+ *
+ * The preview embeds the tank inventory and the tank runway, and both are derived from state
+ * THIS APP changes when a dose runs. Without this the numeric attributes advance while the
+ * human-readable detail still advertises the pre-dose inventory - a full tank beside an
+ * attribute that is one dose short of it.
+ *
+ * Deliberately NOT computeAdvice(): that function also decides whether to dose and, in AUTO
+ * mode, starts the pump. Refreshing a display string must not be able to do that. The chemistry
+ * lines are also left alone on purpose - they are still as-of the last WaterGuru sample, which
+ * has not changed, so rewriting them would be less accurate rather than more.
+ */
+private void refreshTankLinesInPreview() {
+    String prior = state.lastPreview
+    if (!(prior instanceof String) || !prior.contains("Chlorine tank:")) return
+
+    String inventory = tankInventoryLine()
+    String runway = tankRunwayLine(computeTankRunway())
+    List lines = prior.split("\n", -1) as List
+    boolean changed = false
+    for (int i = 0; i < lines.size(); i++) {
+        String line = (String) lines[i]
+        if (line.contains("Chlorine tank:")) { lines[i] = inventory; changed = true }
+        else if (line.contains("Tank runway:")) { lines[i] = runway; changed = true }
+    }
+    if (!changed) return
+
+    state.lastPreview = lines.join("\n")
+    def dev = getTileDevice()
+    if (dev) dev.sendEvent(name: "detail", value: clip((String) state.lastPreview, 1000))
+    logDebug "Refreshed the tank lines in the stored preview after a dose"
 }
 
 private List tankDoseHistory() {
@@ -1437,6 +1483,11 @@ private void updateTileDevice(Map r) {
         dev.sendEvent(name: "detail",         value: clip(r.text ?: "", 1000))
         dev.sendEvent(name: "tileHtml",       value: clip(buildTileHtml(r), 1024))
         dev.sendEvent(name: "lastCalc",       value: new Date())
+        // The same instant in epoch milliseconds. lastCalc is a locale-formatted string that
+        // cannot be parsed reliably off-hub, so an external historian reading the tile would
+        // otherwise have to stamp a target snapshot at collection time instead of at the
+        // moment it was calculated (which can be hours earlier, or days if a run is missed).
+        dev.sendEvent(name: "lastCalcEpochMs", value: now())
         publishTileTelemetry(r, dev)
     } catch (e) {
         log.warn "WaterGuru Dosing Advisor: could not update the tile device — ${e.message}"
