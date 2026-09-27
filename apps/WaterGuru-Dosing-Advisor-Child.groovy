@@ -534,12 +534,26 @@ def updated() {
 def uninstalled() {
     safeStopPump("app removed")
     unsubscribe()
-    unschedule()
+    clearScheduledJobs("uninstalled")
     removeTileDevice()
 }
 
+/**
+ * Clear every scheduled job AND the record of what was scheduled.
+ *
+ * unschedule() alone is not enough. state.emergencyDeadline survives it, and a surviving deadline
+ * that still reads as "armed" is how protection came to depend on a timestamp instead of a timer:
+ * after a queue reset the app believed a cutoff was in place while the queue was empty. Anything
+ * that clears the queue goes through here so the two cannot disagree.
+ */
+private void clearScheduledJobs(String why) {
+    unschedule()
+    state.remove("emergencyJobScheduled")
+    logDebug "Cleared every scheduled job (${why})"
+}
+
 def initialize() {
-    unschedule()   // clear previous digest, sample-delay, dose and watchdog jobs
+    clearScheduledJobs("initialize")   // digest, sample-delay, dose and watchdog jobs are rebuilt below
 
     // Give the child a meaningful name in the parent's list if unnamed.
     if (sourceDevice && (!app.label || app.label == "WaterGuru Dosing Advisor Pool")) {
@@ -1198,6 +1212,7 @@ private void finishStop(String msg) {
     unschedule("stopDose")
     unschedule("verifyPumpOff")
     unschedule("emergencyPumpOff")
+    state.remove("emergencyJobScheduled")
     state.remove("activeDose")
     state.remove("stopAttempts")
     state.remove("emergencyAttempts")
@@ -1279,19 +1294,32 @@ private boolean armEmergencyPumpCutoff(String reason) {
         log.warn "WaterGuru Dosing Advisor: ${reason}, but the independent cutoff is disabled (watchdogAnyPumpRun is off)"
         return false
     }
-    Integer seconds = Math.max(60, Math.round((firstNum(failsafePumpRunMinutes, 20G) * 60G).doubleValue()) as Integer)
+    Integer fullSeconds = Math.max(60, Math.round((firstNum(failsafePumpRunMinutes, 20G) * 60G).doubleValue()) as Integer)
     Long nowMs = now()
-    Long proposed = nowMs + (seconds * 1000L)
     Long existing = state.emergencyDeadline as Long
+    boolean jobPending = state.emergencyJobScheduled == true
 
-    if (existing != null && existing > nowMs && existing <= proposed) {
-        log.warn "WaterGuru Dosing Advisor: ${reason}; cutoff already due sooner (in ${Math.round((existing - nowMs) / 1000L)}s), leaving it in place"
+    if (existing != null && existing > nowMs) {
+        if (jobPending) {
+            // A timer is genuinely pending and it is not later than a fresh window, so leave it:
+            // arming must never postpone an attempt that is already about to run.
+            log.warn "WaterGuru Dosing Advisor: ${reason}; cutoff already armed and due sooner (in ${Math.round((existing - nowMs) / 1000L)}s), leaving it in place"
+            return true
+        }
+        // The deadline survived but the timer did not, which is what a queue reset (initialize via
+        // updated()/save) leaves behind. A stored deadline is NOT protection, so recreate the job
+        // for the time actually LEFT rather than restarting the whole window.
+        long remaining = Math.max(1L, Math.round((existing - nowMs) / 1000.0d))
+        state.emergencyJobScheduled = true
+        runIn(remaining as Integer, "emergencyPumpOff", [overwrite: true])
+        log.warn "WaterGuru Dosing Advisor: ${reason}; the cutoff JOB was missing (queue was reset) so it has been recreated with the ${remaining}s still remaining on the original deadline"
         return true
     }
 
-    state.emergencyDeadline = proposed
-    runIn(seconds, "emergencyPumpOff", [overwrite: true])
-    log.warn "WaterGuru Dosing Advisor: ${reason}; independent emergency cutoff armed for ${formatDuration(seconds)}"
+    state.emergencyDeadline = nowMs + (fullSeconds * 1000L)
+    state.emergencyJobScheduled = true
+    runIn(fullSeconds, "emergencyPumpOff", [overwrite: true])
+    log.warn "WaterGuru Dosing Advisor: ${reason}; independent emergency cutoff armed for ${formatDuration(fullSeconds)}"
     return true
 }
 
@@ -1302,9 +1330,11 @@ private boolean armEmergencyPumpCutoff(String reason) {
  * stuck relay is loud without being unreadable.
  */
 def emergencyPumpOff() {
-    // This job has fired, so its deadline is spent. Clearing it here is what lets a re-arm below
-    // schedule a fresh window rather than being blocked by the deadline that just elapsed.
+    // This job has fired, so its deadline is spent and it is no longer pending. Clearing both here
+    // is what lets a re-arm below schedule a fresh window rather than deferring to a timestamp for
+    // a timer that no longer exists.
     state.remove("emergencyDeadline")
+    state.remove("emergencyJobScheduled")
     if (!pumpSwitch) return
     if (pumpIsOff()) {
         // Already off. A reported off IS the confirmation, so release the dose properly rather

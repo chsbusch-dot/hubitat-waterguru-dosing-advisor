@@ -399,6 +399,85 @@ check("computeTankRunway: ongoing zero-dose days lower the measured rate") {
            "and the runway should lengthen")
 }
 
+// ------------------------------------------------------- queue resets (initialize/updated)
+
+check("a queue reset must RECREATE the cutoff job, keeping the original deadline") {
+    def app = newApp()
+    def pump = new FakeSwitch("on")
+    pump.mode = "ignoresOff"
+    app.pumpSwitch = pump
+    app.watchdogAnyPumpRun = true
+    app.failsafePumpRunMinutes = 20
+    app.createTile = false
+    app.state.activeDose = [ml: "237", seconds: 65, started: app.clockMs, stopAt: app.clockMs]
+    // 5 minutes left of a 20-minute window: enough to distinguish "remaining" from "restarted".
+    app.state.emergencyDeadline = app.clockMs + 300_000L
+    app.state.emergencyJobScheduled = true
+    app.scheduled["emergencyPumpOff"] = 300
+
+    app.updated()      // safeStopPump -> unsubscribe -> initialize, which clears the queue
+
+    expect(app.scheduled["emergencyPumpOff"] != null,
+           "the cutoff timer must exist after the reset; queue was ${app.scheduled}")
+    expect(app.state.emergencyDeadline == app.clockMs + 300_000L,
+           "the original deadline must be preserved, got ${app.state.emergencyDeadline}")
+    expect(app.scheduled["emergencyPumpOff"] == 300,
+           "recreated with the REMAINING 300s, not a fresh window; got ${app.scheduled['emergencyPumpOff']}")
+}
+
+check("after a queue reset, exhausting the retries must leave a REAL armed job") {
+    def app = newApp()
+    def pump = new FakeSwitch("on")
+    pump.mode = "ignoresOff"
+    app.pumpSwitch = pump
+    app.watchdogAnyPumpRun = true
+    app.failsafePumpRunMinutes = 20
+    app.createTile = false
+    app.state.activeDose = [ml: "237", seconds: 65, started: app.clockMs, stopAt: app.clockMs]
+    app.state.emergencyDeadline = app.clockMs + 300_000L
+    app.state.emergencyJobScheduled = true
+    app.scheduled["emergencyPumpOff"] = 300
+
+    app.updated()
+
+    // Fire the verification retries the way the hub would: advance the clock by the scheduled
+    // delay, remove the job, then run the handler.
+    int fired = 0
+    while (fired < 12 && app.scheduled["verifyPumpOff"] != null) {
+        app.clockMs = app.clockMs + (((app.scheduled["verifyPumpOff"] ?: 20) as Integer) * 1000L)
+        app.fire("verifyPumpOff")
+        fired++
+    }
+
+    expect((app.state.stopAttempts as Integer) >= 5,
+           "the retries should be exhausted, got ${app.state.stopAttempts}")
+    expect(app.scheduled["emergencyPumpOff"] != null,
+           "a claim that the cutoff is armed must be backed by a job; queue was ${app.scheduled}")
+    expect(app.state.emergencyJobScheduled == true,
+           "and the app should know a job is pending")
+}
+
+check("control: a queue reset with a healthy switch clears state and queue") {
+    def app = newApp()
+    def pump = new FakeSwitch("on")
+    app.pumpSwitch = pump
+    app.watchdogAnyPumpRun = true
+    app.failsafePumpRunMinutes = 20
+    app.createTile = false
+    app.state.activeDose = [ml: "237", seconds: 65, started: app.clockMs, stopAt: app.clockMs]
+    app.state.emergencyDeadline = app.clockMs + 1_200_000L
+    app.state.emergencyJobScheduled = true
+    app.scheduled["emergencyPumpOff"] = 1200
+
+    app.updated()
+
+    expect(app.state.activeDose == null, "a confirmed stop clears the dose")
+    expect(app.state.emergencyDeadline == null, "and the deadline")
+    expect(app.scheduled["emergencyPumpOff"] == null, "and the cutoff job")
+    expect(!app.noticesMatching("Chlorine pump stopped: configuration changed").isEmpty(),
+           "and says so")
+}
+
 // --------------------------------------------------------------------------- summary
 
 println ""
