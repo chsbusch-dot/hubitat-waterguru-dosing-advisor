@@ -6,7 +6,7 @@
  * support external history and aggregation through Maker API.
  */
 
-def driverVersion() { "1.2.0" }
+def driverVersion() { "1.3.0" }
 
 metadata {
     definition(
@@ -22,6 +22,7 @@ metadata {
         attribute "detail",                "string"
         attribute "tileHtml",              "string"
         attribute "lastCalc",              "date"
+        attribute "lastCalcEpochMs",       "number"
 
         attribute "lastDoseEpochMs",       "number"
         attribute "lastDoseMl",            "number"

@@ -109,6 +109,33 @@ to see, at a glance, what the pool needs. The device exposes:
 | `tileHtml` | A formatted HTML snippet (pool, status pill, FC current→target, one-liner, cassette type when reported, timestamp). |
 | `lastCalc` | When the tile was last updated. |
 
+**Numeric telemetry (for external history)**
+
+These exist so an external historian — InfluxDB/Grafana, or Maker API — can store actual
+pump-started doses and compute durable usage totals. They are written alongside the human
+attributes on every calculation. The dose values are recorded only after the pump ON command
+succeeds, so they represent commanded pump runs, not recommendations.
+
+| Attribute | Unit | What it holds |
+| --- | --- | --- |
+| `lastDoseMl` | mL | Estimated liquid volume of the last commanded pump run. |
+| `lastDoseEpochMs` | epoch ms | When that run was recorded — the dose's own time, not the time it was read. |
+| `lastDoseRuntimeSeconds` | s | The pump runtime that volume was derived from. |
+| `tankCapacityMl` | mL | Configured container capacity. |
+| `tankRemainingMl` | mL | Estimated remaining inventory: capacity minus recorded app-controlled doses. |
+| `tankPercent` | % | `tankRemainingMl` as a percentage of capacity. |
+| `tankRunwayDays` | days | Estimated days until inventory reaches the configured low-tank threshold. May be absent until there is dose history. |
+| `freeChlorine` | ppm | The reading this calculation used. |
+| `targetFreeChlorine` | ppm | The FC target this app computed — CYA-aware, or your manual override. |
+| `lastCalcEpochMs` | epoch ms | The same instant as `lastCalc`, as epoch milliseconds. `lastCalc` is a formatted date string that cannot be parsed reliably off the hub, so an external tool should use this one. |
+
+Two behaviours an external reader has to know:
+
+- **A dose carries its original timestamp**, so re-reading it does not create another dose
+  record. A historian can poll as often as it likes without inflating usage totals.
+- **Absent values stay absent rather than becoming zero.** `tankRunwayDays` may be missing while
+  the app is still learning consumption, and that is not the same as a zero-day runway.
+
 **Colour key**
 
 - 🔴 **RED** — a chemical addition is indicated, or **SLAM mode** is active.
