@@ -575,6 +575,16 @@ def initialize() {
         }
     }
 
+    // unschedule() at the top of this method clears EVERY job, including an armed cutoff or a
+    // pending stop verification. A configuration change must not be the reason the last backstop
+    // disappears, so if a dose is still recorded as active, put the protection back before
+    // anything else assumes the pump is safe.
+    if (state.activeDose != null) {
+        log.warn "WaterGuru Dosing Advisor: initialize found a dose still recorded as active; re-arming stop protection"
+        armEmergencyPumpCutoff("initialize found a dose still recorded as active")
+        runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
+    }
+
     // Populate the tile right away so it is never blank after a save.
     refreshTile()
 }
@@ -1081,25 +1091,33 @@ private void startDose(Map result, String trigger) {
 
 def stopDose() {
     Map active = state.activeDose instanceof Map ? state.activeDose : null
-    try { if (pumpSwitch) pumpSwitch.off() }
-    catch (e) { log.error "WaterGuru Dosing Advisor: pump OFF command failed — ${e.message}" }
+    try {
+        try { if (pumpSwitch) pumpSwitch.off() }
+        catch (e) { log.error "WaterGuru Dosing Advisor: pump OFF command failed — ${e.message}" }
 
-    // The switch has been ASKED to stop, which is not the same as stopped. Nothing is
-    // disarmed and no dose is forgotten until it actually reports off: a relay that ignores
-    // OFF is exactly the case the independent cutoff exists for, so cancelling it here on the
-    // failure path would remove the last backstop at the moment it is most needed.
-    if (pumpIsOff()) {
-        finishStop(active ? "Chlorine pump stopped after scheduled ${formatDuration((active.seconds ?: 0) as Integer)} dose (${active.ml} mL planned). ${tankSummaryPlain()}" : null)
-        return
+        // The switch has been ASKED to stop, which is not the same as stopped. Nothing is
+        // disarmed and no dose is forgotten until it actually reports off: a relay that ignores
+        // OFF is exactly the case the independent cutoff exists for, so cancelling it here on the
+        // failure path would remove the last backstop at the moment it is most needed.
+        if (pumpIsOff()) {
+            finishStop(active ? "Chlorine pump stopped after scheduled ${formatDuration((active.seconds ?: 0) as Integer)} dose (${active.ml} mL planned). ${tankSummaryPlain()}" : null)
+            return
+        }
+
+        if (active) {
+            String msg = "Chlorine pump stop requested after its scheduled ${formatDuration((active.seconds ?: 0) as Integer)} dose (${active.ml} mL planned), but the switch still reports ON. Retrying; the independent cutoff stays armed."
+            log.warn "WaterGuru Dosing Advisor: ${msg}"
+            sendPumpNotice(msg)
+        }
+    } catch (e) {
+        // Anything unexpected -- a device read throwing, a notification device failing -- must not
+        // end this with nothing scheduled while the pump may still be running.
+        log.error "WaterGuru Dosing Advisor: scheduled stop hit an unexpected error — ${e.message}; retrying"
     }
 
-    if (active) {
-        String msg = "Chlorine pump stop requested after its scheduled ${formatDuration((active.seconds ?: 0) as Integer)} dose (${active.ml} mL planned), but the switch still reports ON. Retrying; the independent cutoff stays armed."
-        log.warn "WaterGuru Dosing Advisor: ${msg}"
-        sendPumpNotice(msg)
-    }
     state.stopAttempts = 0
     runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
+    armEmergencyPumpCutoff("scheduled stop not confirmed")
 }
 
 /**
@@ -1113,30 +1131,39 @@ def stopDose() {
  */
 def verifyPumpOff() {
     if (!pumpSwitch) return
-    if (pumpIsOff()) {
-        finishStop("WaterGuru Dosing Advisor: chlorine pump confirmed OFF")
-        return
+    try {
+        if (pumpIsOff()) {
+            finishStop("WaterGuru Dosing Advisor: chlorine pump confirmed OFF")
+            return
+        }
+
+        Integer attempt = ((state.stopAttempts ?: 0) as Integer) + 1
+        state.stopAttempts = attempt
+        try { pumpSwitch.off() }
+        catch (e) { log.error "WaterGuru Dosing Advisor: retry ${attempt} OFF command failed — ${e.message}" }
+
+        if (pumpIsOff()) {
+            finishStop("Chlorine pump stopped on retry ${attempt}.")
+            return
+        }
+
+        if (attempt >= STOP_MAX_ATTEMPTS) {
+            // Only claim a re-arm if one actually happened. With the watchdog off nothing is
+            // scheduled, and saying otherwise is the same lie moved somewhere new.
+            boolean armed = armEmergencyPumpCutoff("stop still unconfirmed after ${attempt} OFF attempts")
+            String tail = armed
+                ? "The independent cutoff is armed, but the pump may need to be stopped by hand."
+                : "The independent cutoff is DISABLED (watchdogAnyPumpRun is off), so nothing will retry automatically — stop the pump by hand."
+            String msg = "EMERGENCY: chlorine pump still reports ON after ${attempt} OFF attempts. ${tail}"
+            log.error "WaterGuru Dosing Advisor: ${msg}"
+            sendPumpNotice(msg)
+            return
+        }
+    } catch (e) {
+        log.error "WaterGuru Dosing Advisor: pump verification hit an unexpected error — ${e.message}; retrying"
     }
 
-    Integer attempt = ((state.stopAttempts ?: 0) as Integer) + 1
-    state.stopAttempts = attempt
-    try { pumpSwitch.off() }
-    catch (e) { log.error "WaterGuru Dosing Advisor: retry ${attempt} OFF command failed — ${e.message}" }
-
-    if (pumpIsOff()) {
-        finishStop("Chlorine pump stopped on retry ${attempt}.")
-        return
-    }
-
-    if (attempt >= STOP_MAX_ATTEMPTS) {
-        armEmergencyPumpCutoff("stop still unconfirmed after ${attempt} OFF attempts")
-        String msg = "EMERGENCY: chlorine pump still reports ON after ${attempt} OFF attempts. The independent cutoff has been re-armed, but the pump may need to be stopped by hand."
-        log.error "WaterGuru Dosing Advisor: ${msg}"
-        sendPumpNotice(msg)
-        return
-    }
-
-    log.warn "WaterGuru Dosing Advisor: chlorine pump still on after attempt ${attempt}; retrying in ${STOP_RETRY_SECONDS}s"
+    log.warn "WaterGuru Dosing Advisor: chlorine pump still on; retrying in ${STOP_RETRY_SECONDS}s"
     runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
 }
 
@@ -1147,37 +1174,82 @@ def verifyPumpOff() {
  * told us the pump stopped, and treating silence as confirmation is how a stuck relay goes
  * unnoticed. An unreadable switch keeps the cutoff armed and keeps retrying, which is the safe
  * direction to fail in.
+ *
+ * A read that THROWS is handled here rather than left to propagate. Previously it escaped into
+ * stopDose/verifyPumpOff/emergencyPumpOff, aborting them before they rescheduled anything -- and
+ * for the cutoff, which the scheduler had already removed from the queue, that meant the last
+ * backstop disappeared while a dose was still recorded as running.
  */
 private boolean pumpIsOff() {
     if (!pumpSwitch) return true
-    return pumpSwitch.currentValue("switch")?.toString() == "off"
+    try {
+        return pumpSwitch.currentValue("switch")?.toString() == "off"
+    } catch (e) {
+        log.error "WaterGuru Dosing Advisor: could not read the pump switch state \u2014 ${e.message}"
+        return false
+    }
 }
 
 /**
- * Disarm the cutoff and forget the dose. Called ONLY on a confirmed-off reading, so that the
- * safety net is never removed on the strength of an unverified command.
+ * Disarm everything and forget the dose. Called ONLY on a confirmed-off reading, so the safety
+ * net is never removed on the strength of an unverified command.
  */
 private void finishStop(String msg) {
+    unschedule("stopDose")
+    unschedule("verifyPumpOff")
     unschedule("emergencyPumpOff")
     state.remove("activeDose")
     state.remove("stopAttempts")
+    state.remove("emergencyAttempts")
+    state.remove("emergencyDeadline")
     if (msg) {
         log.info "WaterGuru Dosing Advisor: ${msg}"
         sendPumpNotice(msg)
     }
 }
 
+/**
+ * Stop the pump for a reason outside the dose schedule: the STOP button, a configuration change,
+ * app removal.
+ *
+ * The same rule as a scheduled stop: the switch is ASKED, and it is not "stopped" until it says
+ * so. The previous version unscheduled the dose, the verification AND the emergency cutoff,
+ * cleared the active dose, and announced "pump stopped" unconditionally -- so a STOP press against
+ * a stuck relay removed every protection at once and reported success.
+ */
 private void safeStopPump(String reason, boolean notify = false) {
-    unschedule("stopDose")
-    unschedule("verifyPumpOff")
-    unschedule("emergencyPumpOff")
-    try { if (pumpSwitch && pumpSwitch.currentValue("switch")?.toString() == "on") pumpSwitch.off() }
-    catch (e) { log.error "WaterGuru Dosing Advisor: unable to stop chlorine pump — ${e.message}" }
     boolean wasActive = state.activeDose != null
-    state.remove("activeDose")
-    if (notify || wasActive) sendPumpNotice("Chlorine pump stopped: ${reason}.")
+
+    // The planned end of the dose is no longer wanted ...
+    unschedule("stopDose")
+    // ... but the cutoff is deliberately NOT cancelled here: it is the backstop for this moment.
+
+    try {
+        if (pumpSwitch) pumpSwitch.off()
+    } catch (e) {
+        log.error "WaterGuru Dosing Advisor: unable to send the stop command — ${e.message}"
+    }
+
+    if (pumpIsOff()) {
+        finishStop(notify || wasActive ? "Chlorine pump stopped: ${reason}." : null)
+        return
+    }
+
+    String msg = "Chlorine pump stop requested (${reason}) but the switch still reports ON. Retrying; the independent cutoff stays armed."
+    log.warn "WaterGuru Dosing Advisor: ${msg}"
+    sendPumpNotice(msg)
+    state.stopAttempts = 0
+    runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
+    armEmergencyPumpCutoff("stop unconfirmed (${reason})")
 }
 
+/**
+ * A reported off from the device is a CONFIRMED off, whatever the clock says.
+ *
+ * The old version only tidied up when the event arrived more than 3 s before the planned stop, so
+ * a late off -- or the cutoff firing after the relay gave up by itself -- left activeDose set, and
+ * doseSafetyBlocks() then refused every later dose with "a dose is already running".
+ */
 def pumpSwitchHandler(evt) {
     if (evt?.value?.toString() == "on") {
         if (state.activeDose) return
@@ -1185,24 +1257,42 @@ def pumpSwitchHandler(evt) {
             armEmergencyPumpCutoff("pump start outside this app")
         }
     } else if (evt?.value?.toString() == "off") {
-        unschedule("emergencyPumpOff")
-        if (state.activeDose) {
-            Long stopAt = (state.activeDose.stopAt ?: 0) as Long
-            if (now() + 3000L < stopAt) {
-                unschedule("stopDose")
-                unschedule("verifyPumpOff")
-                state.remove("activeDose")
-                sendPumpNotice("Chlorine pump stopped before the planned dose completed.")
-            }
-        }
+        boolean wasActive = state.activeDose != null
+        Long stopAt = ((state.activeDose?.stopAt ?: 0L) as Long)
+        boolean early = wasActive && now() + 3000L < stopAt
+        finishStop(early ? "Chlorine pump stopped before the planned dose completed." : null)
     }
 }
 
-private void armEmergencyPumpCutoff(String reason) {
-    if (watchdogAnyPumpRun == false) return
+/**
+ * Arm the independent cutoff -- without moving a deadline that is already due sooner.
+ *
+ * The cutoff is the last backstop, so arming it must be additive and never a postponement: the
+ * previous version called runIn(1200s) unconditionally, so a cutoff due in 5 seconds was replaced
+ * by a fresh 20-minute timer, delaying the only automatic attempt that was about to run.
+ *
+ * Returns true when a cutoff is armed (new, or one already due sooner), false when the watchdog is
+ * disabled -- so callers can say which of those is true instead of claiming a re-arm either way.
+ */
+private boolean armEmergencyPumpCutoff(String reason) {
+    if (watchdogAnyPumpRun == false) {
+        log.warn "WaterGuru Dosing Advisor: ${reason}, but the independent cutoff is disabled (watchdogAnyPumpRun is off)"
+        return false
+    }
     Integer seconds = Math.max(60, Math.round((firstNum(failsafePumpRunMinutes, 20G) * 60G).doubleValue()) as Integer)
+    Long nowMs = now()
+    Long proposed = nowMs + (seconds * 1000L)
+    Long existing = state.emergencyDeadline as Long
+
+    if (existing != null && existing > nowMs && existing <= proposed) {
+        log.warn "WaterGuru Dosing Advisor: ${reason}; cutoff already due sooner (in ${Math.round((existing - nowMs) / 1000L)}s), leaving it in place"
+        return true
+    }
+
+    state.emergencyDeadline = proposed
     runIn(seconds, "emergencyPumpOff", [overwrite: true])
     log.warn "WaterGuru Dosing Advisor: ${reason}; independent emergency cutoff armed for ${formatDuration(seconds)}"
+    return true
 }
 
 /**
@@ -1212,8 +1302,17 @@ private void armEmergencyPumpCutoff(String reason) {
  * stuck relay is loud without being unreadable.
  */
 def emergencyPumpOff() {
+    // This job has fired, so its deadline is spent. Clearing it here is what lets a re-arm below
+    // schedule a fresh window rather than being blocked by the deadline that just elapsed.
+    state.remove("emergencyDeadline")
     if (!pumpSwitch) return
-    if (pumpIsOff()) return
+    if (pumpIsOff()) {
+        // Already off. A reported off IS the confirmation, so release the dose properly rather
+        // than returning with activeDose still set -- which left doseSafetyBlocks() refusing
+        // every later dose with "a dose is already running".
+        finishStop(null)
+        return
+    }
 
     Integer attempt = ((state.emergencyAttempts ?: 0) as Integer) + 1
     state.emergencyAttempts = attempt
@@ -1488,7 +1587,11 @@ private Map computeTankRunway() {
     BigDecimal volume = entries.collect { toBD(it.ml) }.sum(0G)
     Long firstT = entries.collect { it.t as Long }.min()
     Long lastT = entries.collect { it.t as Long }.max()
-    BigDecimal spanDays = (lastT - firstT) / 86400000G
+    // Elapsed time runs to NOW, not to the last dose. Ten days without a dose is ten days in which
+    // the tank was not drawn down, and the rate has to reflect that -- measuring only first-dose to
+    // last-dose made ongoing skipped days invisible.
+    Long windowEnd = Math.max(lastT, now())
+    BigDecimal spanDays = (windowEnd - firstT) / 86400000G
 
     // Under about half a day there is no interval worth measuring a daily rate over -- one dose,
     // or two inside the same hour, would otherwise produce a wildly high rate and a runway near

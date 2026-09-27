@@ -266,6 +266,139 @@ check("computeTankRunway: two doses minutes apart is still not a daily rate") {
     expect(runway.state == "learning", "a sub-0.5-day span must not yield a daily rate")
 }
 
+// --------------------------------------------- STOP button, late OFF, deadlines, dead reads
+
+check("STOP button: a failed OFF must not forget the dose, disarm the cutoff, or claim stopped") {
+    ["ignoresOff", "offThrows"].each { failing ->
+        def app = newApp()
+        def pump = new FakeSwitch("on")
+        pump.mode = failing
+        app.pumpSwitch = pump
+        app.watchdogAnyPumpRun = true
+        app.failsafePumpRunMinutes = 20
+        app.state.activeDose = [ml: "237", seconds: 65, started: app.clockMs - 65_000L, stopAt: app.clockMs]
+        app.scheduled["emergencyPumpOff"] = 1200
+        app.state.emergencyDeadline = app.clockMs + 1_200_000L
+
+        app.appButtonHandler("btnStopPump")
+
+        expect(app.state.activeDose != null, "[${failing}] STOP must not forget the dose")
+        expect(!app.unscheduled.contains("emergencyPumpOff"), "[${failing}] STOP must not disarm the cutoff")
+        expect(app.noticesMatching("Chlorine pump stopped:").isEmpty(),
+               "[${failing}] must not claim the pump stopped")
+        expect(app.scheduled["verifyPumpOff"] != null, "[${failing}] must schedule a retry")
+        expect(!app.noticesMatching("stop requested").isEmpty(),
+               "[${failing}] must say the stop was requested, not achieved")
+    }
+}
+
+check("exhaustion must not postpone a cutoff that is already due sooner") {
+    def app = newApp()
+    def pump = new FakeSwitch("on")
+    pump.mode = "ignoresOff"
+    app.pumpSwitch = pump
+    app.watchdogAnyPumpRun = true
+    app.failsafePumpRunMinutes = 20
+    app.state.activeDose = [ml: "237", seconds: 65, started: app.clockMs - 100_000L,
+                            stopAt: app.clockMs - 1_000L]
+    app.state.stopAttempts = 4                      // one attempt short of the bound
+    Long soonDeadline = app.clockMs + 5_000L
+    app.state.emergencyDeadline = soonDeadline
+    app.scheduled["emergencyPumpOff"] = 5           // 5 seconds left on the cutoff
+
+    app.verifyPumpOff()                             // the final attempt fires
+
+    expect(app.state.emergencyDeadline == soonDeadline,
+           "a cutoff due in 5s must keep its deadline, got ${app.state.emergencyDeadline}")
+    expect(app.scheduled["emergencyPumpOff"] != 1200,
+           "the due-sooner cutoff must not be replaced by a fresh 1200s timer")
+}
+
+check("with the watchdog off, exhaustion must not claim a cutoff was armed") {
+    def app = newApp()
+    def pump = new FakeSwitch("on")
+    pump.mode = "ignoresOff"
+    app.pumpSwitch = pump
+    app.watchdogAnyPumpRun = false
+    app.state.activeDose = [ml: "237", seconds: 65, started: app.clockMs, stopAt: app.clockMs]
+    app.state.stopAttempts = 4
+
+    app.verifyPumpOff()
+
+    expect(app.scheduled["emergencyPumpOff"] == null,
+           "nothing should be scheduled when the watchdog is off")
+    expect(app.noticesMatching("has been re-armed").isEmpty(),
+           "must not claim a re-arm that did not happen")
+    expect(!app.noticesMatching("DISABLED").isEmpty(),
+           "must say the cutoff is disabled so a human acts")
+}
+
+check("a LATE off event past the planned stop still releases the dose") {
+    def app = newApp()
+    app.pumpSwitch = new FakeSwitch("off")
+    app.state.activeDose = [ml: "237", seconds: 65, stopAt: app.clockMs - 60_000L]
+    app.state.stopAttempts = 5
+
+    app.pumpSwitchHandler([value: "off"])
+
+    expect(app.state.activeDose == null,
+           "a confirmed off must release the dose whenever it arrives, not only early")
+    expect(app.state.stopAttempts == null, "the retry counter must be cleared")
+}
+
+check("the cutoff finding the switch ALREADY off releases the dose") {
+    def app = newApp()
+    app.pumpSwitch = new FakeSwitch("off")
+    app.state.activeDose = [ml: "237", seconds: 65, stopAt: app.clockMs]
+    app.state.stopAttempts = 5
+
+    app.emergencyPumpOff()
+
+    expect(app.state.activeDose == null,
+           "already-off is a confirmed off; leaving the dose set blocks every later dose")
+    expect(app.state.stopAttempts == null, "the retry counter must be cleared")
+}
+
+check("a THROWING switch read must not abort any stop path") {
+    def app = newApp()
+    def pump = new FakeSwitch("on")
+    pump.mode = "readThrows"
+    app.pumpSwitch = pump
+    app.watchdogAnyPumpRun = true
+    app.failsafePumpRunMinutes = 20
+    app.state.activeDose = [ml: "237", seconds: 65, started: app.clockMs, stopAt: app.clockMs]
+    app.scheduled["emergencyPumpOff"] = 1200
+    app.state.emergencyDeadline = app.clockMs + 1_200_000L
+
+    app.stopDose()                                   // must not propagate
+    expect(app.scheduled["verifyPumpOff"] != null, "stopDose must still schedule a retry")
+
+    app.verifyPumpOff()                              // must not propagate
+    expect(app.state.activeDose != null, "an unreadable switch is not a confirmed stop")
+
+    app.fire("emergencyPumpOff")                     // fired job leaves the queue, then runs
+    expect(app.scheduled["emergencyPumpOff"] != null,
+           "the cutoff must re-arm even when the switch cannot be read")
+    expect(app.state.activeDose != null, "and must not pretend the pump is confirmed off")
+}
+
+check("computeTankRunway: ongoing zero-dose days lower the measured rate") {
+    def app = newApp()
+    primeTank(app, 56781.176760G, 50000G,
+              [[app.clockMs - 10 * DAY_MS, 1000], [app.clockMs, 1000]])
+
+    def before = app.computeTankRunway()
+    app.clockMs = app.clockMs + (10 * DAY_MS)        // ten more days, no dose
+    def after = app.computeTankRunway()
+
+    expect(Math.abs((before.dailyUse as BigDecimal).doubleValue() - 200.0d) < 0.01d,
+           "sanity: the first measurement should be 200 mL/day, got ${before.dailyUse}")
+    expect(Math.abs((after.dailyUse as BigDecimal).doubleValue() - 100.0d) < 0.01d,
+           "ten zero-dose days should halve the rate, got ${after.dailyUse}")
+    expect((after.days as BigDecimal) > (before.days as BigDecimal),
+           "and the runway should lengthen")
+}
+
 // --------------------------------------------------------------------------- summary
 
 println ""

@@ -13,7 +13,7 @@ class FakeSwitch {
     private String value
     private final Map<String, Object> attrs = [:]
 
-    /** healthy | offThrows | ignoresOff | silent */
+    /** healthy | offThrows | ignoresOff | silent | readThrows */
     String mode = "healthy"
     int offCalls = 0
     int onCalls = 0
@@ -22,6 +22,11 @@ class FakeSwitch {
 
     def currentValue(String attribute) {
         if (attribute == "switch") {
+            if (mode == "readThrows") {
+                // An injected runtime exception from the read path itself. Not an observed hub or
+                // device failure -- it exists to prove the safety paths cannot be aborted by one.
+                throw new RuntimeException("simulated currentValue() failure reading switch")
+            }
             if (mode == "silent") return null      // no reading at all
             return value
         }

@@ -136,6 +136,18 @@ abstract class HubitatStub extends Script {
     def toDateTime(String s) { null }
     def atomicState = [:]
 
+    /**
+     * Model the hub actually firing a scheduled job: the entry leaves the queue, then the handler
+     * runs. Without the removal, a test cannot see that a job which fired is no longer pending --
+     * which is exactly how the old cutoff could re-arm itself and quietly postpone a deadline.
+     */
+    Object fire(String handler) {
+        scheduled.remove(handler)
+        def m = this.metaClass.getMetaMethod(handler)
+        if (m == null) throw new IllegalStateException("no handler named ${handler}")
+        return m.invoke(this)
+    }
+
     // --- test helpers ---------------------------------------------------------------
     /** Attributes sent, newest last, as name -> value. */
     Map<String, Object> emittedAttributeValues() {
