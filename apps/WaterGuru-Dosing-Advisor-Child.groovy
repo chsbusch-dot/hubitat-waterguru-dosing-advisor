@@ -1084,14 +1084,17 @@ private void startDose(Map result, String trigger) {
     try {
         pumpSwitch.on()
     } catch (e) {
-        unschedule("stopDose")
-        unschedule("verifyPumpOff")
-        unschedule("emergencyPumpOff")
-        state.remove("activeDose")
-        try { pumpSwitch.off() } catch (ignored) { }
+        // A failed ON says nothing about whether the relay energised: the command can throw AFTER
+        // the contactor closed. So this is a stop, not a tidy-up -- it goes through the same
+        // confirmed-OFF path as every other stop. The old handler cancelled all three stop jobs,
+        // cleared activeDose and left emergencyJobScheduled=true, which has two failures in it:
+        // the orphaned flag makes the next arm believe a cutoff is pending (so no timer is ever
+        // recreated), and a pump that did energise is left running with no dose recorded and
+        // nothing scheduled to stop it.
         String msg = "Chlorine pump failed to start: ${e.message}"
         log.error "WaterGuru Dosing Advisor: ${msg}"
         sendPumpNotice(msg)
+        safeStopPump("dose failed to start", true)
         return
     }
 
@@ -1179,6 +1182,11 @@ def verifyPumpOff() {
 
     log.warn "WaterGuru Dosing Advisor: chlorine pump still on; retrying in ${STOP_RETRY_SECONDS}s"
     runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
+    // Re-assert the backstop on EVERY unconfirmed outcome, not only at exhaustion. The cutoff can
+    // be missing for reasons this method did not cause -- it was never armed, a queue reset dropped
+    // it, the watchdog was switched on after the dose started -- and protection should not depend
+    // on which path arrived here. armEmergencyPumpCutoff never postpones an earlier deadline.
+    armEmergencyPumpCutoff("stop still unconfirmed (attempt ${state.stopAttempts})")
 }
 
 /**

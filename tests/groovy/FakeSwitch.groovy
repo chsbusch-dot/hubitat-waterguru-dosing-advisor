@@ -13,7 +13,7 @@ class FakeSwitch {
     private String value
     private final Map<String, Object> attrs = [:]
 
-    /** healthy | offThrows | ignoresOff | silent | readThrows */
+    /** healthy | offThrows | ignoresOff | silent | readThrows | onThrows | onThrowsThenStuck */
     String mode = "healthy"
     int offCalls = 0
     int onCalls = 0
@@ -35,6 +35,13 @@ class FakeSwitch {
 
     def on() {
         onCalls++
+        if (mode == "onThrows" || mode == "onThrowsThenStuck") {
+            // onThrows: the command failed and the relay never closed.
+            // onThrowsThenStuck: the contactor closed and THEN the command path errored -- the
+            // case that must not be treated as "nothing happened".
+            if (mode == "onThrowsThenStuck") value = "on"
+            throw new RuntimeException("simulated ON command failure")
+        }
         value = "on"
     }
 
@@ -46,6 +53,7 @@ class FakeSwitch {
                 throw new RuntimeException("radio timeout sending off()")
             case "ignoresOff":
             case "silent":
+            case "onThrowsThenStuck":   // energised, and now ignoring OFF
                 // Accepted by the hub, ignored by the relay: state stays ON.
                 return
             default:

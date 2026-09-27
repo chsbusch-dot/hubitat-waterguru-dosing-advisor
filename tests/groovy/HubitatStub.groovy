@@ -133,7 +133,18 @@ abstract class HubitatStub extends Script {
     def getChildDevice(String dni) { settings["__tileDevice"] }
     def getChildDevices() { settings["__tileDevice"] ? [settings["__tileDevice"]] : [] }
     def timeToday(def t, TimeZone tz) { new Date(clockMs) }
-    def toDateTime(String s) { null }
+    /**
+     * Parse the two shapes toEpochMs() is fed: an epoch-millis string, or ISO-8601. Returning
+     * null for everything would make doseSafetyBlocks() reject every dose as "measurement
+     * timestamp is unavailable", so no start-path test could reach the ON command.
+     */
+    def toDateTime(String s) {
+        if (s == null) return null
+        String t = s.trim()
+        if (t ==~ /\d{10,}/) return new Date(t.toLong())
+        try { return Date.from(java.time.Instant.parse(t)) } catch (ignored) { }
+        return null
+    }
     def atomicState = [:]
 
     /**

@@ -478,6 +478,93 @@ check("control: a queue reset with a healthy switch clears state and queue") {
            "and says so")
 }
 
+// ---------------------------------------------------------------- failed starts (ON throws)
+
+/** Enough settings for startDose() to clear doseSafetyBlocks and actually reach the ON command. */
+def primeForStart = { app, pump ->
+    app.pumpSwitch = pump
+    app.dosingMode = "APPROVAL"        // skips the AUTO window/daily-total checks
+    app.pumpRateMlPerMin = 221
+    app.minDoseMl = 50
+    app.maxSingleDoseMl = 3000
+    app.maxDailyDoseMl = 3500
+    app.maxPumpRunMinutes = 40
+    app.minSafePh = 6.8
+    app.maxSafePh = 8.2
+    app.maxSampleAgeHours = 18
+    app.circulationAlwaysOn = true     // satisfies the interlock requirement
+    app.chlorineTankGallons = "15"
+    app.tankLowPercent = "10"
+    app.createTile = false
+    app.watchdogAnyPumpRun = true
+    app.failsafePumpRunMinutes = 20
+    app.state.tankCapacityGallons = "15"
+    app.state.tankRemainingMl = "56544"
+    app.state.doseMlToday = "0"
+}
+
+def sampleDose = { app ->
+    [doseMl: 237G, runSeconds: 65, sampleKey: "${app.clockMs}", pH: 7.4G, fcVal: 5.7G, fcTarget: 6.0G]
+}
+
+check("a FAILED start must not leave the arming flag set with no job") {
+    def app = newApp()
+    def pump = new FakeSwitch("off")
+    pump.mode = "onThrows"             // ON fails, the relay never closed, OFF works
+    primeForStart(app, pump)
+
+    app.startDose(sampleDose(app), "test")
+
+    expect(pump.onCalls == 1, "the ON should have been attempted")
+    expect(app.state.activeDose == null, "confirmed off: no dose should remain")
+    expect(app.scheduled["emergencyPumpOff"] == null, "and no cutoff timer should remain")
+    expect(app.state.emergencyJobScheduled != true,
+           "the pending flag must not outlive the job; an orphan suppresses the next arm")
+    expect(app.state.emergencyDeadline == null, "nor should the deadline survive")
+
+    // The consequence that matters: protection must still be armable afterwards. Turn the relay
+    // on as well as changing its behaviour -- setting the mode alone leaves it reporting off, and
+    // verifyPumpOff would simply confirm and return.
+    pump.mode = "ignoresOff"
+    pump.setReported("on")
+    app.state.activeDose = [ml: "237", seconds: 65, started: app.clockMs, stopAt: app.clockMs]
+    app.verifyPumpOff()
+    expect(app.scheduled["emergencyPumpOff"] != null,
+           "an unconfirmed stop must arm protection; queue was ${app.scheduled}")
+    expect(app.scheduled["verifyPumpOff"] != null, "and keep retrying; queue was ${app.scheduled}")
+}
+
+check("a start that energises THEN fails, with OFF ignored, must keep protection") {
+    def app = newApp()
+    def pump = new FakeSwitch("off")
+    pump.mode = "onThrowsThenStuck"     // relay closed, command errored, and OFF is ignored
+    primeForStart(app, pump)
+
+    app.startDose(sampleDose(app), "test")
+
+    expect(pump.currentValue("switch") == "on", "the relay is physically on")
+    expect(app.state.activeDose != null,
+           "a pump that may be running must stay recorded, or nothing blocks a second dose")
+    expect(app.scheduled["emergencyPumpOff"] != null,
+           "and it must have scheduled protection; queue was ${app.scheduled}")
+    expect(app.state.emergencyJobScheduled == true, "with the bookkeeping to match")
+    expect(app.scheduled["verifyPumpOff"] != null, "and a stop retry")
+}
+
+check("control: a healthy start leaves all three protection jobs present") {
+    def app = newApp()
+    def pump = new FakeSwitch("off")
+    primeForStart(app, pump)
+
+    app.startDose(sampleDose(app), "test")
+
+    expect(app.state.activeDose != null, "the dose is running")
+    expect(app.scheduled["stopDose"] != null, "scheduled stop present")
+    expect(app.scheduled["verifyPumpOff"] != null, "verification present")
+    expect(app.scheduled["emergencyPumpOff"] != null, "independent cutoff present")
+    expect(app.state.emergencyJobScheduled == true, "and the flag agrees with the queue")
+}
+
 // --------------------------------------------------------------------------- summary
 
 println ""
