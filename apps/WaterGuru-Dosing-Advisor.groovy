@@ -22,8 +22,8 @@
  *           optional daily summary. (Parent unchanged except this version bump.)
  *   1.2.0 - Children surface the WaterGuru cassette type (C2/C5) in messages and
  *           on the tile. (Parent unchanged except this version bump.)
- *   1.3.0 - Children add a chlorine-runway (algae) forecast. (Parent unchanged
- *           except this version bump.)
+ *   2.0.0 - Children can control a calibrated liquid-chlorine pump with
+ *           advisory, approval or automatic modes and fail-closed safety limits.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy
@@ -38,13 +38,13 @@
  * under the License.
  */
 
-def appVersion() { "1.3.0" }
+def appVersion() { "2.0.0" }
 
 definition(
     name:        "WaterGuru Dosing Advisor",
     namespace:   "chsbusch-dot",
     author:      "Chris Busch",
-    description: "Create one dosing advisor per WaterGuru pool. Each reads a WaterGuru device and recommends how much of which chemical to add (SLAM/CYA-aware free chlorine plus WaterGuru's own pH/TA/CH/CYA advice), then notifies you.",
+    description: "Create one guarded chlorine dosing controller per WaterGuru pool. Each calculates a CYA-aware liquid-chlorine dose and can advise, queue for approval, or run a calibrated pump with safety limits.",
     category:    "Convenience",
     iconUrl:     "",
     iconX2Url:   "",
@@ -60,7 +60,7 @@ preferences {
 def mainPage() {
     dynamicPage(name: "mainPage", title: "WaterGuru Dosing Advisor", uninstall: true, install: true) {
         section {
-            paragraph "Create one dosing advisor per WaterGuru pool. Each child reads a WaterGuru device and recommends how much of which chemical to add, then notifies your devices."
+            paragraph "Create one guarded dosing controller per WaterGuru pool. Each child reads WaterGuru, calculates a liquid-chlorine dose, converts it to pump runtime, and can advise, queue for approval, or dose automatically after safety checks."
             paragraph "Complementary to the WaterGuru Integration app — it does not duplicate that app's alerts, quiet hours or thresholds."
         }
 
@@ -79,3 +79,4 @@ def mainPage() {
 def installed() { log.info "WaterGuru Dosing Advisor (parent) installed — ${childApps?.size() ?: 0} pool(s)" }
 def updated()   { log.info "WaterGuru Dosing Advisor (parent) updated — ${childApps?.size() ?: 0} pool(s)" }
 def uninstalled() { }
+
