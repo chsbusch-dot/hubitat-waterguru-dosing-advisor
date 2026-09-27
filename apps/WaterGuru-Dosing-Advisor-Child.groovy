@@ -1317,8 +1317,8 @@ private void recordTankUse(BigDecimal ml) {
         sendPumpNotice(msg)
     }
 
-    // Display-only, but this runs on the dose-completion path after the pump has already run,
-    // so it must not be able to throw into the ledger bookkeeping above it.
+    // Display-only, but startDose() calls recordDoseLedger() immediately after the pump ON
+    // command, so this must not be able to throw into the ledger bookkeeping that precedes it.
     try {
         refreshTankLinesInPreview()
     } catch (e) {
@@ -1334,12 +1334,12 @@ private void recordTankUse(BigDecimal ml) {
  * human-readable detail still advertises the pre-dose inventory - a full tank beside an
  * attribute that is one dose short of it.
  *
- * This splices the two tank lines rather than calling computeAdvice() to rebuild the whole text.
- * computeAdvice() is a pure computation -- it reads devices and writes no state, and dosing is
- * gated separately by runAndDeliver(allowDose) -- so either approach would be correct. The
- * splice is used because the chemistry lines are still as-of the last WaterGuru sample, which a
- * dose does not change, so regenerating them would be churn at best. Only the two lines that
- * actually moved are replaced.
+ * This splices the two tank lines rather than calling computeAdvice() to regenerate the whole
+ * text. Note that neither route is free of side effects: both reach computeTankRunway(), which
+ * calls tankDoseHistory() and thereby initialises state.tankDoseHistory. The splice is used
+ * because the chemistry lines are still as-of the last WaterGuru sample, which a dose does not
+ * change, so regenerating them would be churn at best. Only the two lines that actually moved
+ * are replaced.
  */
 private void refreshTankLinesInPreview() {
     String prior = state.lastPreview
