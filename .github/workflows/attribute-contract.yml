@@ -1,0 +1,23 @@
+name: attribute contract
+
+# The tile's attribute names are read by exact string by an external historian
+# (InfluxDB/Grafana). A rename does not raise anything — it produces empty panels,
+# because the collector fails soft by design. This runs the contract test that
+# catches it, so the check does not depend on anyone remembering the names.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # No dependencies: the check is regex over two Groovy files.
+      - name: Enforce the tile attribute contract
+        run: python tests/test_attribute_contract.py
