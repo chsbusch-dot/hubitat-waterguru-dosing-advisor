@@ -27,6 +27,10 @@
  * All doses are ESTIMATES. Always confirm with your own test kit before adding.
  *
  * Version history
+ *   2.3.2 - Confirmed-stop notice. A dose whose OFF is reported late now sends the one final
+ *           "stopped" notification when the switch positively reports off, instead of silently
+ *           clearing the dose and its verification. Duplicate or idle OFF events stay silent,
+ *           and the early-stop notice is unchanged.
  *   2.3.1 - Stop-lifecycle safety. A stop is only "stopped" once the switch positively reports off,
  *           so a failed or ignored OFF keeps the independent emergency cutoff armed and keeps
  *           retrying, and the notices distinguish "stop requested" from "stopped". A re-arm never
@@ -111,7 +115,7 @@
 
 import groovy.transform.Field
 
-def appVersion() { "2.3.1" }
+def appVersion() { "2.3.2" }
 
 definition(
     name:        "WaterGuru Dosing Advisor Pool",
@@ -1289,10 +1293,22 @@ def pumpSwitchHandler(evt) {
             armEmergencyPumpCutoff("pump start outside this app")
         }
     } else if (evt?.value?.toString() == "off") {
-        boolean wasActive = state.activeDose != null
-        Long stopAt = ((state.activeDose?.stopAt ?: 0L) as Long)
+        Map active = state.activeDose instanceof Map ? state.activeDose : null
+        boolean wasActive = active != null
+        Long stopAt = ((active?.stopAt ?: 0L) as Long)
         boolean early = wasActive && now() + 3000L < stopAt
-        finishStop(early ? "Chlorine pump stopped before the planned dose completed." : null)
+        if (early) {
+            finishStop("Chlorine pump stopped before the planned dose completed.")
+        } else if (wasActive) {
+            // A confirmed off at or after the planned stop is the normal end of a dose: the relay
+            // simply reported its off a little late. This is the path that used to finish silently,
+            // so the final "stopped" notice never arrived after a delayed OFF. finishStop() clears
+            // activeDose, so any duplicate event or an off that follows synchronous cleanup is
+            // already idle and stays silent.
+            finishStop("Chlorine pump stopped after scheduled ${formatDuration((active.seconds ?: 0) as Integer)} dose (${active.ml} mL planned). ${tankSummaryPlain()}")
+        } else {
+            finishStop(null)
+        }
     }
 }
 
