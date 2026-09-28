@@ -346,6 +346,124 @@ check("a LATE off event past the planned stop still releases the dose") {
     expect(app.state.stopAttempts == null, "the retry counter must be cleared")
 }
 
+// ------------------------------------------- confirmed-stop notice (2.3.2 regression)
+
+check("regression: a delayed OFF announces the final stop once and clears every stop job") {
+    def app = newApp()
+    def pump = new FakeSwitch("on")
+    pump.mode = "ignoresOff"          // the OFF command is accepted and the relay holds ON briefly
+    app.pumpSwitch = pump
+    app.watchdogAnyPumpRun = true
+    app.failsafePumpRunMinutes = 20
+
+    Integer seconds = 65
+    app.state.activeDose = [ml: "237", seconds: seconds, started: app.clockMs - seconds * 1000L,
+                            stopAt: app.clockMs]
+    app.scheduled["stopDose"] = 0
+    app.scheduled["verifyPumpOff"] = 15
+    app.scheduled["emergencyPumpOff"] = 1200
+
+    // The scheduled stop fires at its deadline; the relay still reports ON.
+    app.fire("stopDose")
+
+    expect(app.noticesMatching("stopped after scheduled").isEmpty(),
+           "a delayed OFF must not be announced as stopped before the switch confirms")
+    expect(!app.noticesMatching("stop requested").isEmpty(),
+           "the app should say the stop was requested, not achieved")
+    expect(app.state.activeDose != null, "the dose stays active until the switch confirms off")
+    expect(app.scheduled["verifyPumpOff"] != null, "verification must stay armed")
+    expect(app.scheduled["emergencyPumpOff"] != null, "the independent cutoff must stay armed")
+
+    // ~0.7 s later the relay physically drops out and the hub delivers its OFF event.
+    app.clockMs = app.clockMs + 700L
+    pump.setReported("off")
+    app.pumpSwitchHandler([value: "off"])
+
+    expect(app.noticesMatching("stopped after scheduled").size() == 1,
+           "the confirmed OFF must send exactly one final stopped notice")
+    expect(app.state.activeDose == null, "the confirmed off must release the active dose")
+    expect(app.state.stopAttempts == null, "the retry counter must be cleared")
+    expect(app.scheduled["stopDose"] == null, "the scheduled stop job must be gone")
+    expect(app.scheduled["verifyPumpOff"] == null, "the verification job must be gone")
+    expect(app.scheduled["emergencyPumpOff"] == null, "the cutoff job must be gone")
+    expect(app.unscheduled.contains("verifyPumpOff"), "verification must be explicitly unscheduled")
+    expect(app.unscheduled.contains("emergencyPumpOff"), "the cutoff must be explicitly disarmed")
+}
+
+check("regression: duplicate and idle OFF events do not repeat the final notice") {
+    def app = newApp()
+    app.pumpSwitch = new FakeSwitch("off")
+    app.state.activeDose = [ml: "237", seconds: 65, started: app.clockMs - 65_000L,
+                            stopAt: app.clockMs - 1_000L]
+
+    app.pumpSwitchHandler([value: "off"])       // the confirmed, on-time/late OFF
+    app.pumpSwitchHandler([value: "off"])       // a duplicate delivery of the same event
+
+    expect(app.noticesMatching("stopped after scheduled").size() == 1,
+           "a duplicate OFF must not repeat the final notice")
+
+    def idle = newApp()
+    idle.pumpSwitch = new FakeSwitch("off")
+    idle.pumpSwitchHandler([value: "off"])      // OFF with no active dose
+    expect(idle.notices.isEmpty(), "an idle OFF must stay silent")
+}
+
+check("regression: a synchronous confirmed stop followed by an OFF event is announced once") {
+    def app = newApp()
+    def pump = new FakeSwitch("on")             // healthy: off() actually turns the relay off
+    app.pumpSwitch = pump
+    app.watchdogAnyPumpRun = true
+    app.failsafePumpRunMinutes = 20
+    app.state.activeDose = [ml: "237", seconds: 65, started: app.clockMs - 65_000L, stopAt: app.clockMs]
+    app.scheduled["stopDose"] = 0
+    app.scheduled["emergencyPumpOff"] = 1200
+
+    app.stopDose()                              // confirms off synchronously -> cleanup + notice
+
+    expect(app.noticesMatching("stopped after scheduled").size() == 1,
+           "the synchronous confirmed stop sends the final notice")
+    expect(app.state.activeDose == null, "and clears the dose")
+
+    app.pumpSwitchHandler([value: "off"])       // the device's own OFF event arrives afterwards
+
+    expect(app.noticesMatching("stopped after scheduled").size() == 1,
+           "an OFF event after synchronous cleanup must not repeat the notice")
+}
+
+check("regression: an early OFF keeps the early-stop notice and releases the dose") {
+    def app = newApp()
+    app.pumpSwitch = new FakeSwitch("off")
+    app.state.activeDose = [ml: "237", seconds: 65, started: app.clockMs, stopAt: app.clockMs + 60_000L]
+    app.scheduled["stopDose"] = 60
+    app.scheduled["verifyPumpOff"] = 75
+    app.scheduled["emergencyPumpOff"] = 1200
+
+    app.pumpSwitchHandler([value: "off"])       // manual/early stop, well before the planned end
+
+    expect(app.noticesMatching("stopped before the planned dose completed").size() == 1,
+           "an early stop keeps its own accurate notice")
+    expect(app.noticesMatching("stopped after scheduled").isEmpty(),
+           "an early stop must not be described as completing the scheduled dose")
+    expect(app.state.activeDose == null, "the early confirmed off releases the dose")
+    expect(app.scheduled["stopDose"] == null && app.scheduled["verifyPumpOff"] == null &&
+           app.scheduled["emergencyPumpOff"] == null, "and all stop jobs are removed")
+}
+
+check("regression: a LATE OFF past the planned stop also announces the final notice once") {
+    def app = newApp()
+    app.pumpSwitch = new FakeSwitch("off")
+    app.state.activeDose = [ml: "237", seconds: 65, started: app.clockMs - 125_000L,
+                            stopAt: app.clockMs - 60_000L]
+    app.state.stopAttempts = 3
+
+    app.pumpSwitchHandler([value: "off"])
+
+    expect(app.noticesMatching("stopped after scheduled").size() == 1,
+           "a late OFF is still a confirmed completion and must announce it once")
+    expect(app.state.activeDose == null && app.state.stopAttempts == null,
+           "and release the dose and retry counter")
+}
+
 check("the cutoff finding the switch ALREADY off releases the dose") {
     def app = newApp()
     app.pumpSwitch = new FakeSwitch("off")
