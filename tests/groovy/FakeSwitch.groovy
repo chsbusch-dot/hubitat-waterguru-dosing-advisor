@@ -42,6 +42,15 @@ class FakeSwitch {
     int onCalls = 0
     int refreshCalls = 0
 
+    /**
+     * Asynchronous plug, as on the live hub: the jtp driver's on()/off() send one Z-Wave command and
+     * return, and the switch value changes only when the plug's report arrives (about 450 ms later on
+     * Oct 2), if it arrives at all. In this mode a command is only RECORDED in `commands`; the test
+     * makes it take effect by delivering the report through HubitatStub.deliverDeviceReport.
+     */
+    boolean async = false
+    List<String> commands = []
+
     /** Millisecond source for state timestamps. Bound to a fake app clock when it matters. */
     Closure clock
 
@@ -118,12 +127,15 @@ class FakeSwitch {
 
     def refresh() {
         refreshCalls++
+        commands << "refresh"
         if (refreshThrows) throw new RuntimeException("simulated refresh() failure")
         return null
     }
 
     def on() {
         onCalls++
+        commands << "on"
+        if (async) return null
         if (mode == "ignoresOn" || mode == "ignoresAll") {
             // The command is accepted but the relay never reports on (dead/offline switch).
             return null
@@ -145,6 +157,8 @@ class FakeSwitch {
 
     def off() {
         offCalls++
+        commands << "off"
+        if (async) return null
         switch (mode) {
             case "offThrows":
                 // The command failed; the physical state is unchanged.

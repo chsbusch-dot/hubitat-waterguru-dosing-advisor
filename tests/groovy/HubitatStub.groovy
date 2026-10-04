@@ -91,26 +91,41 @@ abstract class HubitatStub extends Script {
     }
     def unsubscribe() { subscriptions.clear(); null }
 
-    /** Model Hubitat's default duplicate filtering. Unlike a command, a report represents
-     *  device evidence. Equal values only get a new stored date when a subscription opts in. */
+    /**
+     * A device report reaching the hub, modelled on what was MEASURED on the live hub (2026-10-04):
+     *
+     *   - a changed value updates the stored state, value AND date, and reaches every subscriber;
+     *   - an UNCHANGED value is still stored and delivered as an event with isStateChange:false and
+     *     a fresh event date, but only to subscribers that opted out of duplicate filtering
+     *     (filterEvents:false), and it does NOT advance currentState(attr).date. Live evidence: plug
+     *     4674 logged "switch off (digital)" with isStateChange:false at 10:14:09, 11:31:23 and
+     *     11:31:56 PDT while currentState('switch').date stayed 2026-10-04T02:48:31Z.
+     *
+     * Until 2.4.1 this stub re-dated the unchanged value, the opposite of the hub, which is why the
+     * suite could not see the acknowledgement lockout or the false power-loss abort.
+     */
     def deliverDeviceReport(def device, String attr, def value) {
+        if (!(attr in ["switch", "power"])) throw new IllegalArgumentException("Unsupported test report: ${attr}")
         List listeners = subscriptions.findAll { it.device.is(device) && it.attr == attr }
         boolean changed = device.currentValue(attr)?.toString() != value?.toString()
-        boolean keep = changed || listeners.any { it.options.filterEvents == false }
-        if (!keep) return
-        if (attr == "switch") device.setReportedAt(value.toString(), clockMs)
-        else if (attr == "power") device.setPowerAt(value as BigDecimal, clockMs)
-        else throw new IllegalArgumentException("Unsupported test report: ${attr}")
+        if (changed) {
+            if (attr == "switch") device.setReportedAt(value.toString(), clockMs)
+            else device.setPowerAt(value as BigDecimal, clockMs)
+        }
         listeners.findAll { changed || it.options.filterEvents == false }.each {
-            this."${it.handler}"([name: attr, value: value.toString(), date: new Date(clockMs)])
+            this."${it.handler}"([name: attr, value: value.toString(), date: new Date(clockMs), isStateChange: changed])
         }
     }
     def sendEvent(Map m) { emitted << new LinkedHashMap(m); null }
     def pause(Number n) { null }
 
     // --- scheduling -----------------------------------------------------------------
+    /** Absolute due time of every pending runIn job, so runUntil() can fire them in time order. */
+    Map<String, Long> dueAt = [:]
+
     def runIn(Number seconds, String handler, Map opts = [:]) {
         scheduled[handler] = seconds
+        dueAt[handler] = clockMs + ((seconds as BigDecimal) * 1000G).longValue()
         null
     }
     def schedule(String when, String handler) {
@@ -118,8 +133,24 @@ abstract class HubitatStub extends Script {
         null
     }
     def runEvery1Minute(String handler) { scheduled[handler] = 60; null }
-    def unschedule() { scheduled.clear(); null }
-    def unschedule(String handler) { scheduled.remove(handler); unscheduled << handler; null }
+    def unschedule() { scheduled.clear(); dueAt.clear(); null }
+    def unschedule(String handler) { scheduled.remove(handler); dueAt.remove(handler); unscheduled << handler; null }
+
+    /** Move the clock to `t`, firing every runIn job that falls due on the way, in due-time order. */
+    void runUntil(Long t) {
+        int guard = 0
+        while (guard++ < 100_000) {
+            def due = dueAt.findAll { it.value <= t }
+            if (!due) break
+            def next = due.min { it.value }
+            clockMs = Math.max(clockMs, next.value)
+            fire(next.key)
+        }
+        clockMs = Math.max(clockMs, t)
+    }
+
+    /** runUntil() relative to now. */
+    void advance(long ms) { runUntil(clockMs + ms) }
 
     // --- logging & notifications ----------------------------------------------------
     def getLog() {
@@ -151,7 +182,22 @@ abstract class HubitatStub extends Script {
      *  overriding the app's private getTileDevice(), which Groovy resolves directly. */
     def getChildDevice(String dni) { settings["__tileDevice"] }
     def getChildDevices() { settings["__tileDevice"] ? [settings["__tileDevice"]] : [] }
-    def timeToday(def t, TimeZone tz) { new Date(clockMs) }
+    /**
+     * Today's date (in tz, on the fake clock) at the time of day in `t`: "HH:mm", "HH:mm:ss", or the
+     * ISO-8601 string a Hubitat time input stores. Anything else is "now", the old behaviour, which
+     * made every AUTO window look open.
+     */
+    def timeToday(def t, TimeZone tz) {
+        def m = (t?.toString() ?: "") =~ /(?:T|^)(\d{2}):(\d{2})(?::(\d{2}))?/
+        if (!m.find()) return new Date(clockMs)
+        Calendar cal = Calendar.getInstance(tz ?: TimeZone.getTimeZone("America/Los_Angeles"))
+        cal.setTimeInMillis(clockMs)
+        cal.set(Calendar.HOUR_OF_DAY, m.group(1) as Integer)
+        cal.set(Calendar.MINUTE, m.group(2) as Integer)
+        cal.set(Calendar.SECOND, m.group(3) ? (m.group(3) as Integer) : 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        return cal.time
+    }
     /**
      * Parse the two shapes toEpochMs() is fed: an epoch-millis string, or ISO-8601. Returning
      * null for everything would make doseSafetyBlocks() reject every dose as "measurement
@@ -173,6 +219,7 @@ abstract class HubitatStub extends Script {
      */
     Object fire(String handler) {
         scheduled.remove(handler)
+        dueAt.remove(handler)
         def m = this.metaClass.getMetaMethod(handler)
         if (m == null) throw new IllegalStateException("no handler named ${handler}")
         return m.invoke(this)
