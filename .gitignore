@@ -9,3 +9,6 @@
 # Scratch
 *.log
 *.tmp
+
+# Mutation check output (tests/mutation/run.sh)
+tests/mutation/out/

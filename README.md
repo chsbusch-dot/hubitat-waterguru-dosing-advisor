@@ -120,15 +120,16 @@ pump-started doses and compute durable usage totals. They are written alongside 
 attributes on every calculation. The dose values are recorded only after a start has been
 **confirmed** (a fresh ON, plus fresh power above the minimum for a power-capable switch), so
 they represent pump runs this app actually observed running — not recommendations, previews, or a
-bare `on()` return. The volume is still the planned estimate, not a measurement of liquid. For
-the transition, an attempt that is never confirmed still reserves its sample and daily volume,
-but writes no `lastDose*` value and draws no inventory.
+bare `on()` return. The volume is booked at confirmation as the planned estimate and, once OFF is
+confirmed, corrected to the observed ON-to-OFF run time if the two differ by more than 3 s (see
+*Booking what actually ran* below). It is never a measurement of liquid. An attempt that is never
+confirmed still reserves its sample and daily volume, but writes no `lastDose*` value.
 
 | Attribute | Unit | What it holds |
 | --- | --- | --- |
-| `lastDoseMl` | mL | Estimated liquid volume of the last commanded pump run. |
-| `lastDoseEpochMs` | epoch ms | When that run was recorded — the dose's own time, not the time it was read. |
-| `lastDoseRuntimeSeconds` | s | The pump runtime that volume was derived from. |
+| `lastDoseMl` | mL | Estimated liquid volume of the last confirmed pump run: the plan at confirmation, the observed run once OFF is confirmed if they differ. |
+| `lastDoseEpochMs` | epoch ms | When that run was recorded — the dose's own time, not the time it was read. A correction keeps it. |
+| `lastDoseRuntimeSeconds` | s | The pump runtime that volume corresponds to (planned, or observed after a correction). |
 | `tankCapacityMl` | mL | Configured container capacity. |
 | `tankRemainingMl` | mL | Estimated remaining inventory: capacity minus recorded app-controlled doses. |
 | `tankPercent` | % | `tankRemainingMl` as a percentage of capacity. |
@@ -141,6 +142,10 @@ Two behaviours an external reader has to know:
 
 - **A dose carries its original timestamp**, so re-reading it does not create another dose
   record. A historian can poll as often as it likes without inflating usage totals.
+- **A correction keeps that timestamp.** When the observed run differs from the plan, `lastDoseMl`
+  and `lastDoseRuntimeSeconds` are republished with the same `lastDoseEpochMs`, so a historian that
+  keys doses by that value (the Waterguru-Grafana-Chart collector does) overwrites the point rather
+  than counting a second dose.
 - **Absent values stay absent rather than becoming zero.** `tankRunwayDays` may be missing while
   the app is still learning consumption, and that is not the same as a zero-day runway.
 
@@ -197,9 +202,12 @@ days = (FC − floor) ÷ dailyLoss
 
 1. **Your manual override**, if set.
 2. **Measured** — the average decline across your recent samples. The app keeps a
-   rolling history of each new FC reading and averages the intervals where FC
-   *fell* (intervals where FC rose are chlorine additions and are skipped). This
-   needs a couple of days of samples to appear.
+   rolling history of each new FC reading and adds back, as ppm, the chlorine it
+   dosed itself between two samples, so daily dosing does not hide the loss. An
+   interval where FC still rose is chlorine from elsewhere and is skipped. Adding a
+   dose back needs the pool volume and the chlorine strength (an override, or the
+   device's own value); without them, intervals that contain a dose are skipped
+   rather than guessed. This needs a couple of days of samples to appear.
 3. **Estimated** — a modeled default (3 ppm/day, scaled to 60% when the device
    reports a cover) used until measured history exists.
 
@@ -235,9 +243,13 @@ liquid. This app therefore separates "start requested" from "start confirmed":
 - **No claim of proven liquid flow is ever made.** The confirmed volume remains a planned
   estimate.
 
-The app subscribes to repeated switch and power reports with `filterEvents: false`, so a steady
-wattage or another OFF response remains fresh evidence. The selected driver must publish received
-reports even when their values are unchanged. A refresh request alone is never confirmation.
+The app subscribes to repeated switch and power reports with `filterEvents: false`. Hubitat
+delivers a report whose value did not change as an event with a fresh date, but it does not move
+the device's stored state date (measured on a C8, October 2026). The app therefore uses the
+event's receipt time: a steady wattage keeps a confirmed run alive, and an OFF report from a plug
+that was already off still counts as a fresh OFF once it passes the same anchor checks as any
+other OFF. The selected driver must publish received reports even when their values are
+unchanged. A refresh request alone is never confirmation.
 After upgrading, use **Done** once while the pump is idle to install these subscriptions; this
 also requests OFF through the normal configuration-change stop path. Verify the subscription
 settings before enabling automatic dosing.
@@ -250,14 +262,22 @@ If a start is not confirmed within the timeout (default **20 s**, never past the
 - a **fault is latched** and stays visible until you press **Acknowledge pump fault**. Acknowledgement
   is refused while a stop is still being recovered or until the switch has freshly reported OFF; it
   releases the fault lock for future eligible doses — it never energises the pump, refunds the
-  reserved volume, or resets the sample/day limits.
+  reserved volume, or resets the sample/day limits. If nothing is being recovered and no OFF report
+  has arrived since the fault (for example a fault carried over from 2.4.0), the refusal says so:
+  press **STOP chlorine pump now** once, and the plug's answer to that OFF is enough.
 - A cached OFF from before the ON request cannot prematurely disarm the new backstop, and a late
   ON after an abort is never reclassified as a successful dose.
 
 While a **power-confirmed** run is active, the app watches for loss of power or missing fresh
 power evidence over a grace period (default **30 s**). A persistent loss aborts the run safely,
-locks a fault, and leaves the delivery volume marked **uncertain for operator review** — inventory
-is not automatically refunded and the dose is not retried.
+locks a fault, and leaves the delivery volume marked **uncertain for operator review**; the dose is
+not retried. Once OFF is confirmed the tank is booked from the observed ON-to-OFF run time, which
+is an upper bound on what an uncertain run delivered.
+
+A real plug answers OFF asynchronously (about half a second). A stop therefore waits a few seconds
+for the OFF report before it says anything: a healthy stop sends only the final "stopped" notice,
+and "stop requested ... Retrying" goes out only if the OFF is still unconfirmed after that wait.
+The retries and the independent cutoff are armed at the moment of the stop request either way.
 
 All confirmed-OFF paths use the same cleanup. An unconfirmed attempt always retains its fault,
 including an OFF report arriving near the planned end before a timer runs. Emergency stops record
@@ -271,6 +291,22 @@ planned volume counts against the daily cap, and the one-AUTO-dose-per-day guard
 even if the start is never confirmed. Only on confirmation does the app write the `lastDose*`
 telemetry and draw the planned volume from the tank estimate. Existing historical `lastDose` and
 tank history from earlier versions are preserved as-is.
+
+### Booking what actually ran
+
+When OFF is confirmed, the run is measured from its ON report to its OFF report (report latency at
+both ends cancels out):
+
+- **Within 3 s of the plan:** the planned booking stands.
+- **Longer (a late OFF):** the extra volume is debited from the tank and added to today's total,
+  the final notice gives the observed run time against the plan, and an OFF confirmed more than
+  30 s after the planned stop latches a **stop-overrun** fault for review.
+- **Shorter (an early stop):** the tank is booked from the observed run; today's total keeps the
+  full planned reservation.
+- **An unconfirmed attempt that demonstrably ran** (an ON report, plus power above the minimum on
+  a power-reporting switch), including a late ON during fault recovery, is counted too: the tank
+  from the observed run, today's total beyond what the attempt already reserved, with the window in
+  the final notice. It never becomes a start or a `lastDose` record.
 
 ## How it runs
 

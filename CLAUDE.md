@@ -64,6 +64,15 @@ bash tests/groovy/run.sh                    # child app methods vs a stubbed hub
 
 Neither touches a hub or a pump.
 
+The stub models what was measured on the live hub (2026-10-04): a report whose value did not change
+reaches `filterEvents:false` subscribers as an event with a fresh date but never re-dates
+`currentState()`, and `FakeSwitch.async` makes a command take effect only when the test delivers the
+plug's report. Write new pump tests against that (`hubPlug` in `run_tests.groovy`).
+
+Optional, not in CI (about 2.5 min): `tests/mutation/run.sh` reruns the 2.4.0 review's mutation set
+plus one mutant per 2.4.1 fix. The unmutated `base` must pass and every `[killed]` mutant must fail;
+anchors are exact strings, so re-anchor a mutant when the code under it changes.
+
 ## Branches and PRs
 
 - Branch off `main` as `wgda/<type>/<slug>` (for example `wgda/fix/pump-start-confirmation`).
