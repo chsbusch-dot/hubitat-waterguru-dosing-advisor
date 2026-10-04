@@ -27,6 +27,17 @@
  * All doses are ESTIMATES. Always confirm with your own test kit before adding.
  *
  * Version history
+ *   2.4.0 - Truthful start confirmation. An ON command returning no longer counts as a pump
+ *           start. For a power-capable switch a fresh ON plus fresh measured power above a
+ *           configurable minimum (default 3 W) must confirm the run before anything is recorded
+ *           or announced as started; a non-power switch is accepted with an explicit power/flow-unverified
+ *           notice. A start that is not confirmed within the timeout alerts once, goes through
+ *           the existing OFF/cutoff safety path, keeps a latched fault until the operator
+ *           acknowledges it, and never deducts tank inventory or emits a success dose record.
+ *           Attempted sample/day volume is reserved before ON so a failure cannot make another
+ *           automatic dose eligible or bypass the daily cap. A confirmed run is watched for
+ *           power loss or stale power evidence and aborted safely. No claim of proven liquid
+ *           flow is made anywhere.
  *   2.3.2 - Confirmed-stop notice. A dose whose OFF is reported late now sends the one final
  *           "stopped" notification when the switch positively reports off, instead of silently
  *           clearing the dose and its verification. Duplicate or idle OFF events stay silent,
@@ -115,7 +126,7 @@
 
 import groovy.transform.Field
 
-def appVersion() { "2.3.2" }
+def appVersion() { "2.4.0" }
 
 definition(
     name:        "WaterGuru Dosing Advisor Pool",
@@ -124,6 +135,10 @@ definition(
     parent:      "chsbusch-dot:WaterGuru Dosing Advisor",
     description: "One WaterGuru pool's dosing advisor (child of the WaterGuru Dosing Advisor app).",
     category:    "Convenience",
+    // Hubitat runs an app's handlers one at a time when this is set, so a power event and a timer
+    // cannot interleave inside the confirmation/booking path. Booking is ALSO idempotent by
+    // attempt id, because a stale handler closure must never be able to book twice.
+    singleThreaded: true,
     iconUrl:     "",
     iconX2Url:   "",
     importUrl:   "https://raw.githubusercontent.com/chsbusch-dot/hubitat-waterguru-dosing-advisor/main/apps/WaterGuru-Dosing-Advisor-Child.groovy"
@@ -174,6 +189,19 @@ preferences {
 // switch actually reads off. See stopDose()/verifyPumpOff().
 @Field static final int        STOP_MAX_ATTEMPTS       = 5
 @Field static final int        STOP_RETRY_SECONDS      = 20
+
+// Pump start confirmation (2.4.0). An ON command returning is not evidence the relay closed
+// or the pump is moving liquid, so a fresh reading must confirm it before the result is recorded
+// or announced as started. Power is required only for a device that reports it; a plain switch is accepted
+// with an explicit notice that power/flow are unverified. Liquid flow is never claimed.
+@Field static final BigDecimal DEFAULT_START_POWER_MIN_WATTS = 3G
+@Field static final int        DEFAULT_START_TIMEOUT_SECONDS = 20
+@Field static final int        DEFAULT_POWER_LOSS_GRACE_SECONDS = 30
+// A start is checked quickly so a short dose can still be confirmed; refreshes are throttled to
+// roughly 10 s so a device is not polled into the ground during a run.
+@Field static final int        START_CHECK_SECONDS          = 2
+@Field static final int        START_REFRESH_THROTTLE_SECONDS = 10
+@Field static final int        RUN_POWER_CHECK_SECONDS      = 10
 @Field static final BigDecimal FC_LOSS_MODELED_DEFAULT = 3.0G
 @Field static final BigDecimal FC_LOSS_COVER_FACTOR    = 0.6G
 
@@ -273,6 +301,17 @@ def mainPage() {
             input "pumpRateMlPerMin", "decimal",
                 title: "Pump delivery rate (mL/min)",
                 defaultValue: 185, required: true
+
+            paragraph startConfirmHelp()
+            input "startPowerMinWatts", "decimal",
+                title: "Minimum running power (W) to confirm a start (0 or blank uses 3 W)",
+                defaultValue: 3, required: false
+            input "startConfirmTimeoutSeconds", "decimal",
+                title: "How long to wait for start evidence (seconds, never past the planned stop)",
+                defaultValue: 20, required: false
+            input "powerLossGraceSeconds", "decimal",
+                title: "How long a confirmed run may lose power before it is stopped (seconds)",
+                defaultValue: 30, required: false
 
             input "circulationSwitch", "capability.switch",
                 title: "Pool circulation/filter switch (recommended interlock)",
@@ -403,6 +442,10 @@ def mainPage() {
             if (pumpSwitch) {
                 input name: "btnStopPump", type: "button", title: "STOP chlorine pump now"
             }
+            if (state.startFault) {
+                input name: "btnAckFault", type: "button",
+                    title: "Acknowledge pump fault (allows future doses; does not run the pump)"
+            }
         }
 
         section("<b>Name</b>") {
@@ -452,14 +495,81 @@ private String dosingModeHelp() {
     }
 }
 
+/**
+ * Short, user-facing explanation of how a start is confirmed. The switch is detected
+ * automatically: if it reports power, power is required; otherwise a fresh switch reading is used
+ * with an explicit note that power and flow are unverified.
+ */
+private String startConfirmHelp() {
+    if (pumpReportsPower()) {
+        return "This switch reports power, so a start is confirmed only when a fresh ON report is " +
+               "accompanied by fresh power at or above the minimum (default ${n1(DEFAULT_START_POWER_MIN_WATTS)} W). " +
+               "A reading from before the ON request never confirms a start."
+    }
+    return "This switch does not report power, so a fresh ON report confirms a start. " +
+           "Power and flow cannot be verified. Readings from before the ON request never confirm a start."
+}
+
+/** True when a start must be backed by a fresh power reading. Power-capable => always required. */
+private boolean powerConfirmationRequired() {
+    return pumpReportsPower()
+}
+
+/**
+ * Whether the selected switch reports electrical power. Capability/attribute detection only:
+ * a null power VALUE on a power-capable device must fail closed, not fall back to switch-only.
+ */
+private boolean pumpReportsPower() {
+    if (!pumpSwitch) return false
+    try { return pumpSwitch.hasAttribute("power") } catch (Throwable ignored) { }
+    try { return pumpSwitch.hasCapability("PowerMeter") } catch (Throwable ignored) { }
+    return false
+}
+
+/** The minimum running power, always strictly positive so 0 W can never confirm a start. */
+private BigDecimal startPowerMinWatts() {
+    BigDecimal v = firstNum(startPowerMinWatts, DEFAULT_START_POWER_MIN_WATTS)
+    return (v == null || v <= 0G) ? DEFAULT_START_POWER_MIN_WATTS : v
+}
+
+private int startTimeoutSeconds() {
+    BigDecimal v = firstNum(startConfirmTimeoutSeconds, DEFAULT_START_TIMEOUT_SECONDS)
+    if (v == null || v <= 0G) return DEFAULT_START_TIMEOUT_SECONDS
+    return Math.max(1, Math.round(v.doubleValue()) as Integer)
+}
+
+private int powerLossGraceSeconds() {
+    BigDecimal v = firstNum(powerLossGraceSeconds, DEFAULT_POWER_LOSS_GRACE_SECONDS)
+    if (v == null || v <= 0G) return DEFAULT_POWER_LOSS_GRACE_SECONDS
+    return Math.max(1, Math.round(v.doubleValue()) as Integer)
+}
+
 private String dosingStatusHtml() {
     String sw = pumpSwitch ? (pumpSwitch.currentValue("switch") ?: "unknown") : "not selected"
-    String active = state.activeDose ? "RUNNING ${state.activeDose.ml} mL; scheduled stop ${state.activeDose.stopAt}" : "idle"
+    Map active = state.activeDose instanceof Map ? state.activeDose : null
+    String activeText
+    if (active == null && state.faultStopAt != null) {
+        activeText = "STOPPING — recovering a stop after a fault; waiting for a fresh OFF report"
+    } else if (active == null) {
+        activeText = "idle"
+    } else if (active.fault != null) {
+        activeText = "FAULT (${active.fault}) — stop protection stays armed until the switch confirms off"
+    } else if (active.startConfirmed == true) {
+        activeText = "RUNNING — start confirmed; ${active.ml} mL; scheduled stop ${new Date((active.stopAt ?: 0L) as Long)}"
+    } else {
+        activeText = "STARTING — waiting for a fresh ON report before it is reported as running; ${active.ml} mL planned"
+    }
     String pending = state.pendingDose ? "${state.pendingDose.ml} mL / ${formatDuration((state.pendingDose.seconds ?: 0) as Integer)} from sample ${state.pendingDose.sample}" : "none"
-    String last = state.lastDose ? "${state.lastDose.ml} mL on ${new Date((state.lastDose.time ?: 0) as Long)}" : "none"
+    String last = state.lastDose ? "${state.lastDose.ml} mL on ${new Date((state.lastDose.time ?: 0) as Long)} (planned estimate, not measured delivery)" : "none"
+    String fault = state.startFault ? "<b>UNACKNOWLEDGED: ${state.startFault.reason}</b> — press <i>Acknowledge pump fault</i> when reviewed (does not run the pump, and the attempt stays reserved)" : "none"
+    String confirm = powerConfirmationRequired()
+        ? "fresh ON report + power ≥ ${n1(startPowerMinWatts())} W (within ${startTimeoutSeconds()}s, never past the planned stop)"
+        : "fresh ON report only (this switch does not report power) — power and flow are unverified"
     String circulation = circulationSwitch ? "${circulationSwitch.displayName} (${circulationSwitch.currentValue('switch') ?: 'unknown'})" :
                          (circulationAlwaysOn == true ? "confirmed continuous (24/7)" : "not confirmed")
-    return "Pump: <b>${pumpSwitch?.displayName ?: 'not selected'}</b> (${sw}) · controller: <b>${active}</b><br>" +
+    return "Pump: <b>${pumpSwitch?.displayName ?: 'not selected'}</b> (${sw}) · controller: <b>${activeText}</b><br>" +
+           "Start confirmation: <b>${confirm}</b><br>" +
+           "Pump fault: <b>${fault}</b><br>" +
            "Circulation: <b>${circulation}</b><br>" +
            "Pending dose: <b>${pending}</b><br>Last started dose: <b>${last}</b>"
 }
@@ -585,7 +695,10 @@ def initialize() {
         }
     }
     if (pumpSwitch) {
-        subscribe(pumpSwitch, "switch", "pumpSwitchHandler")
+        // Preserve repeated equal reports: freshness measures receipt, not a change in watts or
+        // switch value. Hubitat otherwise filters unchanged events and leaves their dates stale.
+        subscribe(pumpSwitch, "switch", "pumpSwitchHandler", [filterEvents: false])
+        if (pumpReportsPower()) subscribe(pumpSwitch, "power", "pumpSwitchHandler", [filterEvents: false])
     }
 
     if (dailyDigest == true && digestTime) {
@@ -607,8 +720,28 @@ def initialize() {
     // disappears, so if a dose is still recorded as active, put the protection back before
     // anything else assumes the pump is safe.
     if (state.activeDose != null) {
+        Map active = state.activeDose instanceof Map ? state.activeDose : null
         log.warn "WaterGuru Dosing Advisor: initialize found a dose still recorded as active; re-arming stop protection"
         armEmergencyPumpCutoff("initialize found a dose still recorded as active")
+        runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
+        // A start that was still being confirmed loses its verification timer in the queue reset.
+        // Recreate it (the deadline and the reservation live in state, not in the job) unless the
+        // attempt has already faulted, in which case only the stop/backstop jobs above apply.
+        if (active != null && active.startConfirmed != true && active.fault == null) {
+            runIn(START_CHECK_SECONDS, "verifyStartConfirmation", [overwrite: true])
+            log.warn "WaterGuru Dosing Advisor: recreated the start-confirmation check after the queue reset"
+        }
+        if (active != null && active.startConfirmed == true && powerConfirmationRequired()) {
+            runIn(RUN_POWER_CHECK_SECONDS, "verifyRunPower", [overwrite: true])
+            log.warn "WaterGuru Dosing Advisor: recreated the running power watch after the queue reset"
+        }
+    } else if (state.startFault != null && state.faultStopAt != null) {
+        // A standalone fault recovery (a late ON after the dose was cleaned up) has no activeDose,
+        // so the block above would miss it and the queue reset would silently drop its stop jobs.
+        // Recreate the stop verification and re-arm the ORIGINAL emergency deadline. Do NOT
+        // recreate the start-confirmation or power-watch jobs: this is stop-only.
+        log.warn "WaterGuru Dosing Advisor: initialize found a standalone fault recovery; re-arming stop protection"
+        armEmergencyPumpCutoff("initialize found a standalone fault recovery")
         runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
     }
 
@@ -656,7 +789,7 @@ def dailyDigestHandler() {
 }
 
 private void sendDailyChlorineSummary(boolean force = false, String trigger = "daily") {
-    String today = new Date().format("yyyy-MM-dd", location.timeZone)
+    String today = nowDate().format("yyyy-MM-dd", location.timeZone)
     if (!force && state.lastDailySummaryDate == today) {
         logDebug "Skipping ${trigger} chlorine summary; already sent for ${today}"
         return
@@ -696,6 +829,7 @@ void appButtonHandler(String btn) {
         case "btnTankFull": resetTankFull(); break
         case "btnRunPending": runPendingDose(); break
         case "btnStopPump":  safeStopPump("STOP button pressed", true); break
+        case "btnAckFault":  acknowledgePumpFault(); break
     }
 }
 
@@ -1086,14 +1220,35 @@ private void startDose(Map result, String trigger) {
     Integer seconds = result.runSeconds as Integer
     BigDecimal ml = result.doseMl as BigDecimal
     String sample = result.sampleKey?.toString()
-    Long stopAt = now() + (seconds * 1000L)
+    Long requestedAt = now()
+    Long stopAt = requestedAt + (seconds * 1000L)
+    Long startDeadline = Math.min(requestedAt + (startTimeoutSeconds() * 1000L), stopAt)
 
-    // Establish the stop job and state before energizing the physical output.
-    state.activeDose = [ml: n0(ml), mlRaw: ml.toString(), seconds: seconds,
-                        sample: sample, started: now(), stopAt: stopAt]
+    // Reserve the attempt BEFORE the relay is asked to move. The sample, the planned volume and
+    // the daily total are SAFETY accounting, not telemetry: a start that is never confirmed must
+    // still consume them, or a failed attempt would make another automatic dose eligible and
+    // could let the real total cross the daily cap. Success telemetry (lastDose) and tank
+    // inventory are deliberately NOT touched here.
+    reserveDoseAttempt(ml, sample, seconds)
+
+    // Establish the stop job and state before energizing the physical output. The dose is active
+    // but UNCONFIRMED: the relay may have energised, so it is tracked and stopped exactly like a
+    // running dose until the switch confirms off.
+    Map active = [attemptId: nextAttemptId(),
+                  ml: n0(ml), mlRaw: ml.toString(), seconds: seconds,
+                  sample: sample, started: requestedAt, stopAt: stopAt,
+                  requestedAt: requestedAt, startDeadline: startDeadline,
+                  startConfirmed: false, fault: null,
+                  lastRefreshAt: null,
+                  fcVal: result.fcVal?.toString(), fcTarget: result.fcTarget?.toString(),
+                  trigger: trigger]
+    state.activeDose = active
+
     runIn(seconds, "stopDose", [overwrite: true])
     runIn(seconds + 15, "verifyPumpOff", [overwrite: true])
     armEmergencyPumpCutoff("app-started dose")
+    runIn(START_CHECK_SECONDS, "verifyStartConfirmation", [overwrite: true])
+
     try {
         pumpSwitch.on()
     } catch (e) {
@@ -1104,38 +1259,357 @@ private void startDose(Map result, String trigger) {
         // the orphaned flag makes the next arm believe a cutoff is pending (so no timer is ever
         // recreated), and a pump that did energise is left running with no dose recorded and
         // nothing scheduled to stop it.
-        String msg = "Chlorine pump failed to start: ${e.message}"
+        active.fault = "start-command-error"
+        state.activeDose = active
+        latchStartFault("start-command-error", "the ON command reported an error: ${e.message}", active)
+        String msg = "Chlorine pump failed to start: ${e.message}. The relay may still have energised; requesting OFF and keeping the independent cutoff armed. The ${n0(ml)} mL attempt stays reserved."
         log.error "WaterGuru Dosing Advisor: ${msg}"
         sendPumpNotice(msg)
-        safeStopPump("dose failed to start", true)
+        safeStopPump("the ON command reported an error", false)
         return
     }
 
-    recordDoseLedger(ml, sample, seconds)
-    publishTileTelemetry(result)
     state.remove("pendingDose")
-    String msg = "Chlorine pump started: ${n0(ml)} mL for ${formatDuration(seconds)} at ${n1(firstNum(pumpRateMlPerMin, DEFAULT_PUMP_RATE_ML_MIN))} mL/min (${trigger}). ${tankSummaryPlain()}"
+    String msg = "Chlorine pump start requested: ${n0(ml)} mL for ${formatDuration(seconds)} at ${n1(firstNum(pumpRateMlPerMin, DEFAULT_PUMP_RATE_ML_MIN))} mL/min (${trigger}). Waiting for a fresh reading to confirm the pump is actually running before reporting success."
     log.warn "WaterGuru Dosing Advisor: ${msg}"
     sendPumpNotice(msg)
 }
 
+// ---------------------------------------------------------------------------
+// Start confirmation and running power watch (2.4.0)
+// ---------------------------------------------------------------------------
+
+/**
+ * Bounded asynchronous check that the pump actually started.
+ *
+ * Confirmation never comes from on() returning, nor from a reading that predates the ON request.
+ * For a power-capable switch it takes BOTH a fresh ON and fresh power at or above the minimum; a
+ * cached value, a null value or a throwing read fails closed. A plain switch is confirmed by a
+ * fresh ON with an explicit note that power/flow are unverified. This reschedules itself until
+ * the deadline (bounded by the planned stop), then fails the start safely. There is no blocking
+ * sleep and no automatic retry of the ON command.
+ */
+def verifyStartConfirmation() {
+    Map active = state.activeDose instanceof Map ? state.activeDose : null
+    if (active == null || active.startConfirmed == true || active.fault != null) return
+    if (startStopRequested(active)) return   // an OFF was requested; a late report must not confirm
+
+    Long nowMs = now()
+    Long deadline = active.startDeadline as Long
+    // The deadline is checked FIRST. A late callback whose evidence only appeared after the start
+    // window (or after the planned stop) must not book and announce a success, even if the device
+    // state now happens to look right.
+    if (deadline != null && nowMs >= deadline) {
+        boolean wantPower = powerConfirmationRequired()
+        String why = wantPower
+            ? "the start window ended before a fresh ON report and power at or above ${n1(startPowerMinWatts())} W were both seen"
+            : "the start window ended before a fresh ON report was seen"
+        failDoseStart(active, why)
+        return
+    }
+
+    boolean wantPower = powerConfirmationRequired()
+    Map sw = readDeviceReading("switch")
+    boolean switchOnFresh = readingFresh(sw, active.requestedAt) && sw.value?.toString() == "on"
+
+    if (wantPower) {
+        Map pw = readDeviceReading("power")
+        boolean powerFresh = readingFresh(pw, active.requestedAt)
+        BigDecimal watts = toBD(pw.value)
+        if (switchOnFresh && powerFresh && watts != null && watts > 0G && watts >= startPowerMinWatts()) {
+            confirmDoseStart(active, "a fresh ON report plus ${n1(watts)} W", pw.at)
+            return
+        }
+    } else if (switchOnFresh) {
+        confirmDoseStart(active, "a fresh ON report (power and flow unverified)", null)
+        return
+    }
+
+    requestPumpRefresh(active)
+    runIn(START_CHECK_SECONDS, "verifyStartConfirmation", [overwrite: true])
+}
+
+/**
+ * A reading is usable only when it has a real value and a real timestamp that is not in the
+ * future and, when a start anchor is supplied, is not older than that anchor. A missing/null/
+ * throwing read fails closed rather than counting as evidence.
+ */
+private boolean readingFresh(Map r, Long sinceMs) {
+    if (r == null || r.ok != true || r.at == null) return false
+    if (futureDated(r.at)) return false   // a future-dated reading is not evidence
+    if (sinceMs != null && r.at < sinceMs) return false
+    return true
+}
+
+/**
+ * One strict timestamp rule everywhere: a reading is unusable when it is dated in the future.
+ * Hubitat device events are stamped on the same host clock as the app, so there is no skew to
+ * forgive -- an invented allowance is exactly what let a future OFF disarm a running pump.
+ */
+private boolean futureDated(Long at) {
+    return at != null && at > now()
+}
+
+/**
+ * Read one attribute together with the timestamp the device attached to it. A throwing read is
+ * caught and reported as not-ok, so it can never be mistaken for a fresh value.
+ */
+private Map readDeviceReading(String attr) {
+    Map out = [value: null, at: null, ok: false, error: null]
+    if (!pumpSwitch) return out
+    try {
+        def st = null
+        try { st = pumpSwitch.currentState(attr, true) } catch (Throwable ignored) { st = null }
+        if (st != null) {
+            out.value = st.value
+            out.at = stateDateToMs(st.date)
+        } else {
+            out.value = pumpSwitch.currentValue(attr)
+        }
+        out.ok = out.value != null
+    } catch (e) {
+        out.error = e.message
+    }
+    return out
+}
+
+private Long stateDateToMs(def d) {
+    if (d == null) return null
+    if (d instanceof Date) return d.time
+    if (d instanceof Number) return d as Long
+    return toEpochMs(d)
+}
+
+private Long eventDateMs(def evt) {
+    if (evt == null) return null
+    try { return stateDateToMs(evt.date) } catch (Throwable ignored) { return null }
+}
+
+/** Ask a supporting device to refresh, throttled to roughly 10 s during an active run. */
+private void requestPumpRefresh(Map active) {
+    if (pumpSwitch == null) return
+    Long nowMs = now()
+    Long last = active.lastRefreshAt as Long
+    if (last != null && (nowMs - last) < (START_REFRESH_THROTTLE_SECONDS * 1000L)) return
+    active.lastRefreshAt = nowMs
+    state.activeDose = active
+    try {
+        boolean supported = false
+        try { supported = pumpSwitch.hasCommand("refresh") } catch (Throwable ignored) { supported = false }
+        if (supported) pumpSwitch.refresh()
+    } catch (e) {
+        // A refresh that throws must not abort start verification or strand stop protection.
+        log.error "WaterGuru Dosing Advisor: pump refresh failed — ${e.message}"
+    }
+}
+
+/**
+ * Record a CONFIRMED start exactly once. The attempt was already reserved before ON, so only the
+ * success telemetry and the tank draw happen here. Idempotency is enforced against the CURRENT
+ * state record by attempt id, so a stale handler map can never draw the tank twice.
+ */
+private void confirmDoseStart(Map active, String evidence, Long powerAt) {
+    Map current = state.activeDose instanceof Map ? state.activeDose : null
+    if (current == null || current.attemptId == null || current.attemptId != active.attemptId) return
+    if (current.startConfirmed == true || current.booked == true) return
+    current.startConfirmed = true
+    current.booked = true
+    current.confirmedAt = now()
+    current.powerLowSince = null
+    current.lastPowerReportAt = (powerAt != null && !futureDated(powerAt)) ? powerAt : now()
+    state.activeDose = current
+    unschedule("verifyStartConfirmation")
+    // Safety monitoring must survive optional dashboard or notification failures.
+    scheduleRunPowerWatch(current)
+
+    recordConfirmedDose(current)
+    try {
+        publishTileTelemetry([fcVal: toBD(current.fcVal), fcTarget: toBD(current.fcTarget)])
+    } catch (e) {
+        log.error "WaterGuru Dosing Advisor: start confirmed but dashboard telemetry failed — ${e.message}"
+    }
+    String msg = "Chlorine pump started: ${current.ml} mL for ${formatDuration((current.seconds ?: 0) as Integer)} " +
+                 "at ${n1(firstNum(pumpRateMlPerMin, DEFAULT_PUMP_RATE_ML_MIN))} mL/min (${current.trigger}). " +
+                 "Start confirmed by ${evidence}. The volume is the planned estimate, not measured delivery. ${tankSummaryPlain()}"
+    log.warn "WaterGuru Dosing Advisor: ${msg}"
+    sendPumpNotice(msg)
+}
+
+/**
+ * A start that was not confirmed. Latches the fault (once) and requests OFF through the existing
+ * stop safety path, which keeps the cutoff armed and retries until the switch freshly reports OFF.
+ * The operator acknowledgement is required before the fault notice clears. Nothing is refunded or
+ * retried automatically.
+ */
+private void failDoseStart(Map active, String reason) {
+    Map current = state.activeDose instanceof Map ? state.activeDose : null
+    if (current == null || current.attemptId == null || current.attemptId != active.attemptId) return
+    unschedule("verifyStartConfirmation")
+    alertStartUnconfirmed(current, reason)
+    safeStopPump("the start was not confirmed", false)
+}
+
+/**
+ * Mark an unconfirmed attempt as faulted, once. Returns true only for the call that actually
+ * latched it, so callers can send the single start-fault alert without duplicates.
+ */
+private boolean markStartUnconfirmed(Map active, String reason) {
+    if (active == null || active.startConfirmed == true) return false
+    if (active.fault != null) return false
+    active.fault = "start-unconfirmed"
+    state.activeDose = active
+    latchStartFault("start-unconfirmed", reason, active)
+    return true
+}
+
+/** Send the one start-fault alert, if this call is the one that latched the fault. */
+private void alertStartUnconfirmed(Map active, String reason) {
+    if (!markStartUnconfirmed(active, reason)) return
+    String msg = "Chlorine pump start NOT confirmed: ${reason}. Requesting OFF; the independent cutoff stays armed until the switch freshly reports OFF. " +
+                 "The ${active.ml} mL attempt stays reserved and is not counted as delivered."
+    log.error "WaterGuru Dosing Advisor: ${msg}"
+    sendPumpNotice(msg)
+}
+
+/** Record the latch that keeps a fault visible until the operator acknowledges it. */
+private void latchStartFault(String kind, String reason, Map active) {
+    state.startFault = [kind: kind, at: now(), reason: reason,
+                        attemptId: active?.attemptId,
+                        ml: active?.ml, sample: active?.sample, stopAt: active?.stopAt]
+    state.remove("faultStopAlerted")
+}
+
+/** Monotonic id so an idempotent booking can be tied to one attempt. */
+private String nextAttemptId() {
+    Long seq = ((state.attemptSeq ?: 0L) as Long) + 1L
+    state.attemptSeq = seq
+    return "att-${seq}"
+}
+
+private boolean startUnconfirmed(Map active) {
+    return active != null && active.startConfirmed == false
+}
+
+/** True once an OFF has been requested for an attempt that was never confirmed. */
+private boolean startStopRequested(Map active) {
+    return active != null && active.startConfirmed != true && active.offRequestedAt != null
+}
+
+/**
+ * The timestamp an OFF must postdate to count as belonging to the current stop effort. It covers
+ * both a tracked dose (offRequestedAt, else the ON request) and a fault recovery that has no
+ * activeDose at all (a late ON after the dose was already cleaned up). Without the latter, a stale
+ * OFF delivered while the switch reports ON would clear the new recovery jobs.
+ */
+private Long stopEvidenceAnchor(Map active) {
+    if (active != null) return (active.offRequestedAt ?: active.requestedAt) as Long
+    if (state.startFault != null) return state.faultStopAt as Long
+    return null
+}
+
+private void scheduleRunPowerWatch(Map active) {
+    if (!powerConfirmationRequired()) return
+    runIn(RUN_POWER_CHECK_SECONDS, "verifyRunPower", [overwrite: true])
+}
+
+/**
+ * While a power-confirmed run is active, watch for loss of power or missing fresh power evidence.
+ * There are two independent bounds, each referenced to a real observation:
+ *   - a LOW reading starts a clock at the first low power reading and aborts after the grace;
+ *   - MISSING evidence is measured from the last usable power reading, so a device that stops
+ *     reporting is aborted after the same grace, not after a second full grace.
+ * The polling cadence is RUN_POWER_CHECK_SECONDS (10 s), well inside the 30 s default. A read or
+ * refresh exception cannot strand the pump: the stop jobs and cutoff are already armed and the
+ * watch keeps rescheduling until the bound is reached or the run ends.
+ */
+def verifyRunPower() {
+    Map active = state.activeDose instanceof Map ? state.activeDose : null
+    if (active == null || active.startConfirmed != true || active.fault != null) return
+    if (!powerConfirmationRequired()) return
+    Long stopAt = active.stopAt as Long
+    if (stopAt != null && now() >= stopAt) return   // the stop lifecycle owns it now
+
+    Long nowMs = now()
+    Long graceMs = (powerLossGraceSeconds() as long) * 1000L
+    Map pw = readDeviceReading("power")
+    BigDecimal watts = toBD(pw.value)
+    boolean usable = pw.ok == true && pw.at != null && !futureDated(pw.at)
+    boolean freshEvidence = usable && (nowMs - (pw.at as Long)) <= graceMs
+
+    if (freshEvidence) {
+        // A fresh report: good power clears the low clock, low power starts one. The last-usable
+        // timestamp is the single reference for the "missing reports" bound.
+        if (active.lastPowerReportAt == null || pw.at > (active.lastPowerReportAt as Long)) active.lastPowerReportAt = pw.at
+        if (watts != null && watts > 0G && watts >= startPowerMinWatts()) {
+            active.powerLowSince = null
+        } else {
+            if (active.powerLowSince == null) active.powerLowSince = nowMs
+            if (nowMs - (active.powerLowSince as Long) >= graceMs) {
+                failRunPower(active, "power stayed below ${n1(startPowerMinWatts())} W")
+                return
+            }
+        }
+    } else {
+        // No FRESH evidence (missing, unreadable, or older than the grace): one bound measured
+        // from the last usable reading -- never a second, fresh grace on top of the first.
+        Long anchor = (active.lastPowerReportAt ?: active.confirmedAt ?: active.requestedAt) as Long
+        if (nowMs - anchor >= graceMs) {
+            failRunPower(active, "no fresh power reading for ${formatDuration(powerLossGraceSeconds())}")
+            return
+        }
+    }
+    state.activeDose = active
+
+    requestPumpRefresh(active)
+    runIn(RUN_POWER_CHECK_SECONDS, "verifyRunPower", [overwrite: true])
+}
+
+private void failRunPower(Map active, String reason) {
+    Map current = state.activeDose instanceof Map ? state.activeDose : null
+    if (current == null || current.attemptId == null || current.attemptId != active.attemptId) return
+    if (current.fault != null) return
+    current.fault = "power-loss"
+    state.activeDose = current
+    unschedule("verifyRunPower")
+    latchStartFault("power-loss", "Power was lost during a confirmed run: ${reason}", current)
+    String msg = "Chlorine pump power LOST during a confirmed run (${reason}). Aborting safely; requesting OFF; the independent cutoff stays armed until the switch freshly reports OFF. " +
+                 "The ${current.ml} mL attempt stays reserved and delivery is now UNCERTAIN — operator review required; the tank was not automatically refunded."
+    log.error "WaterGuru Dosing Advisor: ${msg}"
+    sendPumpNotice(msg)
+    safeStopPump("the confirmed run lost power", false)
+}
+
 def stopDose() {
     Map active = state.activeDose instanceof Map ? state.activeDose : null
+    Long offAt = now()
+    if (active != null) { active.offRequestedAt = offAt; state.activeDose = active }
+    unschedule("verifyRunPower")
+    unschedule("verifyStartConfirmation")
+
+    // A scheduled stop firing before the start was confirmed terminates an UNCONFIRMED attempt.
+    // It must latch the start fault and use the unverified accounting notice, not quietly clear
+    // the dose and cancel the timeout job with no trace.
+    if (startUnconfirmed(active)) {
+        alertStartUnconfirmed(active, "the planned stop time arrived before the start was confirmed")
+    }
+
     try {
         try { if (pumpSwitch) pumpSwitch.off() }
         catch (e) { log.error "WaterGuru Dosing Advisor: pump OFF command failed — ${e.message}" }
 
         // The switch has been ASKED to stop, which is not the same as stopped. Nothing is
-        // disarmed and no dose is forgotten until it actually reports off: a relay that ignores
+        // disarmed and no dose is forgotten until it FRESHLY reports off: a relay that ignores
         // OFF is exactly the case the independent cutoff exists for, so cancelling it here on the
         // failure path would remove the last backstop at the moment it is most needed.
-        if (pumpIsOff()) {
-            finishStop(active ? "Chlorine pump stopped after scheduled ${formatDuration((active.seconds ?: 0) as Integer)} dose (${active.ml} mL planned). ${tankSummaryPlain()}" : null)
+        Long since = stopEvidenceAnchor(active)
+        if (pumpIsOff(since)) {
+            finishStop(active ? scheduledStopMessage(active) : null)
             return
         }
 
         if (active) {
-            String msg = "Chlorine pump stop requested after its scheduled ${formatDuration((active.seconds ?: 0) as Integer)} dose (${active.ml} mL planned), but the switch still reports ON. Retrying; the independent cutoff stays armed."
+            requestStopRefresh(active)
+            String msg = "Chlorine pump stop requested after its scheduled ${formatDuration((active.seconds ?: 0) as Integer)} dose (${active.ml} mL planned), but ${switchStatusPhrase()}. Retrying; the independent cutoff stays armed."
             log.warn "WaterGuru Dosing Advisor: ${msg}"
             sendPumpNotice(msg)
         }
@@ -1151,6 +1625,45 @@ def stopDose() {
 }
 
 /**
+ * A user-facing description of the switch's stop state that does not claim ON unless it is
+ * actually known. `switchStatusPhrase()` reads the device again.
+ */
+private String switchStatusPhrase() {
+    Map sw = readDeviceReading("switch")
+    if (sw.ok == true && sw.value?.toString() == "on") return "the switch reports ON"
+    return "its OFF has not been freshly confirmed"
+}
+
+/** Ask a supporting device to re-report during stop recovery, throttled. A refresh is a request,
+ *  never evidence: stop confirmation still requires a fresh reading to arrive. */
+private void requestStopRefresh(Map active) {
+    if (pumpSwitch == null) return
+    Long nowMs = now()
+    Long last = (active != null ? active.lastRefreshAt : state.stopRefreshAt) as Long
+    if (last != null && (nowMs - last) < (START_REFRESH_THROTTLE_SECONDS * 1000L)) return
+    if (active != null) active.lastRefreshAt = nowMs else state.stopRefreshAt = nowMs
+    try {
+        boolean supported = false
+        try { supported = pumpSwitch.hasCommand("refresh") } catch (Throwable ignored) { supported = false }
+        if (supported) pumpSwitch.refresh()
+    } catch (e) {
+        log.error "WaterGuru Dosing Advisor: pump refresh failed — ${e.message}"
+    }
+}
+
+/**
+ * The final stop notice for a scheduled dose. If the start was never confirmed, the notice must
+ * NOT claim a completed dose: the relay may have run, but nothing here proved the pump moved the
+ * planned volume, so the attempt is left reserved and marked for operator review.
+ */
+private String scheduledStopMessage(Map active) {
+    if (startUnconfirmed(active)) {
+        return "Chlorine pump stopped, but the start was never confirmed — no scheduled dose is claimed; the ${active.ml} mL attempt remains reserved and unreconciled for operator review."
+    }
+    return "Chlorine pump stopped after scheduled ${formatDuration((active.seconds ?: 0) as Integer)} dose (${active.ml} mL planned, an estimate not measured delivery). ${tankSummaryPlain()}"
+}
+
+/**
  * Confirm the pump is actually off, retrying until it is.
  *
  * The retries are bounded so this cannot spin forever, but the bound applies to the retrying,
@@ -1161,8 +1674,13 @@ def stopDose() {
  */
 def verifyPumpOff() {
     if (!pumpSwitch) return
+    Map active = state.activeDose instanceof Map ? state.activeDose : null
+    if (startUnconfirmed(active)) {
+        alertStartUnconfirmed(active, "the stop was being verified before the start was confirmed")
+    }
+    Long since = stopEvidenceAnchor(active)
     try {
-        if (pumpIsOff()) {
+        if (pumpIsOff(since)) {
             finishStop("WaterGuru Dosing Advisor: chlorine pump confirmed OFF")
             return
         }
@@ -1171,8 +1689,9 @@ def verifyPumpOff() {
         state.stopAttempts = attempt
         try { pumpSwitch.off() }
         catch (e) { log.error "WaterGuru Dosing Advisor: retry ${attempt} OFF command failed — ${e.message}" }
+        requestStopRefresh(active)
 
-        if (pumpIsOff()) {
+        if (pumpIsOff(since)) {
             finishStop("Chlorine pump stopped on retry ${attempt}.")
             return
         }
@@ -1184,7 +1703,7 @@ def verifyPumpOff() {
             String tail = armed
                 ? "The independent cutoff is armed, but the pump may need to be stopped by hand."
                 : "The independent cutoff is DISABLED (watchdogAnyPumpRun is off), so nothing will retry automatically — stop the pump by hand."
-            String msg = "EMERGENCY: chlorine pump still reports ON after ${attempt} OFF attempts. ${tail}"
+            String msg = "EMERGENCY: chlorine pump OFF not freshly confirmed after ${attempt} OFF attempts (${switchStatusPhrase()}). ${tail}"
             log.error "WaterGuru Dosing Advisor: ${msg}"
             sendPumpNotice(msg)
             return
@@ -1193,7 +1712,7 @@ def verifyPumpOff() {
         log.error "WaterGuru Dosing Advisor: pump verification hit an unexpected error — ${e.message}; retrying"
     }
 
-    log.warn "WaterGuru Dosing Advisor: chlorine pump still on; retrying in ${STOP_RETRY_SECONDS}s"
+    log.warn "WaterGuru Dosing Advisor: chlorine pump OFF not freshly confirmed; retrying in ${STOP_RETRY_SECONDS}s"
     runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
     // Re-assert the backstop on EVERY unconfirmed outcome, not only at exhaustion. The cutoff can
     // be missing for reasons this method did not cause -- it was never armed, a queue reset dropped
@@ -1215,10 +1734,25 @@ def verifyPumpOff() {
  * for the cutoff, which the scheduler had already removed from the queue, that meant the last
  * backstop disappeared while a dose was still recorded as running.
  */
-private boolean pumpIsOff() {
+private boolean pumpIsOff(Long since = null) {
     if (!pumpSwitch) return true
     try {
-        return pumpSwitch.currentValue("switch")?.toString() == "off"
+        String value
+        Long at = null
+        def st = null
+        try { st = pumpSwitch.currentState("switch", true) } catch (Throwable ignored) { st = null }
+        if (st != null) {
+            value = st.value?.toString()
+            at = stateDateToMs(st.date)
+        } else {
+            value = pumpSwitch.currentValue("switch")?.toString()
+        }
+        if (value != "off") return false
+        if (futureDated(at)) return false   // future-dated OFF
+        // When a fresh OFF was requested, a reading that is undated or predates the request has
+        // not confirmed anything: a cached pre-attempt OFF must never disarm the new backstop.
+        if (since != null && (at == null || at < since)) return false
+        return true
     } catch (e) {
         log.error "WaterGuru Dosing Advisor: could not read the pump switch state \u2014 ${e.message}"
         return false
@@ -1227,17 +1761,31 @@ private boolean pumpIsOff() {
 
 /**
  * Disarm everything and forget the dose. Called ONLY on a confirmed-off reading, so the safety
- * net is never removed on the strength of an unverified command.
+ * net is never removed on the strength of an unverified command. The latched start/power FAULT is
+ * deliberately NOT cleared here -- it stays visible until the operator acknowledges it.
  */
 private void finishStop(String msg) {
+    Map active = state.activeDose instanceof Map ? state.activeDose : null
+    // Every confirmed-OFF path comes here. Latch an unconfirmed attempt before discarding it,
+    // including an OFF event arriving at the planned end before either timer has fired.
+    alertStartUnconfirmed(active, "the pump reported OFF before the start was confirmed")
+    if (active?.startConfirmed == true && active.fault != null) {
+        String reason = active.fault == "emergency-stop" ? "the emergency cutoff" : active.fault.toString()
+        msg = "Chlorine pump confirmed OFF after ${reason}. ${active.ml} mL was planned; delivery is UNCERTAIN. Review and acknowledge the pump fault before future dosing."
+    }
     unschedule("stopDose")
     unschedule("verifyPumpOff")
     unschedule("emergencyPumpOff")
+    unschedule("verifyStartConfirmation")
+    unschedule("verifyRunPower")
     state.remove("emergencyJobScheduled")
     state.remove("activeDose")
     state.remove("stopAttempts")
     state.remove("emergencyAttempts")
     state.remove("emergencyDeadline")
+    // The stop effort is over: clear its anchor so a later unrelated OFF is judged on its own.
+    state.remove("faultStopAt")
+    state.remove("stopRefreshAt")
     if (msg) {
         log.info "WaterGuru Dosing Advisor: ${msg}"
         sendPumpNotice(msg)
@@ -1255,10 +1803,28 @@ private void finishStop(String msg) {
  */
 private void safeStopPump(String reason, boolean notify = false) {
     boolean wasActive = state.activeDose != null
+    Map active = state.activeDose instanceof Map ? state.activeDose : null
+    Long offAt = now()
+    if (active != null) {
+        active.offRequestedAt = offAt
+        state.activeDose = active
+    } else if (state.startFault != null && state.faultStopAt == null) {
+        // A fault recovery with no active dose (a late ON after cleanup) needs its own anchor: a
+        // stale OFF dated before this moment must not be able to clear the new recovery jobs.
+        state.faultStopAt = offAt
+    }
 
     // The planned end of the dose is no longer wanted ...
     unschedule("stopDose")
+    unschedule("verifyRunPower")
+    unschedule("verifyStartConfirmation")
     // ... but the cutoff is deliberately NOT cancelled here: it is the backstop for this moment.
+
+    // If the attempt was never confirmed, stopping it is itself a faulted termination: latch and
+    // alert once, and keep the unverified accounting semantics, whatever the reason for the stop.
+    if (startUnconfirmed(active)) {
+        alertStartUnconfirmed(active, "the pump was stopped (${reason}) before the start was confirmed")
+    }
 
     try {
         if (pumpSwitch) pumpSwitch.off()
@@ -1266,12 +1832,21 @@ private void safeStopPump(String reason, boolean notify = false) {
         log.error "WaterGuru Dosing Advisor: unable to send the stop command — ${e.message}"
     }
 
-    if (pumpIsOff()) {
-        finishStop(notify || wasActive ? "Chlorine pump stopped: ${reason}." : null)
+    if (pumpIsOff(stopEvidenceAnchor(active))) {
+        String stopMsg
+        if (active != null && startUnconfirmed(active)) {
+            stopMsg = "Chlorine pump stopped; the start was never confirmed — no scheduled dose is claimed; the ${active.ml} mL attempt remains reserved."
+        } else if (notify || wasActive) {
+            stopMsg = "Chlorine pump stopped: ${reason}."
+        } else {
+            stopMsg = null
+        }
+        finishStop(stopMsg)
         return
     }
 
-    String msg = "Chlorine pump stop requested (${reason}) but the switch still reports ON. Retrying; the independent cutoff stays armed."
+    requestStopRefresh(active)
+    String msg = "Chlorine pump stop requested (${reason}) but ${switchStatusPhrase()}. Retrying; the independent cutoff stays armed."
     log.warn "WaterGuru Dosing Advisor: ${msg}"
     sendPumpNotice(msg)
     state.stopAttempts = 0
@@ -1280,35 +1855,139 @@ private void safeStopPump(String reason, boolean notify = false) {
 }
 
 /**
- * A reported off from the device is a CONFIRMED off, whatever the clock says.
- *
- * The old version only tidied up when the event arrived more than 3 s before the planned stop, so
- * a late off -- or the cutoff firing after the relay gave up by itself -- left activeDose set, and
- * doseSafetyBlocks() then refused every later dose with "a dose is already running".
+ * Device reports trigger the same verifiers as timers. OFF evidence must pass the timestamp and
+ * contradictory-ON checks before shared cleanup can release the active dose.
  */
 def pumpSwitchHandler(evt) {
-    if (evt?.value?.toString() == "on") {
-        if (state.activeDose) return
-        if (watchdogAnyPumpRun == true) {
-            armEmergencyPumpCutoff("pump start outside this app")
+    String name = evt?.name?.toString() ?: "switch"
+    String value = evt?.value?.toString()
+    if (name == "power") { handlePumpPowerEvent(evt); return }
+    if (value == "on")  { handlePumpOnEvent(evt);  return }
+    if (value == "off") { handlePumpOffEvent(evt); return }
+}
+
+/**
+ * A power event during a run is a fast path for the timer-driven checks, never a way to skip
+ * them: it only triggers the same bounded verifiers, which read the timestamped state.
+ */
+private void handlePumpPowerEvent(evt) {
+    Map active = state.activeDose instanceof Map ? state.activeDose : null
+    if (active == null || active.fault != null || startStopRequested(active)) return
+    if (active.startConfirmed == false) {
+        verifyStartConfirmation()
+    } else if (active.startConfirmed == true && powerConfirmationRequired()) {
+        BigDecimal watts = toBD(evt?.value)
+        if (watts == null || watts < startPowerMinWatts()) verifyRunPower()
+    }
+}
+
+/**
+ * An ON report. While a start is still being confirmed it is only a hint: the verifier decides,
+ * using a FRESH ON plus power. Once a start has faulted (or an OFF was requested), a late/replayed
+ * ON must NOT reclassify it as a successful dose -- the fault and stop protection stay in place.
+ * With no active attempt at all but an unacknowledged fault pending, this is a stop-only state: OFF
+ * is sent immediately rather than arming a fresh full window and calling it a start.
+ */
+private void handlePumpOnEvent(evt) {
+    Map active = state.activeDose instanceof Map ? state.activeDose : null
+    if (active != null) {
+        if (active.startConfirmed == false) {
+            if (active.fault != null || startStopRequested(active)) {
+                log.warn "WaterGuru Dosing Advisor: pump reported ON after the start was aborted; keeping the fault and stop protection"
+                stopOnlyForPendingFault("an aborted start is still unconfirmed")
+            } else {
+                verifyStartConfirmation()
+            }
         }
-    } else if (evt?.value?.toString() == "off") {
-        Map active = state.activeDose instanceof Map ? state.activeDose : null
-        boolean wasActive = active != null
-        Long stopAt = ((active?.stopAt ?: 0L) as Long)
-        boolean early = wasActive && now() + 3000L < stopAt
-        if (early) {
-            finishStop("Chlorine pump stopped before the planned dose completed.")
-        } else if (wasActive) {
-            // A confirmed off at or after the planned stop is the normal end of a dose: the relay
-            // simply reported its off a little late. This is the path that used to finish silently,
-            // so the final "stopped" notice never arrived after a delayed OFF. finishStop() clears
-            // activeDose, so any duplicate event or an off that follows synchronous cleanup is
-            // already idle and stays silent.
-            finishStop("Chlorine pump stopped after scheduled ${formatDuration((active.seconds ?: 0) as Integer)} dose (${active.ml} mL planned). ${tankSummaryPlain()}")
-        } else {
-            finishStop(null)
+        return
+    }
+    if (state.startFault != null) {
+        Long evtAt = eventDateMs(evt)
+        Long anchor = state.faultStopAt instanceof Number ? (state.faultStopAt as Long) : null
+        Map cur = readDeviceReading("switch")
+        boolean positivelyOff = cur.ok == true && cur.value?.toString() == "off" && !futureDated(cur.at)
+        boolean staleOnEvent = evtAt != null && anchor != null && evtAt < anchor
+        if (staleOnEvent && positivelyOff) {
+            log.warn "WaterGuru Dosing Advisor: ignoring a stale ON superseded by newer recovery evidence"
+            return
         }
+        // Advance the recovery evidence anchor to THIS observation, so an OFF reported before it
+        // cannot confirm the recovery. This does not touch the emergency deadline, and arming
+        // never postpones an earlier one.
+        state.faultStopAt = now()
+        log.warn "WaterGuru Dosing Advisor: pump reported ON while a fault is pending; treating it as stop-only"
+        stopOnlyForPendingFault("an unacknowledged fault is pending")
+        return
+    }
+    if (watchdogAnyPumpRun == true) {
+        armEmergencyPumpCutoff("pump start outside this app")
+    }
+}
+
+/**
+ * A faulted attempt is a stop-only state: request OFF immediately and keep protection until a
+ * fresh OFF arrives. Never arm a fresh full cut-off window as if this were a new commanded run.
+ */
+private void stopOnlyForPendingFault(String why) {
+    if (state.faultStopAlerted != true) {
+        state.faultStopAlerted = true
+        sendPumpNotice("Chlorine pump reported ON while an unacknowledged fault is pending. Requesting OFF now; no new dose will start until the fault is acknowledged.")
+    }
+    safeStopPump(why, false)
+}
+
+/**
+ * An OFF report. A device off is confirmed ONLY when it belongs to this attempt: either the
+ * current switch state is freshly off at/after the attempt anchor (the ON request, or the OFF
+ * request once one was sent), or the event itself is dated after that anchor. An older OFF event
+ * is rejected when a newer ON state contradicts it, so a stale event cannot cancel protection
+ * while the switch reports ON.
+ */
+private void handlePumpOffEvent(evt) {
+    Map active = state.activeDose instanceof Map ? state.activeDose : null
+    boolean wasActive = active != null
+    boolean recovering = wasActive || (state.startFault != null && state.faultStopAt != null)
+    Long anchor = stopEvidenceAnchor(active)
+    Long evtAt = eventDateMs(evt)
+
+    if (recovering && anchor != null) {
+        Map cur = readDeviceReading("switch")
+        Long curAt = cur.at
+        boolean curOffFresh = cur.ok == true && cur.value?.toString() == "off" &&
+                              curAt != null && curAt >= anchor && !futureDated(curAt)
+        boolean evtFresh = evtAt != null && evtAt >= anchor && !futureDated(evtAt)
+        boolean newerOnContradicts = cur.ok == true && cur.value?.toString() == "on" && curAt != null &&
+                                      (evtAt == null || curAt >= evtAt)
+        if (!curOffFresh && (!evtFresh || newerOnContradicts)) {
+            // An old report is NOT evidence of a stop. Ignore it: do not manufacture a stop
+            // attempt, latch a fault, or re-arm anything from it. The existing start/run/stop/
+            // cutoff jobs (or an already-running recovery) continue unchanged.
+            log.warn "WaterGuru Dosing Advisor: ignoring a stale or out-of-order OFF report; existing protection unchanged"
+            return
+        }
+    }
+
+    Long stopAt = ((active?.stopAt ?: 0L) as Long)
+    boolean early = wasActive && now() + 3000L < stopAt
+    if (early) {
+        // An early, unconfirmed stop terminates an unconfirmed attempt: latch and say so.
+        String tail = ""
+        if (startUnconfirmed(active)) {
+            alertStartUnconfirmed(active, "the pump reported OFF before the start was confirmed")
+            tail = " The start was never confirmed, so no scheduled dose is claimed."
+        }
+        finishStop("Chlorine pump stopped before the planned dose completed.${tail}")
+    } else if (wasActive) {
+        // A confirmed off at or after the planned stop is the normal end of a dose: the relay
+        // simply reported its off a little late. finishStop() clears activeDose, so any duplicate
+        // event or an off that follows synchronous cleanup is already idle and stays silent. If
+        // the start was never confirmed, the notice says so and does not claim the dose ran.
+        finishStop(startUnconfirmed(active)
+            ? "Chlorine pump stopped, but the start was never confirmed — no scheduled dose is claimed; the ${active.ml} mL attempt remains reserved and unreconciled for operator review."
+            : "Chlorine pump stopped after scheduled ${formatDuration((active.seconds ?: 0) as Integer)} dose (${active.ml} mL planned, an estimate not measured delivery). ${tankSummaryPlain()}")
+    } else {
+        // No tracked dose, but a fresh OFF confirms a fault recovery's stop effort.
+        finishStop(null)
     }
 }
 
@@ -1369,25 +2048,33 @@ def emergencyPumpOff() {
     state.remove("emergencyDeadline")
     state.remove("emergencyJobScheduled")
     if (!pumpSwitch) return
-    if (pumpIsOff()) {
-        // Already off. A reported off IS the confirmation, so release the dose properly rather
-        // than returning with activeDose still set -- which left doseSafetyBlocks() refusing
-        // every later dose with "a dose is already running".
+    Map active = state.activeDose instanceof Map ? state.activeDose : null
+    // Record why we are stopping BEFORE asking the relay. Real drivers confirm asynchronously;
+    // the eventual OFF event/retry must preserve the same fault as an immediate OFF response.
+    if (active?.startConfirmed == true && active.fault == null) {
+        active.fault = "emergency-stop"
+        state.activeDose = active
+        latchStartFault("emergency-stop", "The emergency cutoff was needed; delivery and completion are uncertain and require operator review.", active)
+    }
+    Long anchor = stopEvidenceAnchor(active)
+    if (pumpIsOff(anchor)) {
+        // Already off. Complete the full cleanup (not a hand-clearing of activeDose), so no
+        // verification or power-watch job can survive the cutoff and later emit a success.
+        alertStartUnconfirmed(active, "the emergency cutoff found the pump already off before the start was confirmed")
         finishStop(null)
         return
     }
 
+    Long offAt = now()
+    if (active != null) { active.offRequestedAt = offAt; state.activeDose = active }
     Integer attempt = ((state.emergencyAttempts ?: 0) as Integer) + 1
     state.emergencyAttempts = attempt
     try { pumpSwitch.off() }
     catch (e) { log.error "WaterGuru Dosing Advisor: cutoff OFF command failed — ${e.message}" }
+    requestStopRefresh(active)
 
-    if (pumpIsOff()) {
-        state.remove("activeDose")
-        state.remove("emergencyAttempts")
-        String msg = "EMERGENCY cutoff confirmed the chlorine pump OFF after ${n1(firstNum(failsafePumpRunMinutes, 20G))} minutes."
-        log.error "WaterGuru Dosing Advisor: ${msg}"
-        sendPumpNotice(msg)
+    if (pumpIsOff(stopEvidenceAnchor(active))) {
+        finishStop("EMERGENCY cutoff confirmed the chlorine pump OFF after ${n1(firstNum(failsafePumpRunMinutes, 20G))} minutes.")
         return
     }
 
@@ -1400,6 +2087,10 @@ def emergencyPumpOff() {
 private List doseSafetyBlocks(Map result) {
     def blocks = []
     if (!pumpSwitch) blocks << "no dedicated pump switch selected"
+    // A latched fault is a SAFETY GATE, not a UI notice: no start may be attempted (and no new
+    // attempt may be reserved) while a fault or a standalone stop recovery is unreviewed.
+    if (state.startFault != null) blocks << "an unacknowledged pump fault must be reviewed first"
+    if (state.faultStopAt != null) blocks << "a pump stop is still being recovered"
     if (state.activeDose) blocks << "a dose is already running"
     if (pumpSwitch?.currentValue("switch")?.toString() == "on") blocks << "pump switch is already on"
     if ((dosingMode ?: "ADVISORY").toString() == "AUTO" && !autoDoseWindowOpen()) {
@@ -1472,21 +2163,86 @@ private boolean autoDoseWindowOpen() {
 }
 
 private boolean autoDoseAlreadyRanToday() {
-    Long lastRun = state.lastDose?.time != null ? (state.lastDose.time as Long) : null
-    if (lastRun == null) return false
-    String today = new Date().format("yyyy-MM-dd", location.timeZone)
-    String runDay = new Date(lastRun).format("yyyy-MM-dd", location.timeZone)
-    return runDay == today
+    String today = nowDate().format("yyyy-MM-dd", location.timeZone)
+    List times = []
+    if (state.lastDose?.time instanceof Number) times << (state.lastDose.time as Long)
+    // A FAILED attempt must also block a second AUTO dose today: the reservation is safety
+    // accounting, so "eligible" cannot depend on whether the start was confirmed.
+    if (state.lastAttempt?.time instanceof Number) times << (state.lastAttempt.time as Long)
+    return times.any { new Date(it).format("yyyy-MM-dd", location.timeZone) == today }
 }
 
-private void recordDoseLedger(BigDecimal ml, String sample, Integer seconds) {
+/**
+ * Reserve the safety accounting for an attempt BEFORE the relay is asked to move.
+ *
+ * The sample, the planned volume and the daily total are LIMITS, not telemetry: a start that is
+ * never confirmed must still consume them, or a failed attempt would make another automatic dose
+ * eligible and could push the real total over the daily cap. Success telemetry (lastDose) and
+ * tank inventory are deliberately NOT touched here.
+ */
+private void reserveDoseAttempt(BigDecimal ml, String sample, Integer seconds) {
     String day = doseDayKey()
     BigDecimal prior = (state.doseDay == day) ? (toBD(state.doseMlToday) ?: 0G) : 0G
     state.doseDay = day
     state.doseMlToday = (prior + ml).toString()
     state.lastDosedSample = sample
-    state.lastDose = [time: now(), ml: n0(ml), mlRaw: ml.toString(), seconds: seconds, sample: sample]
-    recordTankUse(ml)
+    state.lastAttempt = [time: now(), ml: n0(ml), mlRaw: ml.toString(),
+                         seconds: seconds, sample: sample]
+}
+
+/**
+ * Record a CONFIRMED start. The attempt was already reserved before ON, so only the success
+ * telemetry and the tank draw happen here. Idempotent by attempt id: an overlapping or replayed
+ * handler cannot draw the tank or reset lastDose a second time.
+ */
+private void recordConfirmedDose(Map active) {
+    Map current = state.activeDose instanceof Map ? state.activeDose : null
+    if (current == null || current.attemptId == null || current.attemptId != active.attemptId) return
+    if (current.startConfirmed != true) return
+    if (state.lastBookedAttemptId == active.attemptId) return
+    String attemptId = active.attemptId?.toString()
+    BigDecimal ml = toBD(active.mlRaw) ?: toBD(active.ml)
+    state.lastDose = [time: now(), ml: active.ml, mlRaw: active.mlRaw,
+                      seconds: active.seconds, sample: active.sample,
+                      planned: true, confirmed: true,
+                      attemptId: attemptId, startRequestedAt: active.requestedAt]
+    state.lastBookedAttemptId = attemptId
+    if (ml != null && ml > 0) recordTankUse(ml)
+}
+
+/**
+ * Clear the latched start/power fault after operator review.
+ *
+ * Releases the fault gate only once stop recovery has finished and the switch has freshly
+ * reported OFF after the fault. It never energises the pump, never
+ * removes an active/unconfirmed stop, never refunds the attempt reservation, and never resets the
+ * daily/sample limits -- so acknowledging can never be a way to get an extra dose.
+ */
+private void acknowledgePumpFault() {
+    Map f = state.startFault instanceof Map ? state.startFault : null
+    if (f == null) {
+        sendPumpNotice("No pump fault is pending acknowledgement.")
+        return
+    }
+    if (state.activeDose != null) {
+        sendPumpNotice("Cannot acknowledge the pump fault yet: a stop is still being recovered. Wait until the switch freshly reports OFF.")
+        return
+    }
+    Long faultAt = f.at instanceof Number ? (f.at as Long) : null
+    Long recoveryAnchor = state.faultStopAt instanceof Number ? (state.faultStopAt as Long) : null
+    Long requireAfter = (recoveryAnchor != null && (faultAt == null || recoveryAnchor > faultAt)) ? recoveryAnchor : faultAt
+    if (!pumpIsOff(requireAfter)) {
+        sendPumpNotice("Cannot acknowledge the pump fault yet: the switch has not freshly reported OFF since the fault. Stop recovery stays active.")
+        return
+    }
+    // The switch is freshly OFF. Run the FULL stop cleanup first, so no verifyPumpOff or
+    // emergencyPumpOff timer can survive the acknowledgement and later fire against a new run.
+    finishStop(null)
+    state.remove("startFault")
+    state.remove("faultStopAt")
+    state.remove("stopRefreshAt")
+    state.remove("faultStopAlerted")
+    sendPumpNotice("Pump fault acknowledged (${f.reason ?: f.kind}). The attempt stays reserved and normal sample/day limits are unchanged.")
 }
 
 private BigDecimal tankCapacityMl() {
@@ -1569,8 +2325,8 @@ private void recordTankUse(BigDecimal ml) {
         sendPumpNotice(msg)
     }
 
-    // Display-only, but startDose() calls recordDoseLedger() immediately after the pump ON
-    // command, so this must not be able to throw into the ledger bookkeeping that precedes it.
+    // Display-only, but confirmDoseStart() calls recordTankUse() as part of the confirmed-start
+    // bookkeeping, so this must not be able to throw into the ledger bookkeeping that precedes it.
     try {
         refreshTankLinesInPreview()
     } catch (e) {
@@ -1689,8 +2445,12 @@ private BigDecimal doseMlToday() {
 }
 
 private String doseDayKey() {
-    return new Date().format("yyyy-MM-dd", location?.timeZone ?: TimeZone.getDefault())
+    return nowDate().format("yyyy-MM-dd", location?.timeZone ?: TimeZone.getDefault())
 }
+
+/** The clock the app uses everywhere. `now()` is Hubitat's injected clock, so this is exactly
+ *  `new Date()` on a hub but follows the test harness's fake clock off-hub. */
+private Date nowDate() { new Date(now()) }
 
 private void sendNotice(String msg) {
     if (!notifyDevices) {
@@ -1759,7 +2519,7 @@ private void updateTileDevice(Map r) {
         dev.sendEvent(name: "recommendation", value: clip(r.headline ?: "—", 190))
         dev.sendEvent(name: "detail",         value: clip(r.text ?: "", 1000))
         dev.sendEvent(name: "tileHtml",       value: clip(buildTileHtml(r), 1024))
-        dev.sendEvent(name: "lastCalc",       value: new Date())
+        dev.sendEvent(name: "lastCalc",       value: nowDate())
         // The same instant in epoch milliseconds. lastCalc is a locale-formatted string that
         // cannot be parsed reliably off-hub, so an external historian reading the tile would
         // otherwise have to stamp a target snapshot at collection time instead of at the
@@ -1773,8 +2533,10 @@ private void updateTileDevice(Map r) {
 
 /**
  * Publish machine-readable values separately from the human preview. The last
- * dose is recorded only after the pump ON command succeeds, so external totals
- * represent commanded pump runs rather than recommendations or previews.
+ * dose is recorded only after a start has been CONFIRMED (a fresh ON, plus fresh power above the
+ * minimum for a power-capable switch), so external totals represent pump runs this app actually
+ * observed running rather than recommendations, previews, or a bare on() return. The volume is
+ * still the planned estimate, not a measurement of liquid delivery.
  */
 private void publishTileTelemetry(Map r = null, def tile = null) {
     if (createTile == false) return
@@ -1814,7 +2576,7 @@ private void publishTileTelemetry(Map r = null, def tile = null) {
 private String buildTileHtml(Map r) {
     String color = tileColor(r.status)
     String word  = (r.status ?: "").toString()
-    String ts    = new Date().format("EEE h:mm a", location?.timeZone ?: TimeZone.getDefault())
+    String ts    = nowDate().format("EEE h:mm a", location?.timeZone ?: TimeZone.getDefault())
     String label = clip((r.label ?: "pool").toString(), 24)
     String head  = clip((r.headline ?: "").toString(), 46)
     String cass  = attrRaw("cassetteType")
