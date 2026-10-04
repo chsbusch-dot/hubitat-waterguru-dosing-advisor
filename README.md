@@ -225,6 +225,23 @@ available, the app estimates generically:
 
 Every one of these also refreshes the dashboard tile (if enabled).
 
+### Pump start confirmation (2.4.0)
+
+In APPROVAL and AUTO mode an ON command is not taken as a running pump. The pump
+switch must report on within 10 seconds; if it does not, ON is sent once more,
+and after another 10 seconds the start is abandoned. On a plug that reports
+power, the pump must then show power (the driver's `accessory` attribute on, or
+`power` at or above *Minimum pump power that confirms a start*, default 3 W)
+within 15 seconds, with one `refresh()` along the way. Set that minimum to 0 to
+confirm by the switch report only.
+
+The dose is timed from the confirmed start, and only a confirmed start is booked
+against the tank, the daily total and the duplicate-sample lock. An abandoned
+start sends OFF, books nothing and sends an alert. Because a Z-Wave ON can still
+reach the plug minutes later, any ON seen within 30 minutes of an abandoned start
+is treated as that delayed ON and stopped at once (this also stops a manual run
+started in that window), and one precautionary OFF follows after 5 minutes.
+
 ## License
 
 [Apache License 2.0](LICENSE) — matching the WaterGuru Integration app's license.

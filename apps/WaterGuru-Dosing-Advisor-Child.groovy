@@ -27,6 +27,16 @@
  * All doses are ESTIMATES. Always confirm with your own test kit before adding.
  *
  * Version history
+ *   2.4.0 - Start confirmation (WOR-714). An ON command is no longer taken as a running pump. The
+ *           switch must report on within 10 s (one retry, then the start is abandoned), and on a
+ *           metered plug the pump must then show power (accessory on, or power at or above the
+ *           configured minimum, default 3 W) within 15 s. The dose is timed from the confirmed
+ *           start and booked against the tank, the daily total and the duplicate-sample lock
+ *           only once it is confirmed; an abandoned start sends OFF, books nothing and alerts.
+ *           Because an abandoned ON can still be delivered minutes later (Oct 3: 3 min), an ON
+ *           seen within 30 min of an abandoned start is stopped at once, and one precautionary
+ *           OFF follows after 5 min. An OFF report while a start is unconfirmed no longer
+ *           completes the dose.
  *   2.3.2 - Confirmed-stop notice. A dose whose OFF is reported late now sends the one final
  *           "stopped" notification when the switch positively reports off, instead of silently
  *           clearing the dose and its verification. Duplicate or idle OFF events stay silent,
@@ -115,7 +125,7 @@
 
 import groovy.transform.Field
 
-def appVersion() { "2.3.2" }
+def appVersion() { "2.4.0" }
 
 definition(
     name:        "WaterGuru Dosing Advisor Pool",
@@ -174,6 +184,22 @@ preferences {
 // switch actually reads off. See stopDose()/verifyPumpOff().
 @Field static final int        STOP_MAX_ATTEMPTS       = 5
 @Field static final int        STOP_RETRY_SECONDS      = 20
+
+// Start confirmation. An ON command is a request, not a running pump: on Oct 3 the plug acted on
+// the 19:45:24 ON at 19:48:25, after the app had already booked the dose and "stopped" it. So the
+// switch must report on within START_CONFIRM_SECONDS (one retry, START_MAX_ATTEMPTS in all), and a
+// metered plug must then show power within POWER_CONFIRM_SECONDS, with one refresh() after
+// POWER_REFRESH_SECONDS in case the plug's own report threshold does not fire. Nothing is booked
+// before that. An abandoned ON may still arrive late, so for LATE_START_GUARD_MINUTES any ON with
+// no dose running is stopped at once, and one precautionary OFF is sent after
+// LATE_START_SWEEP_SECONDS in case the late ON's report is lost as well.
+@Field static final int        START_CONFIRM_SECONDS   = 10
+@Field static final int        START_MAX_ATTEMPTS      = 2
+@Field static final int        POWER_CONFIRM_SECONDS   = 15
+@Field static final int        POWER_REFRESH_SECONDS   = 5
+@Field static final int        LATE_START_GUARD_MINUTES = 30
+@Field static final int        LATE_START_SWEEP_SECONDS = 300
+@Field static final BigDecimal DEFAULT_PUMP_MIN_WATTS  = 3G
 @Field static final BigDecimal FC_LOSS_MODELED_DEFAULT = 3.0G
 @Field static final BigDecimal FC_LOSS_COVER_FACTOR    = 0.6G
 
@@ -273,6 +299,9 @@ def mainPage() {
             input "pumpRateMlPerMin", "decimal",
                 title: "Pump delivery rate (mL/min)",
                 defaultValue: 185, required: true
+            input "pumpMinWatts", "decimal",
+                title: "Minimum pump power that confirms a start (W; 0 = switch report only)",
+                defaultValue: 3, required: false
 
             input "circulationSwitch", "capability.switch",
                 title: "Pool circulation/filter switch (recommended interlock)",
@@ -586,6 +615,11 @@ def initialize() {
     }
     if (pumpSwitch) {
         subscribe(pumpSwitch, "switch", "pumpSwitchHandler")
+        // Power evidence for start confirmation. Harmless on a plug without these attributes;
+        // verifyPumpPower() also reads the current state, so a missing subscription only slows
+        // confirmation down rather than failing it.
+        subscribe(pumpSwitch, "power", "pumpPowerHandler")
+        subscribe(pumpSwitch, "accessory", "pumpPowerHandler")
     }
 
     if (dailyDigest == true && digestTime) {
@@ -611,6 +645,8 @@ def initialize() {
         armEmergencyPumpCutoff("initialize found a dose still recorded as active")
         runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
     }
+    // The same queue reset drops the precautionary OFF that follows an abandoned start.
+    if (lateStartGuardActive()) runIn(LATE_START_SWEEP_SECONDS, "lateStartSweep", [overwrite: true])
 
     // Populate the tile right away so it is never blank after a save.
     refreshTile()
@@ -1086,13 +1122,16 @@ private void startDose(Map result, String trigger) {
     Integer seconds = result.runSeconds as Integer
     BigDecimal ml = result.doseMl as BigDecimal
     String sample = result.sampleKey?.toString()
-    Long stopAt = now() + (seconds * 1000L)
 
-    // Establish the stop job and state before energizing the physical output.
-    state.activeDose = [ml: n0(ml), mlRaw: ml.toString(), seconds: seconds,
-                        sample: sample, started: now(), stopAt: stopAt]
-    runIn(seconds, "stopDose", [overwrite: true])
-    runIn(seconds + 15, "verifyPumpOff", [overwrite: true])
+    // Phase "starting": the ON has been asked for and nothing else is assumed. The scheduled stop,
+    // the ledger and the "started" notice all wait for confirmPumpSwitchOn()/bookDose(). Only the
+    // independent cutoff is armed up front, because it is the backstop if the relay closes and
+    // every report about it is lost.
+    state.remove("lateStartGuardUntil")
+    state.activeDose = [ml: n0(ml), mlRaw: ml.toString(), seconds: seconds, sample: sample,
+                        trigger: trigger, fc: result.fcVal?.toString(), target: result.fcTarget?.toString(),
+                        phase: "starting", requested: now(), startAttempts: 1]
+    runIn(START_CONFIRM_SECONDS, "verifyPumpStart", [overwrite: true])
     armEmergencyPumpCutoff("app-started dose")
     try {
         pumpSwitch.on()
@@ -1103,7 +1142,12 @@ private void startDose(Map result, String trigger) {
         // cleared activeDose and left emergencyJobScheduled=true, which has two failures in it:
         // the orphaned flag makes the next arm believe a cutoff is pending (so no timer is ever
         // recreated), and a pump that did energise is left running with no dose recorded and
-        // nothing scheduled to stop it.
+        // nothing scheduled to stop it. The dose is marked abandoned first, so a switch that
+        // reports on afterwards is stopped rather than confirmed and booked.
+        unschedule("verifyPumpStart")
+        Map failed = activeDoseMap()
+        if (failed) { failed.phase = "abandoned"; state.activeDose = failed }
+        armLateStartGuard()
         String msg = "Chlorine pump failed to start: ${e.message}"
         log.error "WaterGuru Dosing Advisor: ${msg}"
         sendPumpNotice(msg)
@@ -1111,16 +1155,282 @@ private void startDose(Map result, String trigger) {
         return
     }
 
-    recordDoseLedger(ml, sample, seconds)
-    publishTileTelemetry(result)
+    // A driver that updates the switch synchronously (or a test fake) confirms at once. On a real
+    // Z-Wave plug the report arrives later through pumpSwitchHandler(), or not at all.
+    if (pumpIsOn()) {
+        confirmPumpSwitchOn("switch on")
+    } else {
+        log.info "WaterGuru Dosing Advisor: chlorine pump ON requested for ${n0(ml)} mL (${formatDuration(seconds)}); waiting up to ${START_CONFIRM_SECONDS}s for the switch to report on"
+    }
+}
+
+private Map activeDoseMap() { state.activeDose instanceof Map ? state.activeDose : null }
+
+private boolean pumpIsOn() {
+    if (!pumpSwitch) return false
+    try {
+        return pumpSwitch.currentValue("switch")?.toString() == "on"
+    } catch (e) {
+        log.error "WaterGuru Dosing Advisor: could not read the pump switch state: ${e.message}"
+        return false
+    }
+}
+
+private BigDecimal pumpMinWattsSetting() { firstNum(pumpMinWatts, DEFAULT_PUMP_MIN_WATTS) }
+
+/** Power evidence is required only when it is enabled and the plug can actually provide it. */
+private boolean powerConfirmRequired() {
+    BigDecimal minW = pumpMinWattsSetting()
+    if (minW == null || minW <= 0 || !pumpSwitch) return false
+    try {
+        return pumpSwitch.hasAttribute("power") || pumpSwitch.hasAttribute("accessory")
+    } catch (e) {
+        log.warn "WaterGuru Dosing Advisor: cannot tell whether the pump switch reports power (${e.message}); confirming starts by the switch report only"
+        return false
+    }
+}
+
+/**
+ * True when the pump has shown it is drawing power since the first ON of this dose: a power
+ * event the handler saw, or a current power/accessory state stamped after the ON. The timestamp
+ * check matters: a reading left over from an earlier run must not confirm this one.
+ */
+private boolean pumpPowerSeen(Map active) {
+    if (!active) return false
+    if (active.powerSeen) return true
+    Long since = ((active.requested ?: 0L) as Long)
+    BigDecimal minW = pumpMinWattsSetting() ?: DEFAULT_PUMP_MIN_WATTS
+    try {
+        def p = pumpSwitch?.currentState("power")
+        if (stateSince(p, since) && (toBD(p.value) ?: 0G) >= minW) return true
+        def a = pumpSwitch?.currentState("accessory")
+        if (stateSince(a, since) && a.value?.toString() == "on") return true
+    } catch (e) {
+        log.error "WaterGuru Dosing Advisor: could not read the pump power state: ${e.message}"
+    }
+    return false
+}
+
+private boolean stateSince(def s, Long since) {
+    def d = s?.date
+    return d instanceof Date && d.time >= since
+}
+
+private String pumpPowerText() {
+    try {
+        def p = pumpSwitch?.currentValue("power")
+        def a = pumpSwitch?.currentValue("accessory")
+        return "power ${p != null ? p : 'unknown'} W, accessory ${a != null ? a : 'unknown'}"
+    } catch (e) {
+        return "power unreadable"
+    }
+}
+
+/**
+ * The switch has reported on (or the pump has shown power, which proves it). Time the dose from
+ * this moment rather than from the command, then book it at once or wait for power evidence.
+ */
+private void confirmPumpSwitchOn(String evidence) {
+    Map active = activeDoseMap()
+    if (!active || active.phase != "starting") return
+    unschedule("verifyPumpStart")
+    Integer seconds = ((active.seconds ?: 0) as Integer)
+    Long t = now()
+    active.phase = "switchOn"
+    active.started = t
+    active.stopAt = t + (seconds * 1000L)
+    active.switchEvidence = evidence
+    state.activeDose = active
+    runIn(seconds, "stopDose", [overwrite: true])
+    runIn(seconds + 15, "verifyPumpOff", [overwrite: true])
+
+    if (!powerConfirmRequired() || pumpPowerSeen(active)) {
+        bookDose()
+        return
+    }
+    // Decide before the scheduled stop, so a short dose cannot end with its start still open.
+    int deadline = Math.min(POWER_CONFIRM_SECONDS, Math.max(3, seconds - 2))
+    runIn(Math.max(1, Math.min(POWER_REFRESH_SECONDS, deadline - 2)), "refreshPumpPower", [overwrite: true])
+    runIn(deadline, "verifyPumpPower", [overwrite: true])
+}
+
+def pumpPowerHandler(evt) {
+    Map active = activeDoseMap()
+    if (!active || !(active.phase in ["starting", "switchOn"])) return
+    BigDecimal minW = pumpMinWattsSetting()
+    if (minW == null || minW <= 0) return
+    boolean running = evt?.name?.toString() == "accessory" ?
+        evt?.value?.toString() == "on" : ((toBD(evt?.value) ?: 0G) >= minW)
+    if (!running) return
+    active.powerSeen = "${evt.name} ${evt.value}${evt?.unit ? ' ' + evt.unit : ''}".toString()
+    state.activeDose = active
+    if (active.phase == "starting") {
+        // Power without a switch report: the pump is demonstrably running, so its switch report
+        // was lost or is late. That is a confirmed start, not a failed one.
+        confirmPumpSwitchOn("${evt.name} reported ${evt.value}")
+    } else {
+        bookDose()
+    }
+}
+
+/** Ask the plug for its meters once, in case its own report threshold does not fire. */
+def refreshPumpPower() {
+    Map active = activeDoseMap()
+    if (!active || active.phase != "switchOn" || pumpPowerSeen(active)) return
+    try {
+        if (pumpSwitch?.hasCommand("refresh")) pumpSwitch.refresh()
+    } catch (e) {
+        log.warn "WaterGuru Dosing Advisor: pump refresh for start confirmation failed: ${e.message}"
+    }
+}
+
+/** START_CONFIRM_SECONDS after an ON: confirm, retry once, or abandon the start. */
+def verifyPumpStart() {
+    Map active = activeDoseMap()
+    if (!active || active.phase != "starting") return
+    try {
+        if (pumpIsOn()) {
+            confirmPumpSwitchOn("switch on")
+            return
+        }
+        Integer attempt = ((active.startAttempts ?: 1) as Integer)
+        if (attempt < START_MAX_ATTEMPTS) {
+            active.startAttempts = attempt + 1
+            state.activeDose = active
+            log.warn "WaterGuru Dosing Advisor: chlorine pump switch did not report on within ${START_CONFIRM_SECONDS}s; sending ON again (attempt ${attempt + 1} of ${START_MAX_ATTEMPTS})"
+            try { pumpSwitch.on() }
+            catch (e) { log.error "WaterGuru Dosing Advisor: retry ON command failed: ${e.message}" }
+            if (pumpIsOn()) {
+                confirmPumpSwitchOn("switch on after a retry")
+                return
+            }
+            runIn(START_CONFIRM_SECONDS, "verifyPumpStart", [overwrite: true])
+            return
+        }
+        abortPumpStart("the switch never reported on after ${attempt} ON commands over ${attempt * START_CONFIRM_SECONDS}s")
+    } catch (e) {
+        log.error "WaterGuru Dosing Advisor: start verification hit an unexpected error: ${e.message}"
+        abortPumpStart("start verification failed (${e.message})")
+    }
+}
+
+/** The switch reported on: the pump must now show power, or the start is abandoned. */
+def verifyPumpPower() {
+    Map active = activeDoseMap()
+    if (!active || active.phase != "switchOn") return
+    if (pumpPowerSeen(active)) {
+        bookDose()
+        return
+    }
+    abortPumpStart("the switch reported on but the pump showed no power (${pumpPowerText()})")
+}
+
+/**
+ * The start is confirmed: book the dose against the daily total, the duplicate-sample lock and the
+ * tank, and announce it. This is the only place a dose is booked, and it books each dose once.
+ */
+private void bookDose() {
+    Map active = activeDoseMap()
+    if (!active || active.booked) return
+    unschedule("refreshPumpPower")
+    unschedule("verifyPumpPower")
+    active.phase = "running"
+    active.booked = true
+    state.activeDose = active
+
+    BigDecimal ml = toBD(active.mlRaw ?: active.ml)
+    Integer seconds = ((active.seconds ?: 0) as Integer)
+    recordDoseLedger(ml, active.sample?.toString(), seconds)
+    publishTileTelemetry([fcVal: toBD(active.fc), fcTarget: toBD(active.target)])
     state.remove("pendingDose")
-    String msg = "Chlorine pump started: ${n0(ml)} mL for ${formatDuration(seconds)} at ${n1(firstNum(pumpRateMlPerMin, DEFAULT_PUMP_RATE_ML_MIN))} mL/min (${trigger}). ${tankSummaryPlain()}"
+    String proof = [active.switchEvidence, active.powerSeen].findAll { it }.join(", ")
+    String msg = "Chlorine pump started: ${n0(ml)} mL for ${formatDuration(seconds)} at ${n1(firstNum(pumpRateMlPerMin, DEFAULT_PUMP_RATE_ML_MIN))} mL/min (${active.trigger ?: 'dose'}); confirmed by ${proof ?: 'switch on'}. ${tankSummaryPlain()}"
     log.warn "WaterGuru Dosing Advisor: ${msg}"
     sendPumpNotice(msg)
 }
 
+/**
+ * Give up on a start that was never confirmed. Nothing is booked. From here it is an ordinary stop:
+ * OFF is asked for, and the dose is released only on a confirmed off. The late-start guard is armed
+ * first, because the ON may still be sitting in a queue and reach the plug minutes from now.
+ */
+private void abortPumpStart(String why) {
+    Map active = activeDoseMap()
+    unschedule("verifyPumpStart")
+    unschedule("refreshPumpPower")
+    unschedule("verifyPumpPower")
+    unschedule("stopDose")
+    if (active) {
+        active.phase = "abandoned"
+        state.activeDose = active
+    }
+    armLateStartGuard()
+    String msg = "Chlorine pump start NOT confirmed: ${why}. OFF sent; the ${active?.ml ?: 'planned'} mL dose was abandoned and nothing was booked against the tank. It will not be retried automatically. Check the plug and its Z-Wave link."
+
+    try { if (pumpSwitch) pumpSwitch.off() }
+    catch (e) { log.error "WaterGuru Dosing Advisor: OFF after an unconfirmed start failed: ${e.message}" }
+
+    if (pumpIsOff()) {
+        finishStop(null)
+        log.error "WaterGuru Dosing Advisor: ${msg}"
+        sendPumpNotice(msg)
+        return
+    }
+    msg += " The switch still reports ON, so OFF will be retried with the independent cutoff armed."
+    log.error "WaterGuru Dosing Advisor: ${msg}"
+    sendPumpNotice(msg)
+    state.stopAttempts = 0
+    runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
+    armEmergencyPumpCutoff("unconfirmed start abandoned")
+}
+
+private void armLateStartGuard() {
+    state.lateStartGuardUntil = now() + (LATE_START_GUARD_MINUTES * 60000L)
+    runIn(LATE_START_SWEEP_SECONDS, "lateStartSweep", [overwrite: true])
+}
+
+private boolean lateStartGuardActive() {
+    Long until = state.lateStartGuardUntil != null ? (state.lateStartGuardUntil as Long) : null
+    return until != null && now() <= until
+}
+
+/**
+ * One precautionary OFF a few minutes after an abandoned start. If the queued ON reaches the plug
+ * and its report is lost too, nothing else would stop the pump before the plug's own timer.
+ */
+def lateStartSweep() {
+    if (activeDoseMap() || !lateStartGuardActive()) return
+    try { pumpSwitch?.off() }
+    catch (e) { log.warn "WaterGuru Dosing Advisor: precautionary OFF after an abandoned start failed: ${e.message}" }
+    log.info "WaterGuru Dosing Advisor: sent a precautionary OFF after the abandoned pump start"
+}
+
+/** An ON with no dose running, inside the guard window: treat it as the late ON and stop it now. */
+private void stopLateOn() {
+    String msg = "Chlorine pump turned ON with no dose running, within ${LATE_START_GUARD_MINUTES} minutes of an abandoned start. Treating it as the delayed ON and stopping it now."
+    log.error "WaterGuru Dosing Advisor: ${msg}"
+    sendPumpNotice(msg)
+    try { if (pumpSwitch) pumpSwitch.off() }
+    catch (e) { log.error "WaterGuru Dosing Advisor: OFF for the delayed ON failed: ${e.message}" }
+    if (pumpIsOff()) {
+        finishStop("Chlorine pump confirmed OFF after the delayed ON.")
+        return
+    }
+    state.lateOnStopping = true
+    state.stopAttempts = 0
+    runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
+    armEmergencyPumpCutoff("delayed ON after an abandoned start")
+}
+
 def stopDose() {
     Map active = state.activeDose instanceof Map ? state.activeDose : null
+    if (active?.phase == "starting") {
+        // A stop for a dose whose start was never confirmed is not the end of a dose. Reading the
+        // switch as off here is exactly how 2.3.2 reported an undelivered dose as "stopped after
+        // scheduled dose". (Not scheduled before confirmation since 2.4.0; this covers a stale job.)
+        abortPumpStart("the scheduled stop came before the start was confirmed")
+        return
+    }
     try {
         try { if (pumpSwitch) pumpSwitch.off() }
         catch (e) { log.error "WaterGuru Dosing Advisor: pump OFF command failed — ${e.message}" }
@@ -1230,18 +1540,38 @@ private boolean pumpIsOff() {
  * net is never removed on the strength of an unverified command.
  */
 private void finishStop(String msg) {
+    settleUnbookedDose(activeDoseMap())
     unschedule("stopDose")
     unschedule("verifyPumpOff")
     unschedule("emergencyPumpOff")
+    unschedule("verifyPumpStart")
+    unschedule("refreshPumpPower")
+    unschedule("verifyPumpPower")
     state.remove("emergencyJobScheduled")
     state.remove("activeDose")
     state.remove("stopAttempts")
     state.remove("emergencyAttempts")
     state.remove("emergencyDeadline")
+    state.remove("lateOnStopping")
     if (msg) {
         log.info "WaterGuru Dosing Advisor: ${msg}"
         sendPumpNotice(msg)
     }
+}
+
+/**
+ * A dose that ends before it was booked (STOP pressed, configuration saved, cutoff, or an abandoned
+ * start) is booked only if the pump did show power; otherwise nothing is debited. Any start that
+ * never confirmed leaves the late-start guard behind, because its ON may still be in flight.
+ * Doses recorded by 2.3.x carry no phase and were booked at start, so they are left alone.
+ */
+private void settleUnbookedDose(Map active) {
+    if (!active || active.booked || active.phase == null) return
+    if (active.phase == "switchOn" && pumpPowerSeen(active)) {
+        bookDose()
+        return
+    }
+    armLateStartGuard()
 }
 
 /**
@@ -1288,12 +1618,32 @@ private void safeStopPump(String reason, boolean notify = false) {
  */
 def pumpSwitchHandler(evt) {
     if (evt?.value?.toString() == "on") {
+        Map starting = activeDoseMap()
+        if (starting?.phase == "starting") {
+            confirmPumpSwitchOn("switch on")
+            return
+        }
         if (state.activeDose) return
+        if (lateStartGuardActive()) {
+            stopLateOn()
+            return
+        }
         if (watchdogAnyPumpRun == true) {
             armEmergencyPumpCutoff("pump start outside this app")
         }
     } else if (evt?.value?.toString() == "off") {
         Map active = state.activeDose instanceof Map ? state.activeDose : null
+        // Before a start is confirmed an OFF report proves nothing: the relay was off and still
+        // is. verifyPumpStart() owns that dose until it confirms or abandons it.
+        if (active?.phase == "starting") return
+        if (active?.phase == "abandoned") {
+            finishStop("Chlorine pump confirmed OFF after the abandoned start.")
+            return
+        }
+        if (!active && state.lateOnStopping == true) {
+            finishStop("Chlorine pump confirmed OFF after the delayed ON.")
+            return
+        }
         boolean wasActive = active != null
         Long stopAt = ((active?.stopAt ?: 0L) as Long)
         boolean early = wasActive && now() + 3000L < stopAt
