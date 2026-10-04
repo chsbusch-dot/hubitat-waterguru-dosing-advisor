@@ -683,6 +683,215 @@ check("control: a healthy start leaves all three protection jobs present") {
     expect(app.state.emergencyJobScheduled == true, "and the flag agrees with the queue")
 }
 
+// ------------------------------------------------------ start confirmation (WOR-714, 2.4.0)
+
+/** A ZEN05-like plug: metered, stamped by the app's clock. */
+def meteredPump = { app, String mode = "healthy" ->
+    def pump = new FakeSwitch("off")
+    pump.mode = mode
+    pump.metered = true
+    pump.clock = { app.clockMs }
+    return pump
+}
+
+def advance = { app, long ms -> app.clockMs += ms }
+
+/** Nothing was booked: tank, daily total, duplicate-sample lock and last-dose record untouched. */
+def expectNothingBooked = { app, String why ->
+    expect(app.state.tankRemainingMl == "56544", "${why}: tank must not be debited, was ${app.state.tankRemainingMl}")
+    expect(app.state.lastDosedSample == null, "${why}: the sample must not be marked dosed")
+    expect(app.state.lastDose == null, "${why}: no last-dose record")
+    expect(app.state.doseMlToday == "0", "${why}: daily total must stay 0, was ${app.state.doseMlToday}")
+    expect(app.noticesMatching("Chlorine pump started").isEmpty(), "${why}: must not announce a start")
+    expect(app.noticesMatching("stopped after scheduled").isEmpty(), "${why}: must not claim a completed dose")
+}
+
+check("WOR-714: an ON the plug ignores is retried once, then abandoned with nothing booked") {
+    def app = newApp()
+    def pump = meteredPump(app, "ignoresOn")
+    primeForStart(app, pump)
+
+    app.startDose(sampleDose(app), "test")
+
+    expect(pump.onCalls == 1, "one ON sent")
+    expect(app.state.activeDose?.phase == "starting", "the dose waits for confirmation")
+    expect(app.scheduled["verifyPumpStart"] != null, "start verification scheduled")
+    expect(app.scheduled["stopDose"] == null, "no stop is scheduled for a start that has not happened")
+    expect(app.scheduled["emergencyPumpOff"] != null, "the independent cutoff is armed from the start")
+    expectNothingBooked(app, "before confirmation")
+
+    advance(app, 10_000L); app.fire("verifyPumpStart")
+    expect(pump.onCalls == 2, "one retry ON, got ${pump.onCalls}")
+    expect(app.scheduled["verifyPumpStart"] != null, "verification re-scheduled after the retry")
+
+    advance(app, 10_000L); app.fire("verifyPumpStart")
+    expect(pump.onCalls == 2, "no third ON")
+    expect(pump.offCalls >= 1, "an abandoned start must send OFF")
+    expect(app.state.activeDose == null, "the abandoned dose is released")
+    expectNothingBooked(app, "after abandoning")
+    expect(app.noticesMatching("NOT confirmed").size() == 1, "exactly one abandon alert, got ${app.notices}")
+    expect(app.state.lateStartGuardUntil != null, "the late-start guard is armed")
+    expect(app.scheduled["lateStartSweep"] != null, "a precautionary OFF is scheduled")
+
+    int offsBefore = pump.offCalls
+    app.fire("lateStartSweep")
+    expect(pump.offCalls == offsBefore + 1, "the sweep sends one more OFF")
+}
+
+check("WOR-714 regression: the Oct 3 sequence (ON and OFF acted on minutes late) books nothing and stops the late ON") {
+    def app = newApp()
+    def pump = meteredPump(app, "deferred")
+    primeForStart(app, pump)
+
+    app.startDose(sampleDose(app), "test")              // 19:45:24 ON, accepted, not acted on
+    // 2.3.2 completed the dose on this reading: the switch still says off, because it never moved.
+    app.pumpSwitchHandler([value: "off"])
+    expect(app.state.activeDose?.phase == "starting", "an OFF report before confirmation must not end the dose")
+    expect(app.noticesMatching("stopped after scheduled").isEmpty(), "and must not claim a completed dose")
+
+    advance(app, 10_000L); app.fire("verifyPumpStart")    // retry ON, also queued
+    advance(app, 10_000L); app.fire("verifyPumpStart")    // abandon: OFF queued behind both ONs
+    expect(pump.pending == ["on", "on", "off"], "commands queue in order, got ${pump.pending}")
+    expect(app.state.activeDose == null, "abandoned")
+    expectNothingBooked(app, "after abandoning")
+
+    advance(app, 160_000L)                                 // 19:48:25: the queue drains
+    pump.deliverNext()
+    app.pumpSwitchHandler([value: "on"])
+    expect(!app.noticesMatching("delayed ON").isEmpty(), "the late ON is called out")
+    expect(app.state.lateOnStopping == true, "a stop for the late ON is in progress")
+    expect(app.scheduled["verifyPumpOff"] != null, "OFF is verified")
+    expect(app.scheduled["emergencyPumpOff"] != null, "with the cutoff armed")
+
+    pump.deliverNext(); pump.deliverNext()                 // the retry ON, then the OFF
+    app.pumpSwitchHandler([value: "off"])
+    expect(app.state.lateOnStopping == null, "the late ON is resolved")
+    expect(app.noticesMatching("confirmed OFF after the delayed ON").size() == 1, "and announced once")
+    expect(app.scheduled["emergencyPumpOff"] == null, "and the cutoff released on a confirmed off")
+    expectNothingBooked(app, "after the late ON")
+}
+
+check("WOR-714: a switch report that arrives late but inside the window confirms, times the dose from it, and books once") {
+    def app = newApp()
+    def pump = meteredPump(app, "deferred")
+    primeForStart(app, pump)
+
+    app.startDose(sampleDose(app), "test")
+    advance(app, 6_000L)
+    pump.deliverNext()                                     // relay closes, pump draws 6.9 W
+    app.pumpSwitchHandler([value: "on"])
+
+    def active = app.state.activeDose
+    expect(active?.phase == "running" && active?.booked == true, "confirmed and booked, got ${active}")
+    expect(app.scheduled["stopDose"] == 65, "stop scheduled for the full run from the confirmation")
+    expect((active.stopAt as Long) == app.clockMs + 65_000L, "stopAt counts from the report, not the command")
+    expect(app.scheduled["verifyPumpStart"] == null, "start verification cancelled")
+    expect(app.state.tankRemainingMl == "56307", "tank debited once by 237 mL, was ${app.state.tankRemainingMl}")
+    expect(app.noticesMatching("Chlorine pump started").size() == 1, "one start notice")
+
+    app.pumpPowerHandler([name: "power", value: "6.9", unit: "W"])   // a later power event
+    expect(app.state.tankRemainingMl == "56307", "no second debit")
+    expect(app.noticesMatching("Chlorine pump started").size() == 1, "no second start notice")
+}
+
+check("WOR-714: a switch that reports on while the pump draws no power is abandoned with nothing booked") {
+    def app = newApp()
+    def pump = meteredPump(app)
+    pump.drawsPower = false
+    primeForStart(app, pump)
+
+    app.startDose(sampleDose(app), "test")
+    expect(app.state.activeDose?.phase == "switchOn", "switch confirmed, power pending")
+    expect(app.scheduled["refreshPumpPower"] != null && app.scheduled["verifyPumpPower"] != null,
+           "a refresh and a power check are scheduled, queue ${app.scheduled}")
+    expectNothingBooked(app, "before power")
+
+    advance(app, 5_000L); app.fire("refreshPumpPower")
+    expect(pump.refreshCalls == 1, "the plug is asked for its meters once")
+    advance(app, 10_000L); app.fire("verifyPumpPower")
+
+    expect(pump.offCalls >= 1, "OFF sent")
+    expect(app.state.activeDose == null, "released on the confirmed off")
+    expect(app.scheduled["stopDose"] == null, "the scheduled stop is gone")
+    expect(!app.noticesMatching("showed no power").isEmpty(), "the alert says why, got ${app.notices}")
+    expectNothingBooked(app, "no power")
+}
+
+check("WOR-714: a stale power reading from an earlier run does not confirm a start") {
+    def app = newApp()
+    def pump = meteredPump(app)
+    pump.drawsPower = false
+    primeForStart(app, pump)
+
+    app.startDose(sampleDose(app), "test")
+    pump.setAttr("power", 6.6G, app.clockMs - 60_000L)     // left over from yesterday
+    pump.setAttr("accessory", "on", app.clockMs - 60_000L)
+    advance(app, 15_000L); app.fire("verifyPumpPower")
+
+    expect(app.state.activeDose == null, "abandoned")
+    expectNothingBooked(app, "stale power")
+}
+
+check("WOR-714: power reported before a lost switch report still confirms the start") {
+    def app = newApp()
+    def pump = meteredPump(app, "ignoresOn")
+    primeForStart(app, pump)
+
+    app.startDose(sampleDose(app), "test")
+    advance(app, 3_000L)
+    app.pumpPowerHandler([name: "power", value: "7.0", unit: "W"])
+
+    expect(app.state.activeDose?.booked == true, "the pump is demonstrably running, so the dose is booked")
+    expect(app.scheduled["stopDose"] == 65, "and timed")
+    expect(app.noticesMatching("power 7.0 W").size() == 1, "the start notice names the evidence, got ${app.notices}")
+}
+
+check("control WOR-714: a healthy metered start is booked at once with all protection jobs") {
+    def app = newApp()
+    def pump = meteredPump(app)
+    primeForStart(app, pump)
+
+    app.startDose(sampleDose(app), "test")
+
+    expect(app.state.activeDose?.booked == true, "booked")
+    expect(app.scheduled["stopDose"] != null && app.scheduled["verifyPumpOff"] != null
+           && app.scheduled["emergencyPumpOff"] != null, "all three protection jobs, queue ${app.scheduled}")
+    expect(app.state.tankRemainingMl == "56307", "debited once")
+    expect(app.state.lastDosedSample != null, "sample locked")
+}
+
+check("WOR-714: the late-start guard expires, and does not touch a later manual run") {
+    def app = newApp()
+    def pump = meteredPump(app, "ignoresOn")
+    primeForStart(app, pump)
+
+    app.startDose(sampleDose(app), "test")
+    advance(app, 10_000L); app.fire("verifyPumpStart")
+    advance(app, 10_000L); app.fire("verifyPumpStart")
+    int offs = pump.offCalls
+    int alerts = app.noticesMatching("delayed ON").size()
+
+    advance(app, 31L * 60_000L)
+    app.pumpSwitchHandler([value: "on"])                   // e.g. the 60-second rule, much later
+    expect(pump.offCalls == offs, "an ON after the guard window must not be stopped")
+    expect(app.noticesMatching("delayed ON").size() == alerts, "and not called a delayed ON")
+    expect(app.scheduled["emergencyPumpOff"] != null, "the ordinary outside-start cutoff applies")
+}
+
+check("WOR-714: STOP pressed while a start is unconfirmed books nothing and arms the guard") {
+    def app = newApp()
+    def pump = meteredPump(app, "ignoresOn")
+    primeForStart(app, pump)
+
+    app.startDose(sampleDose(app), "test")
+    app.appButtonHandler("btnStopPump")
+
+    expect(app.state.activeDose == null, "released")
+    expect(app.scheduled["verifyPumpStart"] == null, "start verification cancelled")
+    expect(app.state.lateStartGuardUntil != null, "the ON may still be in flight, so the guard is armed")
+    expectNothingBooked(app, "STOP during start")
+}
+
 // --------------------------------------------------------------------------- summary
 
 println ""

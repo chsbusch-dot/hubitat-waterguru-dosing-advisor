@@ -7,16 +7,35 @@
  *   - the device reports nothing at all, which must NOT be read as a confirmed stop.
  *
  * Commands are recorded so a test can assert how many OFF attempts were actually made.
+ *
+ * Start confirmation (WOR-714) adds the failures on the way IN:
+ *   - the ON is accepted and the relay never closes (ignoresOn),
+ *   - the hub accepts commands that reach the plug minutes later, in order (deferred): the
+ *     Oct 3 case, where the 19:45:24 ON and 19:47:33 OFF acted at 19:48:25 and 19:48:31,
+ *   - the relay closes and the pump draws nothing (metered, drawsPower = false).
  */
 class FakeSwitch {
     String label = "OL BYP P1 Chlorine Pump"
     private String value
     private final Map<String, Object> attrs = [:]
 
-    /** healthy | offThrows | ignoresOff | silent | readThrows | onThrows | onThrowsThenStuck */
+    /** healthy | offThrows | ignoresOff | silent | readThrows | onThrows | onThrowsThenStuck | ignoresOn | deferred */
     String mode = "healthy"
     int offCalls = 0
     int onCalls = 0
+    int refreshCalls = 0
+
+    /** Exposes power/accessory/refresh like the ZEN05 on the jtp10181 driver. Off by default, so
+     *  the older scenarios keep modelling a plain switch. */
+    boolean metered = false
+    /** false: the relay closes but the pump draws nothing (unplugged, dead motor, open wire). */
+    boolean drawsPower = true
+    BigDecimal runningWatts = 6.9G
+    /** Stamps state changes; tests point it at the stub's clock so freshness checks are real. */
+    Closure<Long> clock = { 0L }
+    private final Map<String, Long> stamps = [:]
+    /** deferred mode: commands the hub accepted that the plug has not acted on yet, in order. */
+    List<String> pending = []
 
     FakeSwitch(String initial = "off") { this.value = initial }
 
@@ -42,7 +61,9 @@ class FakeSwitch {
             if (mode == "onThrowsThenStuck") value = "on"
             throw new RuntimeException("simulated ON command failure")
         }
-        value = "on"
+        if (mode == "ignoresOn") return            // accepted, relay never closes, no report
+        if (mode == "deferred") { pending << "on"; return }
+        apply("on")
     }
 
     def off() {
@@ -56,9 +77,46 @@ class FakeSwitch {
             case "onThrowsThenStuck":   // energised, and now ignoring OFF
                 // Accepted by the hub, ignored by the relay: state stays ON.
                 return
+            case "deferred":
+                pending << "off"
+                return
             default:
-                value = "off"
+                apply("off")
         }
+    }
+
+    /** The relay acts: switch state, and on a metered plug the power it draws, both stamped. */
+    private void apply(String v) {
+        value = v
+        stamps["switch"] = clock.call()
+        if (metered) {
+            BigDecimal w = (v == "on" && drawsPower) ? runningWatts : 0G
+            setAttr("power", w)
+            setAttr("accessory", w >= 3G ? "on" : "off")
+        }
+    }
+
+    /** Let the plug act on the oldest queued command, as the Z-Wave queue finally did on Oct 3. */
+    String deliverNext() {
+        if (pending.isEmpty()) return null
+        String cmd = pending.remove(0)
+        apply(cmd)
+        return cmd
+    }
+
+    void setAttr(String name, Object v, Long at = null) {
+        attrs[name] = v
+        stamps[name] = at != null ? at : clock.call()
+    }
+
+    boolean hasAttribute(String a) { a == "switch" || (metered && (a == "power" || a == "accessory")) }
+    boolean hasCommand(String c) { c == "on" || c == "off" || (metered && c == "refresh") }
+    def refresh() { refreshCalls++; null }
+
+    /** Hubitat's State: value plus the time it was set. Honours the read failure modes. */
+    def currentState(String a) {
+        def v = currentValue(a)
+        return v == null ? null : [name: a, value: v.toString(), date: new Date((stamps[a] ?: 0L) as Long)]
     }
 
     /** Simulate the relay physically dropping out later. */
