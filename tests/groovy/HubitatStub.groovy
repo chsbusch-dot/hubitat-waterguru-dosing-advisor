@@ -24,6 +24,7 @@ abstract class HubitatStub extends Script {
     List<String> logLines = []
     Map<String, Object> scheduled = [:]     // handler name -> delay/clock spec
     List<String> unscheduled = []           // handler names passed to unschedule(name)
+    List<Map> subscriptions = []
 
     // Settings the app reads (pumpSwitch, dosingMode, ...), looked up on demand.
     Map<String, Object> settings = [:]
@@ -84,8 +85,26 @@ abstract class HubitatStub extends Script {
     def label(Map m) { null }
     def href(Map m) { null }
     def app(Map m) { null }
-    def subscribe(def device, String attr, String handler) { null }
-    def unsubscribe() { null }
+    def subscribe(def device, String attr, String handler, Map options = [:]) {
+        subscriptions << [device: device, attr: attr, handler: handler, options: options]
+        null
+    }
+    def unsubscribe() { subscriptions.clear(); null }
+
+    /** Model Hubitat's default duplicate filtering. Unlike a command, a report represents
+     *  device evidence. Equal values only get a new stored date when a subscription opts in. */
+    def deliverDeviceReport(def device, String attr, def value) {
+        List listeners = subscriptions.findAll { it.device.is(device) && it.attr == attr }
+        boolean changed = device.currentValue(attr)?.toString() != value?.toString()
+        boolean keep = changed || listeners.any { it.options.filterEvents == false }
+        if (!keep) return
+        if (attr == "switch") device.setReportedAt(value.toString(), clockMs)
+        else if (attr == "power") device.setPowerAt(value as BigDecimal, clockMs)
+        else throw new IllegalArgumentException("Unsupported test report: ${attr}")
+        listeners.findAll { changed || it.options.filterEvents == false }.each {
+            this."${it.handler}"([name: attr, value: value.toString(), date: new Date(clockMs)])
+        }
+    }
     def sendEvent(Map m) { emitted << new LinkedHashMap(m); null }
     def pause(Number n) { null }
 

@@ -84,6 +84,10 @@ without pinning it.
 | **Target overrides** | pH / TA / CYA / CH targets; blank = read the device's targets. |
 | **Delivery** | The notification device(s) to send to, whether to notify automatically on each new sample, and an optional **daily summary** at a set time. |
 | **Dashboard tile** | Whether to create/maintain a companion tile device for this pool (on by default). |
+| **Confirm the pump is actually running** | Automatic: a power-capable switch requires fresh power; a switch that does not report power is confirmed by a fresh ON with an explicit power/flow-unverified notice. There is no setting that bypasses power confirmation. |
+| **Minimum running power** | The watts a power-capable switch must report before a start is confirmed (default **3 W**; 0, blank or negative uses 3 W, and 0 W never confirms a start). |
+| **Start confirmation timeout** | How long to wait for fresh evidence before failing a start safely (default **20 s**), never past the planned stop. |
+| **Power-loss grace** | How long a confirmed run may go without fresh, adequate power before it is stopped (default **30 s**). A single bound is measured from the last usable reading for missing reports, or from the first low reading for low power. |
 | **Run now** | *Calculate & send now* and *Preview (log only)* buttons. |
 
 Both delivery triggers are independent: you can notify on every new sample, send
@@ -113,8 +117,12 @@ to see, at a glance, what the pool needs. The device exposes:
 
 These exist so an external historian — InfluxDB/Grafana, or Maker API — can store actual
 pump-started doses and compute durable usage totals. They are written alongside the human
-attributes on every calculation. The dose values are recorded only after the pump ON command
-succeeds, so they represent commanded pump runs, not recommendations.
+attributes on every calculation. The dose values are recorded only after a start has been
+**confirmed** (a fresh ON, plus fresh power above the minimum for a power-capable switch), so
+they represent pump runs this app actually observed running — not recommendations, previews, or a
+bare `on()` return. The volume is still the planned estimate, not a measurement of liquid. For
+the transition, an attempt that is never confirmed still reserves its sample and daily volume,
+but writes no `lastDose*` value and draws no inventory.
 
 | Attribute | Unit | What it holds |
 | --- | --- | --- |
@@ -212,6 +220,57 @@ available, the app estimates generically:
 - **CYA up:** cyanuric acid, 13 oz per 10 ppm per 10,000 gal.
 - **CYA / CH too high:** no additive lowers these — the app estimates a partial
   drain/refill percentage instead.
+
+## Pump start confirmation and faults
+
+A returned `on()` command is **not** evidence that the relay closed or that the pump moved
+liquid. This app therefore separates "start requested" from "start confirmed":
+
+- **Power-capable switch** (reports a `power` attribute): a start is confirmed only by a **fresh
+  ON** *and* **fresh measured power at or above the minimum** (default **3 W**). Both readings
+  must postdate the ON request — a cached value from before it never confirms a start. Null,
+  missing or throwing readings fail closed.
+- **Non-power switch**: a fresh ON confirms the start, with an explicit notice that **power and
+  flow are unverified**.
+- **No claim of proven liquid flow is ever made.** The confirmed volume remains a planned
+  estimate.
+
+The app subscribes to repeated switch and power reports with `filterEvents: false`, so a steady
+wattage or another OFF response remains fresh evidence. The selected driver must publish received
+reports even when their values are unchanged. A refresh request alone is never confirmation.
+After upgrading, use **Done** once while the pump is idle to install these subscriptions; this
+also requests OFF through the normal configuration-change stop path. Verify the subscription
+settings before enabling automatic dosing.
+
+If a start is not confirmed within the timeout (default **20 s**, never past the planned stop):
+
+- an alert is sent **once**,
+- the pump is stopped through the normal safety path, with the independent cutoff kept armed and
+  retried until the switch **freshly** reports off,
+- a **fault is latched** and stays visible until you press **Acknowledge pump fault**. Acknowledgement
+  is refused while a stop is still being recovered or until the switch has freshly reported OFF; it
+  releases the fault lock for future eligible doses — it never energises the pump, refunds the
+  reserved volume, or resets the sample/day limits.
+- A cached OFF from before the ON request cannot prematurely disarm the new backstop, and a late
+  ON after an abort is never reclassified as a successful dose.
+
+While a **power-confirmed** run is active, the app watches for loss of power or missing fresh
+power evidence over a grace period (default **30 s**). A persistent loss aborts the run safely,
+locks a fault, and leaves the delivery volume marked **uncertain for operator review** — inventory
+is not automatically refunded and the dose is not retried.
+
+All confirmed-OFF paths use the same cleanup. An unconfirmed attempt always retains its fault,
+including an OFF report arriving near the planned end before a timer runs. Emergency stops record
+their reason before requesting OFF, so a delayed acknowledgement cannot be described as ordinary
+completion. Optional dashboard failures cannot prevent the running-power monitor from being armed.
+
+### Attempt reservation vs. success telemetry
+
+Before the ON command, the app reserves the attempt: the sample cannot be dosed again, the
+planned volume counts against the daily cap, and the one-AUTO-dose-per-day guard is consumed —
+even if the start is never confirmed. Only on confirmation does the app write the `lastDose*`
+telemetry and draw the planned volume from the tank estimate. Existing historical `lastDose` and
+tank history from earlier versions are preserved as-is.
 
 ## How it runs
 
