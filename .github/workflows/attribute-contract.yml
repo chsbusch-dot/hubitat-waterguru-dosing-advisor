@@ -1,15 +1,18 @@
 name: attribute contract
 
-# Two layers, because they catch different things:
+# Three layers, because they catch different things:
 #
-#   contract   -- scans the sources for the attribute names an external historian reads by exact
-#                 string. Cheap, and catches a rename.
-#   execution  -- runs the app's own methods against a stubbed Hubitat runtime. Needed because a
-#                 text scan cannot tell a real sendEvent from a commented-out one, and cannot see
-#                 behaviour at all: a stopDose() that reported "pump stopped" after a FAILED OFF
-#                 command passed the text scan happily.
+#   contract     -- scans the sources for the attribute names an external historian reads by exact
+#                   string. Cheap, and catches a rename.
+#   execution    -- runs the app's own methods against a stubbed Hubitat runtime. Needed because a
+#                   text scan cannot tell a real sendEvent from a commented-out one, and cannot see
+#                   behaviour at all: a stopDose() that reported "pump stopped" after a FAILED OFF
+#                   command passed the text scan happily.
+#   hub-compile  -- compiles every app and the driver with Groovy 2.4, the line the hub runs. Needed
+#                   because execution's groovy:4 accepts code the hub refuses: Pump Power Profiler
+#                   1.1.0 passed every test on 2026-10-05 and the hub would not save it.
 #
-# Neither touches a hub or a pump.
+# None of them touches a hub or a pump.
 
 on:
   push:
@@ -36,3 +39,14 @@ jobs:
       # there is no Groovy to install and no version drift between here and a laptop.
       - name: Run the app's methods against a stubbed Hubitat runtime
         run: ./tests/groovy/run.sh
+        env:
+          HUB_COMPILE: skip   # run.sh's Groovy 2.4 compile runs as the hub-compile job instead
+
+  hub-compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # groovy:2.4-jdk8 (Groovy 2.4.16, OpenJDK 8). The script fails before compiling anything unless
+      # every fixture in tests/groovy/hub_refuses/ is refused with the message it expects.
+      - name: Compile the apps and the driver with the hub's Groovy (2.4)
+        run: ./tests/groovy/hub_compile.sh
