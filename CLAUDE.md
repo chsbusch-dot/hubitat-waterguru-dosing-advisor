@@ -59,7 +59,7 @@ Both must pass before a PR; CI (`.github/workflows/attribute-contract.yml`) runs
 
 ```bash
 python3 tests/test_attribute_contract.py   # tile attribute contract, no dependencies
-bash tests/groovy/run.sh                    # child app methods vs a stubbed hub (needs docker)
+bash tests/groovy/run.sh                    # child app + Pump Power Profiler vs a stubbed hub (needs docker)
 ```
 
 Neither touches a hub or a pump.
@@ -67,10 +67,13 @@ Neither touches a hub or a pump.
 The stub models what was measured on the live hub (2026-10-04): a report whose value did not change
 reaches `filterEvents:false` subscribers as an event with a fresh date but never re-dates
 `currentState()`, and `FakeSwitch.async` makes a command take effect only when the test delivers the
-plug's report. Write new pump tests against that (`hubPlug` in `run_tests.groovy`).
+plug's report. Write new pump tests against that (`hubPlug` in `run_tests.groovy`). The tile fake
+also keeps `hubEvents`, the events the hub would store (a changed value, or `isStateChange: true`),
+and `collectorDoses` replays the Grafana collector's pairing on them. The profiler's tests
+(`profiler_tests.groovy`) use `FakeMeter` and the stub's File Manager (`fileStore`, `hubFilesMode`).
 
-Optional, not in CI (about 2.5 min): `tests/mutation/run.sh` reruns the 2.4.0 review's mutation set
-plus one mutant per 2.4.1 fix. The unmutated `base` must pass and every `[killed]` mutant must fail;
+Optional, not in CI (a few minutes): `tests/mutation/run.sh` reruns the 2.4.0 review's mutation set
+plus one mutant per 2.4.1 fix (F*) and per 2.4.2 fix (R*); it covers the child app only. The unmutated `base` must pass and every `[killed]` mutant must fail;
 anchors are exact strings, so re-anchor a mutant when the code under it changes.
 
 ## Branches and PRs
