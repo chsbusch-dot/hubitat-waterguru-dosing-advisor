@@ -62,6 +62,8 @@ python3 tests/test_attribute_contract.py   # tile attribute contract, no depende
 bash tests/groovy/run.sh                    # child app + Pump Power Profiler vs a stubbed hub (needs docker)
                                             # (first runs tests/check_hubitat_fields.py: the hub rejects an
                                             #  @Field initializer that names another @Field; groovy:4 does not)
+                                            # (then tests/groovy/hub_compile.sh: apps + driver through Groovy 2.4, the
+                                            #  hub's compiler; CI job hub-compile. HUB_COMPILE=skip leaves it to CI)
 ```
 
 Neither touches a hub or a pump.
