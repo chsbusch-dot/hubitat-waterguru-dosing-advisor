@@ -207,10 +207,28 @@ class FakeSwitch {
     // Enough of a device for tile assertions: records what the app pushes to it.
     List<Map> sentEvents = []
     String throwOnEvent
+
+    /**
+     * The tile as the hub keeps it (2.4.2): the current value of each attribute, and the events the hub
+     * would actually store and list. The hub creates an event only when the value changed, or when the
+     * sender forced it with isStateChange: true; a false flag is ignored (Event.populateValues,
+     * firmware 2.5.2.129). The live tile lists them newest first, which is what the historian reads.
+     */
+    Map<String, Object> tileValues = [:]
+    List<Map> hubEvents = []
+
     def sendEvent(Map m) {
         if (m.name == throwOnEvent) throw new RuntimeException("simulated tile event failure: ${m.name}")
         sentEvents << new LinkedHashMap(m)
+        String name = m.name?.toString()
+        boolean changed = !tileValues.containsKey(name) || tileValues[name]?.toString() != m.value?.toString()
+        if (changed || m.isStateChange == true) hubEvents << (new LinkedHashMap(m) + [at: nowMs()])
+        tileValues[name] = m.value
         null
+    }
+
+    List<Map> hubEventsFor(String attribute) {
+        return hubEvents.findAll { it?.name?.toString() == attribute }
     }
 
     Object lastSent(String attribute) {
