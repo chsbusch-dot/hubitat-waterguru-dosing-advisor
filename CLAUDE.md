@@ -60,6 +60,8 @@ Both must pass before a PR; CI (`.github/workflows/attribute-contract.yml`) runs
 ```bash
 python3 tests/test_attribute_contract.py   # tile attribute contract, no dependencies
 bash tests/groovy/run.sh                    # child app + Pump Power Profiler vs a stubbed hub (needs docker)
+                                            # (first runs tests/check_hubitat_fields.py: the hub rejects an
+                                            #  @Field initializer that names another @Field; groovy:4 does not)
 ```
 
 Neither touches a hub or a pump.

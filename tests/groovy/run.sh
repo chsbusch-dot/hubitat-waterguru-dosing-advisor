@@ -12,6 +12,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
+# The groovy:4 image accepts things the hub's compiler rejects; check the known one first.
+python3 tests/check_hubitat_fields.py
+
 if ! command -v docker >/dev/null 2>&1; then
     echo "docker is required to run these tests" >&2
     exit 2

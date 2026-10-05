@@ -22,11 +22,14 @@
 import groovy.transform.Field
 
 @Field static final String PROFILER_VERSION = "1.1.0"
-// The 1.0.x summary columns, unchanged and in order; 1.1.0 columns are appended after them.
-@Field static final List LEGACY_SUMMARY_KEYS = ["start", "reason", "endReason", "durationSec", "samples", "onSamples",
-                                                "wattsMin", "wattsAvg", "wattsMax", "ampsMin", "ampsAvg", "ampsMax",
-                                                "voltsAvg", "whIntegrated", "kwhMeterStart", "kwhMeterEnd", "file"]
-@Field static final List SUMMARY_KEYS = LEGACY_SUMMARY_KEYS + ["powerDelaySec", "profilerVersion"]
+// The summary columns: the 1.0.x columns unchanged and in order (the first LEGACY_SUMMARY_KEY_COUNT),
+// then the 1.1.0 columns appended. Spelled out in full: the hub's compiler rejects a @Field
+// initializer that refers to another @Field (tests/check_hubitat_fields.py guards that).
+@Field static final List SUMMARY_KEYS = ["start", "reason", "endReason", "durationSec", "samples", "onSamples",
+                                         "wattsMin", "wattsAvg", "wattsMax", "ampsMin", "ampsAvg", "ampsMax",
+                                         "voltsAvg", "whIntegrated", "kwhMeterStart", "kwhMeterEnd", "file",
+                                         "powerDelaySec", "profilerVersion"]
+@Field static final int LEGACY_SUMMARY_KEY_COUNT = 17
 // Rows kept for a summary file that could not be read or written, until a later save succeeds.
 @Field static final int SUMMARY_BACKLOG_MAX = 60
 
@@ -321,7 +324,7 @@ void appendSummary(String prefix, Map s) {
     } else {
         List lines = existing.split("\n", -1) as List
         // A 1.0.x header gains the new columns at its end; its rows simply lack them.
-        if (lines[0].trim() == LEGACY_SUMMARY_KEYS.join(",")) lines[0] = SUMMARY_KEYS.join(",")
+        if (lines[0].trim() == SUMMARY_KEYS.take(LEGACY_SUMMARY_KEY_COUNT).join(",")) lines[0] = SUMMARY_KEYS.join(",")
         out << lines.join("\n")
         if (!out.toString().endsWith("\n")) out << "\n"
     }
