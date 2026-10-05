@@ -85,7 +85,11 @@ abstract class HubitatStub extends Script {
     def label(Map m) { null }
     def href(Map m) { null }
     def app(Map m) { null }
+    /** Set to an attribute name to make subscribing to it throw, as a broken device reference can. */
+    String subscribeThrowsFor
+
     def subscribe(def device, String attr, String handler, Map options = [:]) {
+        if (subscribeThrowsFor != null && attr == subscribeThrowsFor) throw new RuntimeException("simulated subscribe failure for ${attr}")
         subscriptions << [device: device, attr: attr, handler: handler, options: options]
         null
     }
@@ -176,7 +180,36 @@ abstract class HubitatStub extends Script {
     }
     def getParent() { null }
     def getChildApps() { [] }
-    def getApp() { [updateLabel: { String s -> }, label: "test"] }
+    /** app.removeSetting(name) deletes a setting, as InstalledAppWrapper.removeSetting does on the hub. */
+    def getApp() {
+        def self = this
+        [updateLabel: { String s -> }, label: "test", removeSetting: { String n -> self.settings.remove(n); null }]
+    }
+
+    // --- File Manager (used by the Pump Power Profiler) ---------------------------------
+    /** File name -> contents. (Not named hubFiles: Groovy would read that property through getHubFiles().) */
+    Map<String, String> fileStore = [:]
+    /** ok | listThrows | listNull | downloadThrows | downloadNull | uploadThrows */
+    String hubFilesMode = "ok"
+    List<String> uploads = []
+
+    /** getHubFiles(): the File Manager listing, as FileManagerEntry-like maps (name, type). */
+    def getHubFiles(String folder = "") {
+        if (hubFilesMode == "listThrows") throw new RuntimeException("simulated File Manager listing failure")
+        if (hubFilesMode == "listNull") return null
+        return fileStore.keySet().collect { [name: it, type: "file"] }
+    }
+    /** downloadHubFile(): bytes, or null when the file is unavailable (firmware 2.5.2.129 docs). */
+    byte[] downloadHubFile(String name) {
+        if (hubFilesMode == "downloadThrows") throw new RuntimeException("simulated transient File Manager error")
+        if (hubFilesMode == "downloadNull") return null
+        return fileStore.containsKey(name) ? fileStore[name].getBytes("UTF-8") : null
+    }
+    void uploadHubFile(String name, byte[] bytes) {
+        if (hubFilesMode == "uploadThrows") throw new RuntimeException("simulated File Manager write failure")
+        fileStore[name] = new String(bytes, "UTF-8")
+        uploads << name
+    }
     def getSourceDevice() { settings["sourceDevice"] }
     /** The app reaches its tile device through this Hubitat API, so stub it here rather than
      *  overriding the app's private getTileDevice(), which Groovy resolves directly. */

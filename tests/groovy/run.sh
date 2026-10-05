@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Run the Groovy execution tests for the child app.
+# Run the Groovy execution tests for the child app and the Pump Power Profiler.
 #
 # The app's own methods are executed against a stubbed Hubitat runtime, so this observes
 # behaviour (including a pump switch that throws or ignores OFF) without a hub and without
@@ -23,5 +23,8 @@ docker run --rm -v "$PWD:/w:ro" -w /w groovy:4-alpine sh -c '
     groovyc -d /tmp/hclasses \
         tests/groovy/HubitatStub.groovy \
         tests/groovy/FakeSwitch.groovy
-    groovy -cp /tmp/hclasses tests/groovy/run_tests.groovy
+    status=0
+    groovy -cp /tmp/hclasses tests/groovy/run_tests.groovy || status=1
+    groovy -cp /tmp/hclasses tests/groovy/profiler_tests.groovy || status=1
+    exit $status
 '

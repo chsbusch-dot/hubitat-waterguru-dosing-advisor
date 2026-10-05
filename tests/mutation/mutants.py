@@ -8,7 +8,8 @@ or the build aborts, so a mutation that silently failed to apply can never be re
 "surviving" mutant. A mutant is KILLED when the suite fails against it.
 
 Origin: the M01-M21 / PC1-PC2 set from the independent review of 5f218c9 (2.4.0), re-anchored to
-the 2.4.1 code; F1-F6 revert one 2.4.1 fix each and must be killed by the tests that guard it.
+the 2.4.1 code; F1-F6 revert one 2.4.1 fix each and R1-R9 one 2.4.2 fix each (WOR-718), and every one
+of those must be killed by the tests that guard it.
 
   python3 tests/mutation/mutants.py              # build every mutant
   python3 tests/mutation/mutants.py M04 F1       # build only these
@@ -56,8 +57,8 @@ mut("M02", "?", "stopDose accepts a cached pre-request OFF (anchor dropped)",
 mut("M03", "?", "emergencyPumpOff accepts a cached pre-request OFF (both anchors dropped)",
     ("    Long anchor = stopEvidenceAnchor(active)\n    if (pumpIsOff(anchor)) {",
      "    Long anchor = null   // MUTANT\n    if (pumpIsOff(anchor)) {"),
-    ("    if (pumpIsOff(stopEvidenceAnchor(active))) {\n        finishStop(\"EMERGENCY cutoff",
-     "    if (pumpIsOff(null)) {\n        finishStop(\"EMERGENCY cutoff"))
+    ("    if (pumpIsOff(stopEvidenceAnchor(active))) {\n        finishStop(confirmed)\n",
+     "    if (pumpIsOff(null)) {\n        finishStop(confirmed)\n"))
 
 # ---- doseSafetyBlocks interlocks ----
 mut("M04", "?", "no 'a dose is already running' interlock",
@@ -106,7 +107,7 @@ mut("M17", "?", "late ON during an aborted (active) attempt no longer requests O
 mut("M18", "?", "pumpIsOff accepts a future-dated OFF",
     ("        if (futureDated(at)) return false   // future-dated OFF\n", ""))
 mut("M19", "?", "initialize does not recreate the running power watch",
-    ("        if (active != null && active.startConfirmed == true && powerConfirmationRequired()) {\n"
+    ("        if (active != null && active.startConfirmed == true && active.offRequestedAt == null && powerConfirmationRequired()) {\n"
      "            runIn(RUN_POWER_CHECK_SECONDS, \"verifyRunPower\", [overwrite: true])\n"
      "            log.warn \"WaterGuru Dosing Advisor: recreated the running power watch after the queue reset\"\n"
      "        }\n", ""))
@@ -136,6 +137,68 @@ mut("F5", "killed", "fix 5 reverted: the FC-loss estimate ignores the app's own 
 mut("F6", "killed", "noteOffEvidence keeps a future-dated OFF report",
     ("    if (at == null || futureDated(at)) return\n    Map sw = readDeviceReading(\"switch\")",
      "    if (at == null) return\n    Map sw = readDeviceReading(\"switch\")"))
+
+# ---- 2.4.2 (WOR-718): each fix reverted (must be killed) ----
+mut("R1", "killed", "fix 1 reverted: a stop with nothing open gets no anchor (a cached OFF confirms it)",
+    ("        state.idleStopAt = offAt\n", "        // MUTANT: no idle anchor\n"))
+mut("R1b", "killed", "fix 1: an unconfirmed idle stop no longer blocks a new dose",
+    ("    if (state.idleStopAt != null) blocks << \"a pump stop is still waiting for the switch to confirm OFF\"\n", ""))
+mut("R1c", "killed", "fix 1: an announced stop notice keeps no final word for the OFF still to come",
+    ("        state.pendingStopNotice = [confirmed: pending.confirmed ?: \"${pending.requested}: the switch has now confirmed OFF.\".toString(),\n"
+     "                                   announced: true]\n", ""))
+mut("R2", "killed", "fix 2 reverted: an unchanged ON restarts an aborted start's stop",
+    ("                if (unchangedOn && active.offRequestedAt != null) {\n", "                if (false) {\n"))
+mut("R2b", "killed", "fix 2 reverted: an unchanged ON restarts a standalone recovery's stop",
+    ("        if (unchangedOn && anchor != null) {\n", "        if (false) {\n"))
+# Since fix 1 initialize() restores an idle stop's jobs itself, so the reorder shows only when
+# initialize() fails part way (it has already cleared the queue by then).
+mut("R3", "killed", "fix 3 reverted: updated() stops the pump before the queue reset (the 2.4.1 body)",
+    ("    unsubscribe()\n    try {\n        initialize()\n    } catch (e) {\n"
+     "        log.error \"WaterGuru Dosing Advisor: initialize failed while saving (${e.message}); stopping the pump anyway. Save the app again once the cause is fixed.\"\n"
+     "    }\n    safeStopPump(\"configuration changed\")\n}\n",
+     "    safeStopPump(\"configuration changed\")\n    unsubscribe()\n    initialize()\n}\n"))
+mut("R3b", "killed", "fix 3 reverted: removal goes through safeStopPump and its cutoff promises",
+    ("    stopForRemoval()\n    unsubscribe()\n", "    safeStopPump(\"app removed\")\n    unsubscribe()\n"))
+mut("R4", "killed", "fix 4 reverted: an overdue cutoff gets a fresh full window",
+    ("    if (existing != null && existing <= nowMs) {\n", "    if (false && existing != null && existing <= nowMs) {\n"))
+mut("R5", "killed", "fix 5 reverted: the final retry's EMERGENCY notice is sent the moment OFF is sent",
+    ("            deferEmergencyNotice(\"EMERGENCY: chlorine pump OFF not freshly confirmed after ${attempt} OFF attempts\", true, tail,\n"
+     "                                 \"Chlorine pump stopped on retry ${attempt}.\")\n",
+     "            sendPumpNotice(\"EMERGENCY: chlorine pump OFF not freshly confirmed after ${attempt} OFF attempts (${switchStatusPhrase()}). ${tail}\")\n"))
+mut("R5b", "killed", "fix 5 reverted: the cutoff's EMERGENCY notice is sent the moment OFF is sent",
+    ("        deferEmergencyNotice(\"EMERGENCY: the cutoff has not been able to turn the chlorine pump off (attempt ${attempt})\", false,\n"
+     "                             \"Still trying, but the pump may need to be stopped by hand.\", confirmed)\n",
+     "        sendPumpNotice(\"EMERGENCY: the cutoff has not been able to turn the chlorine pump off (attempt ${attempt}). Still trying, but the pump may need to be stopped by hand.\")\n"))
+mut("R6", "killed", "fix 6 reverted: the power watch keeps judging a run after its OFF request (all three guards)",
+    ("    if (active.offRequestedAt != null) return\n    if (!powerConfirmationRequired()) return\n",
+     "    if (!powerConfirmationRequired()) return\n"),
+    ("    } else if (active.startConfirmed == true && active.offRequestedAt == null && powerConfirmationRequired()) {\n",
+     "    } else if (active.startConfirmed == true && powerConfirmationRequired()) {\n"),
+    ("        if (active != null && active.startConfirmed == true && active.offRequestedAt == null && powerConfirmationRequired()) {\n",
+     "        if (active != null && active.startConfirmed == true && powerConfirmationRequired()) {\n"))
+mut("R6a", "?", "fix 6, one guard only: verifyRunPower ignores offRequestedAt (the event and initialize guards remain)",
+    ("    if (active.offRequestedAt != null) return\n    if (!powerConfirmationRequired()) return\n",
+     "    if (!powerConfirmationRequired()) return\n"))
+mut("R7", "killed", "fix 7 reverted: the cutoff latches nothing for an attempt that was never confirmed",
+    ("    if (startUnconfirmed(active)) alertStartUnconfirmed(active, \"the emergency cutoff fired before the start was confirmed\")\n", ""))
+mut("R8", "killed", "fix 8 reverted: a confirmed dose's events are not forced",
+    ("publishTileTelemetry([fcVal: toBD(current.fcVal), fcTarget: toBD(current.fcTarget)], null, true)",
+     "publishTileTelemetry([fcVal: toBD(current.fcVal), fcTarget: toBD(current.fcTarget)], null, false)"))
+mut("R8b", "killed", "fix 8 reverted: a correction's events are not forced",
+    ("            publishTileTelemetry(null, null, true)\n", "            publishTileTelemetry(null, null, false)\n"))
+mut("R8c", "killed", "fix 8 reverted: an unknown tank inventory is left stale on the tile",
+    ("    } else {\n        dev.sendEvent(name: \"tankRemainingMl\", value: UNKNOWN_TELEMETRY, unit: \"mL\")\n"
+     "        dev.sendEvent(name: \"tankPercent\", value: UNKNOWN_TELEMETRY, unit: \"%\")\n    }\n", "    }\n"))
+mut("R8d", "killed", "fix 8 reverted: a missing FC reading is left stale on the tile",
+    ("    else                         dev.sendEvent(name: \"freeChlorine\", value: UNKNOWN_TELEMETRY, unit: \"ppm\")\n", ""))
+mut("R9", "killed", "fix 9a reverted: Apply tank adjustment does not move the tank",
+    ("    debitTank(before - after)                 // a negative debit puts chlorine back\n", ""))
+mut("R9b", "killed", "fix 9b reverted: a voided dose stays in the dose history (the FC-loss estimate adds it back)",
+    ("    state.tankDoseHistory = tankDoseHistory().findAll { !(it?.t instanceof Number && (it.t as Long) == t) }\n", ""))
+mut("R9c", "killed", "fix 9b reverted: voiding the last dose leaves lastDose in place",
+    ("    if (wasLast) state.remove(\"lastDose\")\n", ""))
+mut("R9d", "killed", "fix 9b reverted: a void is not published to the historian",
+    ("    boolean published = publishVoidedDose(t)\n", "    boolean published = false\n"))
 
 
 def build(name):

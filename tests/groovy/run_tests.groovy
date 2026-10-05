@@ -159,6 +159,9 @@ check("verifyPumpOff: keeps retrying, then re-arms the cutoff rather than giving
     expect(driven <= 6, "the retry bound should be small; drove ${driven} attempts")
     expect(app.scheduled["emergencyPumpOff"] != null,
            "the cutoff must be (re-)armed when the retries are exhausted")
+    // 2.4.2: the EMERGENCY notice waits a few seconds for the answer to the final OFF.
+    expect(app.noticesMatching("may need to be stopped by hand").isEmpty(), "not before the OFF answer had a chance to land")
+    app.fire("verifyEmergencyNotice")
     expect(!app.noticesMatching("may need to be stopped by hand").isEmpty(),
            "it must say plainly that the pump may need stopping by hand")
     expect(app.unscheduled.contains("emergencyPumpOff") == false,
@@ -192,6 +195,7 @@ check("emergencyPumpOff: does not claim success against a stuck relay, and re-ar
     app.emergencyPumpOff()
 
     expect(app.state.activeDose != null, "the cutoff must not forget the dose it could not stop")
+    app.fire("verifyEmergencyNotice")                   // 2.4.2: the notice waits for the OFF answer
     expect(!app.noticesMatching("has not been able to turn").isEmpty(),
            "the cutoff must admit it could not stop the pump")
     expect(app.scheduled["emergencyPumpOff"] != null, "the cutoff must re-arm and try again")
@@ -342,6 +346,7 @@ check("with the watchdog off, exhaustion must not claim a cutoff was armed") {
     app.state.stopAttempts = 4
 
     app.verifyPumpOff()
+    app.fire("verifyEmergencyNotice")                   // 2.4.2: the notice waits for the OFF answer
 
     expect(app.scheduled["emergencyPumpOff"] == null,
            "nothing should be scheduled when the watchdog is off")
@@ -2505,6 +2510,8 @@ check("guards: control, an open AUTO window and a running circulation switch let
         app.state.startFault = [kind: "start-unconfirmed", at: app.clockMs - 3_600_000L, reason: "test"] }],
     // Hand-built: the app itself only sets faultStopAt while a fault is latched (see the mutation notes).
     ["stop still being recovered", ["pump stop is still being recovered"], { app, pump, dose -> app.state.faultStopAt = app.clockMs - 10_000L }],
+    // 2.4.2: a stop requested with nothing open whose OFF has not been confirmed yet.
+    ["idle stop unconfirmed", ["still waiting for the switch to confirm OFF"], { app, pump, dose -> app.state.idleStopAt = app.clockMs - 5_000L }],
     // An attempt in flight whose ON has not been reported yet: the switch still reads off.
     ["dose already running", ["a dose is already running"], { app, pump, dose ->
         app.state.activeDose = [attemptId: "att-9", ml: "237", mlRaw: "237", seconds: 65, requestedAt: app.clockMs - 1_000L,
@@ -2604,6 +2611,7 @@ check("anchor (emergencyPumpOff): the cutoff does not accept a cached OFF; it re
     app.startDose(incidentDose(app), "AUTO 19:45")
     app.advance(21_000L)
     app.runUntil(app.dueAt["emergencyPumpOff"])                // nothing ever answers; the cutoff fires
+    app.advance(5_000L)                                        // 2.4.2: the notice waits for the OFF answer
     expect(app.state.activeDose != null, "a cached OFF from yesterday must not satisfy the cutoff")
     expect(app.dueAt["emergencyPumpOff"] != null, "the cutoff re-arms: ${app.dueAt}")
     expect(!app.noticesMatching("has not been able to turn").isEmpty(), "and admits it could not confirm OFF")
@@ -2671,6 +2679,479 @@ check("start: once the cutoff has requested OFF, later ON and power cannot confi
     app.advance(4_000L)
     expect(app.state.activeDose?.startConfirmed == false, "an OFF was requested: late evidence must not confirm")
     expect(app.noticesMatching("pump started").isEmpty() && app.state.lastDose == null, "no start, no booking")
+}
+
+// =========================================================================== 2.4.2 (WOR-718)
+//
+// Each check below fails against 2.4.1 (ddf422e) and passes against 2.4.2; the PR lists the failures.
+// Same hub-faithful harness as 2.4.1: asynchronous plug reports, unchanged values never re-dated, and a
+// tile that stores an event only for a changed value or a forced one (FakeSwitch.hubEvents).
+
+/** A confirmed run on the live plug, kept healthy (6.7 W answers to each refresh) until `untilMs`. */
+def healthyUntil = { app, pump, long untilMs -> runPlug(app, pump, untilMs) { app.deliverDeviceReport(pump, "power", 6.7G) } }
+
+/** The profiler's poll, as the plug answers it: an ON report and a power report every 3 s. */
+def profilerAnswers = { app, pump, long untilMs, String sw, BigDecimal watts ->
+    while (app.clockMs < untilMs) {
+        app.advance(3_000L)
+        app.deliverDeviceReport(pump, "switch", sw)
+        app.deliverDeviceReport(pump, "power", watts)
+    }
+}
+
+/**
+ * What the historian writes from the tile (Waterguru-Grafana-Chart, dosing.py events_to_points): it
+ * reads the stored events newest first, as the hub lists them; the first lastDoseEpochMs event per dose
+ * value is that dose's anchor, and the lastDoseMl event closest to the anchor, within 60 s, is its
+ * volume. Returns dose time -> volume.
+ */
+def collectorDoses = { tile ->
+    List newestFirst = tile.hubEvents.reverse()
+    Map<Long, Long> anchors = [:]
+    newestFirst.findAll { it.name == "lastDoseEpochMs" }.each { anchors.putIfAbsent(it.value as Long, it.at as Long) }
+    Map<Long, BigDecimal> out = [:]
+    anchors.each { Long dose, Long anchor ->
+        def best = null
+        newestFirst.findAll { it.name == "lastDoseMl" }.each { e ->
+            long d = Math.abs((e.at as Long) - anchor)
+            if (d <= 60_000L && (best == null || d < best[0])) best = [d, new BigDecimal(e.value.toString())]
+        }
+        if (best != null) out[dose] = best[1]
+    }
+    return out
+}
+
+def newTile = { app ->
+    def tile = new FakeSwitch("off")
+    app.__tileDevice = tile
+    app.createTile = true
+    return tile
+}
+
+// ----------------------------------------------------------------------- 2.4.2 fix 1: STOP with nothing open
+
+check("2.4.2 fix 1: STOP on an idle app says nothing until the plug answers, then 'stopped' once") {
+    def app = newApp()
+    def pump = hubPlug(app)                                    // its only OFF is yesterday's
+    app.appButtonHandler("btnStopPump")
+    expect(pump.commands.count("off") == 1 && pump.commands.count("on") == 0, "one OFF: ${pump.commands}")
+    expect(app.noticesMatching("stopped").isEmpty(), "a cached OFF from yesterday must not confirm the stop: ${app.notices}")
+    expect(app.dueAt["verifyPumpOff"] != null && app.dueAt["emergencyPumpOff"] != null && app.dueAt["verifyStopRequest"] != null,
+           "the stop is protected like every other: ${app.dueAt}")
+    app.pumpSwitchHandler([name: "switch", value: "off", date: new Date(app.clockMs - 30_000L), isStateChange: false])
+    expect(app.noticesMatching("stopped").isEmpty() && app.dueAt["verifyPumpOff"] != null, "an OFF dated before the request is not the answer")
+    app.advance(450L)
+    app.deliverDeviceReport(pump, "switch", "off")             // the answer: unchanged value, fresh event date
+    expect(app.noticesMatching("Chlorine pump stopped: STOP button pressed.").size() == 1, "one final notice: ${app.notices}")
+    expect(app.noticesMatching("stop requested").isEmpty(), "and no retry notice")
+    expect(app.dueAt.isEmpty() && app.state.idleStopAt == null, "every stop job is gone: ${app.dueAt}")
+}
+
+check("2.4.2 fix 1: an idle STOP whose OFF is lost says 'stop requested', retries, and still says 'stopped' when the OFF comes late") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    app.appButtonHandler("btnStopPump")
+    app.advance(4_500L)
+    expect(app.noticesMatching("stop requested (STOP button pressed)").size() == 1, "the deferred notice: ${app.notices}")
+    expect(app.noticesMatching("Chlorine pump stopped").isEmpty(), "and no claim that it stopped")
+    def blocks = app.doseSafetyBlocks(incidentDose(app))
+    expect(blocks.any { it.contains("still waiting for the switch to confirm OFF") }, "a new dose waits for it: ${blocks}")
+    app.advance(25_000L)
+    expect(pump.commands.count("off") == 2, "the first retry resent OFF: ${pump.commands}")
+    app.advance(500L)
+    app.deliverDeviceReport(pump, "switch", "off")
+    expect(app.noticesMatching("Chlorine pump stopped: STOP button pressed.").size() == 1, "the late OFF still gets the final word: ${app.notices}")
+    expect(app.noticesMatching("stop requested").size() == 1, "said once")
+    expect(app.dueAt.isEmpty() && app.doseSafetyBlocks(incidentDose(app)).every { !it.contains("confirm OFF") }, "and the gate is clear")
+}
+
+// ----------------------------------------------------------------------- 2.4.2 fix 2: ON-event loop
+
+check("2.4.2 fix 2: a stuck relay answering every profiler poll with an unchanged ON does not restart the stop") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    app.startDose(incidentDose(app) + [doseMl: 1105G, runSeconds: 300], "AUTO 19:45")
+    app.advance(400L)
+    app.deliverDeviceReport(pump, "switch", "on")              // the relay closes; the pump draws nothing
+    profilerAnswers(app, pump, app.clockMs + 300_000L, "on", 0G)
+    expect(app.state.startFault?.kind == "start-unconfirmed" && app.state.activeDose != null, "faulted, stop still open")
+    expect(pump.commands.count("off") == 6, "the stop and its five retries, nothing more: ${pump.commands.count('off')} OFFs")
+    expect(app.state.stopAttempts == 5, "the attempt count is never reset: ${app.state.stopAttempts}")
+    expect(app.noticesMatching("EMERGENCY").size() == 1, "so the escalation is reached: ${app.notices}")
+    expect(app.noticesMatching("reported ON while an unacknowledged fault").size() <= 1 && app.notices.size() <= 6,
+           "and the user is not flooded: ${app.notices.size()} notices")
+    expect(app.dueAt["emergencyPumpOff"] != null, "the cutoff stays armed")
+}
+
+check("2.4.2 fix 2: a standalone fault recovery against a stuck relay is not restarted by unchanged ONs") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    app.startDose(incidentDose(app), "AUTO 19:45")
+    app.advance(21_450L)
+    app.deliverDeviceReport(pump, "switch", "off")             // the lost ON's attempt is cleaned up
+    expect(app.state.activeDose == null && app.state.startFault != null, "sanity: fault pending, nothing open")
+    app.advance(60_000L)
+    int offsBefore = pump.commands.count("off")
+    app.deliverDeviceReport(pump, "switch", "on")              // the relay closes after all ...
+    expect(pump.commands.count("off") == offsBefore + 1, "a changed ON is answered with OFF at once")
+    profilerAnswers(app, pump, app.clockMs + 180_000L, "on", 0G)   // ... and sticks
+    expect(pump.commands.count("off") == offsBefore + 6, "then only the recovery's own retries: ${pump.commands.count('off') - offsBefore}")
+    expect(app.noticesMatching("EMERGENCY").size() == 1, "and its escalation: ${app.notices}")
+}
+
+// ----------------------------------------------------------------------- 2.4.2 fix 3: save and removal
+
+check("2.4.2 fix 3: a settings save during a manual run keeps the retry and the cutoff") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    app.deliverDeviceReport(pump, "switch", "on")              // someone ran the pump by hand
+    app.advance(60_000L)
+    app.updated()
+    expect(pump.commands.count("off") == 1, "the save sends one OFF: ${pump.commands}")
+    expect(app.dueAt["verifyPumpOff"] != null && app.dueAt["emergencyPumpOff"] != null,
+           "and its retry and cutoff survive the queue reset: ${app.dueAt}")
+    app.advance(3_600_000L)                                    // that OFF never lands
+    expect(pump.commands.count("off") >= 6, "OFF keeps being sent: ${pump.commands.count('off')}")
+    expect(app.noticesMatching("EMERGENCY").size() >= 1, "and the escalation is reached")
+    app.deliverDeviceReport(pump, "switch", "off")
+    expect(app.dueAt.isEmpty() && app.state.idleStopAt == null, "the plug's OFF ends it: ${app.dueAt}")
+    expect(app.noticesMatching("stop requested (configuration changed): the switch has now confirmed OFF").size() == 1,
+           "and after 'Retrying' the user hears that it worked: ${app.notices}")
+}
+
+check("2.4.2 fix 3: a save whose initialize() fails part way still sends OFF and keeps the stop protected") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    confirmedHubStart(app, pump)
+    healthyUntil(app, pump, app.clockMs + 10_000L)
+    app.sourceDevice = new FakeSwitch("off")                   // initialize() subscribes to the source first ...
+    app.autoRun = true
+    app.subscribeThrowsFor = "LastMeasurement"                 // ... and that subscription fails
+    int offs = pump.commands.count("off")
+    app.updated()
+    expect(pump.commands.count("off") == offs + 1, "the save still sends OFF: ${pump.commands}")
+    expect(app.dueAt["verifyPumpOff"] != null && app.dueAt["emergencyPumpOff"] != null, "with its retry and cutoff: ${app.dueAt}")
+    expect(app.logLines.any { it.contains("initialize failed while saving") }, "and the failure is logged")
+    app.advance(450L)
+    app.deliverDeviceReport(pump, "switch", "off")             // no subscription is left to hear it ...
+    app.advance(25_000L)
+    expect(app.state.activeDose == null && app.dueAt.isEmpty(), "... so the retry timer confirms the OFF: ${app.dueAt}")
+}
+
+check("2.4.2 fix 3: removal says nothing will retry and promises no cutoff") {
+    ["confirmed", "unconfirmed"].each { kind ->
+        def app = newApp()
+        def pump = hubPlug(app)
+        if (kind == "confirmed") confirmedHubStart(app, pump) else app.startDose(incidentDose(app), "AUTO 19:45")
+        app.advance(2_000L)
+        int seen = app.notices.size()
+        app.uninstalled()
+        List said = app.notices.drop(seen)
+        expect(pump.commands.count("off") == 1, "[${kind}] one OFF")
+        expect(said.size() == 1 && said[0].contains("can no longer confirm it, retry it or run its emergency cutoff"),
+               "[${kind}] one honest notice: ${said}")
+        expect(said.every { !it.contains("stays armed") && !it.contains("Retrying") }, "[${kind}] no promise of a cutoff: ${said}")
+        expect(app.dueAt.isEmpty(), "[${kind}] nothing is left scheduled")
+    }
+    def idle = newApp()
+    def idlePump = hubPlug(idle)
+    idle.uninstalled()
+    expect(idle.notices.isEmpty() && idlePump.commands == ["off"], "control: an idle removal sends OFF and says nothing")
+}
+
+// ----------------------------------------------------------------------- 2.4.2 fix 4: overdue cutoff
+
+check("2.4.2 fix 4: a cutoff that is due but has not run is fired now, never pushed a window later") {
+    def app = newApp()
+    def pump = bindClock(app, new FakeSwitch("off"))
+    pump.setSwitchAt("off", app.clockMs - 600_000L)
+    primeForStart(app, pump)
+    app.failsafePumpRunMinutes = 2                             // the cutoff is due 120 s after the start
+    app.initialize()
+    long t0 = app.clockMs
+    app.startDose(sampleDose(app), "test")
+    app.fire("verifyStartConfirmation")                        // a switch-only plug: a fresh ON confirms
+    pump.mode = "ignoresOff"                                   // the relay sticks from here
+    app.runUntil(t0 + 119_000L)
+    expect(app.state.emergencyDeadline == t0 + 120_000L, "sanity: due at +120 s")
+    app.clockMs = t0 + 125_000L                                // scheduler lag: the +125 s retry runs first
+    app.fire("verifyPumpOff")
+    expect(app.dueAt["emergencyPumpOff"] <= app.clockMs + 1_000L, "the overdue cutoff runs now, not at +245 s: ${app.dueAt}")
+    long due = app.dueAt["emergencyPumpOff"]
+    app.clockMs += 500L
+    app.armEmergencyPumpCutoff("a second arm inside that second")
+    expect(app.dueAt["emergencyPumpOff"] == due, "a further arm does not nudge it later: ${app.dueAt}")
+    app.clockMs -= 500L
+    int before = pump.offCalls
+    app.advance(1_000L)
+    expect(app.state.emergencyAttempts == 1 && pump.offCalls == before + 1, "and it did run")
+}
+
+check("2.4.2 fix 4: a queue reset after the deadline passed fires the cutoff now") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    confirmedHubStart(app, pump)
+    app.state.emergencyDeadline = app.clockMs - 5_000L         // due five seconds ago; the reset drops its job
+    app.state.emergencyJobScheduled = true
+    app.initialize()
+    expect(app.dueAt["emergencyPumpOff"] <= app.clockMs + 1_000L, "it runs now, not a whole window later: ${app.dueAt}")
+}
+
+// ----------------------------------------------------------------------- 2.4.2 fix 5: EMERGENCY timing
+
+check("2.4.2 fix 5: the final retry's EMERGENCY notice waits for the OFF answer") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    confirmedHubStart(app, pump)
+    healthyUntil(app, pump, app.state.activeDose.stopAt as Long)
+    while (pump.commands.count("off") < 6) app.advance(100L)   // the stop and five retries go unanswered
+    app.advance(1_200L)
+    app.deliverDeviceReport(pump, "switch", "off")             // the answer to the fifth retry
+    app.advance(10_000L)
+    expect(app.noticesMatching("EMERGENCY").isEmpty(), "the OFF landed 1.2 s later, so no EMERGENCY: ${app.notices}")
+    expect(app.state.activeDose == null && app.dueAt.isEmpty(), "the stop completed")
+    expect(app.noticesMatching("stopped after scheduled").size() == 1, "with its normal final notice")
+}
+
+check("2.4.2 fix 5: the cutoff's EMERGENCY notice waits for the OFF answer; it still speaks when none comes") {
+    ["answered", "silent"].each { kind ->
+        def app = newApp()
+        def pump = hubPlug(app)
+        app.failsafePumpRunMinutes = 1                         // the cutoff fires 60 s into a 10-minute dose
+        confirmedHubStart(app, pump, incidentDose(app) + [doseMl: 2210G, runSeconds: 600])
+        healthyUntil(app, pump, app.dueAt["emergencyPumpOff"] as Long)
+        expect(pump.commands.count("off") == 1, "[${kind}] sanity: the cutoff sent OFF")
+        if (kind == "answered") {
+            app.advance(1_200L)
+            app.deliverDeviceReport(pump, "switch", "off")
+        }
+        app.advance(10_000L)
+        if (kind == "answered") {
+            expect(app.noticesMatching("has not been able to turn").isEmpty(), "[answered] no EMERGENCY: ${app.notices}")
+            expect(app.noticesMatching("confirmed OFF after the emergency cutoff").size() == 1, "[answered] the fault's own final notice")
+        } else {
+            expect(app.noticesMatching("has not been able to turn").size() == 1, "[silent] the EMERGENCY notice still goes out: ${app.notices}")
+        }
+    }
+}
+
+// ----------------------------------------------------------------------- 2.4.2 fix 6: power watch after OFF
+
+check("2.4.2 fix 6: a STOP whose switch report is lost but whose 0 W report lands does not latch a false power loss") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    confirmedHubStart(app, pump, incidentDose(app) + [doseMl: 2210G, runSeconds: 600])
+    healthyUntil(app, pump, app.clockMs + 10_000L)
+    app.appButtonHandler("btnStopPump")
+    app.advance(500L)
+    app.deliverDeviceReport(pump, "power", 0G)                 // the pump stops; the switch report is lost
+    runPlug(app, pump, app.clockMs + 45_000L) { app.deliverDeviceReport(pump, "power", 0G) }
+    expect(app.state.startFault == null && app.noticesMatching("power LOST").isEmpty(),
+           "power falling during a stop is not a power loss: ${app.state.startFault}")
+    expect(app.state.activeDose != null && app.dueAt["verifyPumpOff"] != null, "the stop keeps waiting for the OFF report")
+}
+
+check("2.4.2 fix 6: Done during a confirmed run does not bring the power watch back") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    confirmedHubStart(app, pump, incidentDose(app) + [doseMl: 2210G, runSeconds: 600])
+    healthyUntil(app, pump, app.clockMs + 10_000L)
+    app.updated()
+    expect(app.dueAt["verifyRunPower"] == null, "the stop owns the run now: ${app.dueAt}")
+    expect(app.dueAt["verifyPumpOff"] != null && app.dueAt["emergencyPumpOff"] != null, "with its protection")
+}
+
+// ----------------------------------------------------------------------- 2.4.2 fix 7: cutoff on an unconfirmed attempt
+
+check("2.4.2 fix 7: the cutoff latches the start fault, from its own OFF request, on an attempt never confirmed") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    app.failsafePumpRunMinutes = 1                             // a 60 s cutoff ...
+    app.startConfirmTimeoutSeconds = 120                       // ... inside a 120 s start window
+    app.startDose(incidentDose(app) + [doseMl: 1105G, runSeconds: 300], "short cutoff")
+    app.advance(60_000L)
+    def active = app.state.activeDose
+    expect(active?.offRequestedAt != null && active.fault == "start-unconfirmed", "the cutoff faults the attempt: ${active?.fault}")
+    expect(app.state.startFault?.kind == "start-unconfirmed" && app.state.startFault.offFrom == active.offRequestedAt,
+           "latched with offFrom at the cutoff's OFF request: ${app.state.startFault}")
+    expect(app.noticesMatching("the emergency cutoff fired before the start was confirmed").size() == 1, "and announced once")
+    app.advance(450L)
+    app.deliverDeviceReport(pump, "switch", "off")
+    app.advance(60_000L)
+    app.appButtonHandler("btnAckFault")
+    expect(app.state.startFault == null, "the answer to that OFF acknowledges it")
+}
+
+check("2.4.2 migration: an attempt whose OFF a 2.4.1 cutoff requested without a fault still cannot be confirmed") {
+    // 2.4.1's cutoff set offRequestedAt on an unconfirmed attempt but latched nothing and left the
+    // start-confirmation timer running. Since fix 7 no 2.4.2 path builds that state, so only the
+    // startStopRequested guard stands between it and a late confirmation after a deploy.
+    def app = newApp()
+    def pump = hubPlug(app)
+    long t = app.clockMs
+    app.state.activeDose = [attemptId: "att-9", ml: "475", mlRaw: "475", seconds: 129, sample: "${t}".toString(),
+                            started: t - 60_000L, requestedAt: t - 60_000L, stopAt: t + 69_000L, startDeadline: t + 60_000L,
+                            startConfirmed: false, fault: null, offRequestedAt: t - 1_000L, trigger: "AUTO 19:45"]
+    pump.setSwitchAt("on", t)                                  // ON and power are both fresh now ...
+    pump.setPowerAt(7.0G, t)
+    app.fire("verifyStartConfirmation")                        // ... when the leftover timer fires
+    expect(app.state.activeDose.startConfirmed == false && app.state.lastDose == null, "an OFF was requested: no confirmation")
+    expect(app.noticesMatching("pump started").isEmpty(), "and nothing is announced")
+}
+
+// ----------------------------------------------------------------------- 2.4.2 fix 8: historian events
+
+check("2.4.2 fix 8: a dose with the same volume as the one before still reaches the historian") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    def tile = newTile(app)
+    List doseTimes = []
+    2.times { day ->
+        confirmedHubStart(app, pump)
+        doseTimes << (app.state.lastDose.time as Long)
+        healthyUntil(app, pump, app.state.activeDose.stopAt as Long)
+        app.advance(448L)
+        app.deliverDeviceReport(pump, "switch", "off")
+        app.deliverDeviceReport(pump, "power", 0G)
+        app.clockMs += DAY_MS
+    }
+    Map doses = collectorDoses(tile)
+    expect(doses.keySet() == doseTimes.toSet(), "both doses reach the historian: ${doses} for ${doseTimes}")
+    expect(doses.values().every { it == 475G }, "each with its volume: ${doses}")
+    expect(tile.hubEventsFor("lastDoseMl").size() == 2, "the hub stored the second, unchanged volume too")
+}
+
+check("2.4.2 fix 8: a late OFF's corrected volume reaches the historian under the original dose time") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    def tile = newTile(app)
+    def active = confirmedHubStart(app, pump)
+    long doseTime = app.state.lastDose.time as Long
+    long onAt = active.onReportAt as Long
+    long stopAt = active.stopAt as Long
+    healthyUntil(app, pump, stopAt + 180_000L)                 // the scheduled OFF reaches the plug 180 s late
+    app.deliverDeviceReport(pump, "switch", "off")
+    BigDecimal ranMl = ((app.clockMs - onAt) as BigDecimal) * 221G / 60000G
+    Map doses = collectorDoses(tile)
+    expect(doses.keySet() == [doseTime] as Set, "one dose, under its original time: ${doses}")
+    expect(Math.abs(doses[doseTime] - ranMl) < 0.01G, "with the corrected volume, not the planned 475 mL: ${doses[doseTime]} vs ${ranMl}")
+}
+
+check("2.4.2 fix 8: values the app no longer knows are published as -1, never left stale") {
+    def app = newApp()
+    def tile = newTile(app)
+    primeTank(app, 56781G, 52588G, [[app.clockMs - 2 * DAY_MS, 712], [app.clockMs - DAY_MS, 475]])
+    app.updateTileDevice([status: "RED", headline: "Add", text: "x", fcVal: 5.4G, fcTarget: 6.0G, label: "pool"])
+    expect(tile.lastSent("tankRemainingMl") == 52588G && tile.lastSent("freeChlorine") == 5.4G &&
+           (tile.lastSent("tankRunwayDays") as BigDecimal) > 0G, "control: known values are numbers")
+    app.chlorineTankGallons = "5"                              // a new container, not yet marked full
+    app.updateTileDevice([status: "YELLOW", headline: "Review", text: "y", fcVal: null, fcTarget: null, label: "pool"])
+    expect(tile.lastSent("tankRemainingMl") == -1G && tile.lastSent("tankPercent") == -1G, "inventory unknown: ${tile.lastSent('tankRemainingMl')}")
+    expect(tile.lastSent("tankRunwayDays") == -1G, "runway unknown")
+    expect(tile.lastSent("freeChlorine") == -1G && tile.lastSent("targetFreeChlorine") == -1G, "FC and target unknown")
+    expect((tile.lastSent("tankCapacityMl") as BigDecimal) > 18927G && (tile.lastSent("tankCapacityMl") as BigDecimal) < 18928G,
+           "the new capacity is known: ${tile.lastSent('tankCapacityMl')}")
+    app.state.tankCapacityGallons = "5"
+    app.state.tankRemainingMl = "18000"
+    app.state.tankDoseHistory = [[t: app.clockMs, ml: "475"]]  // one dose: the runway is still learning
+    app.updateTileDevice([status: "RED", headline: "Add", text: "z", fcVal: 5.0G, fcTarget: 6.0G, label: "pool"])
+    expect(tile.lastSent("tankRemainingMl") == 18000G && tile.lastSent("tankRunwayDays") == -1G, "learning stays -1, inventory is back")
+    expect(app.state.lastDose == null && tile.sentEventsFor("lastDoseMl").isEmpty(), "no dose record is invented")
+}
+
+// ----------------------------------------------------------------------- 2.4.2 fix 9: tank corrections
+
+check("2.4.2 fix 9a: a signed tank adjustment moves the estimate once, within 0 and the container, and nothing else") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    def tile = newTile(app)
+    app.state.doseDay = new Date(app.clockMs).format("yyyy-MM-dd", app.location.timeZone)
+    app.state.doseMlToday = "475"
+    app.tankAdjustMl = -1200
+    expect(app.tankAdjustmentPreview()?.contains("56544 mL</b> to <b>55344 mL"), "the page says what Apply will do: ${app.tankAdjustmentPreview()}")
+    app.appButtonHandler("btnTankAdjust")
+    expect(app.state.tankRemainingMl == "55344", "applied: ${app.state.tankRemainingMl}")
+    expect(app.noticesMatching("adjusted by -1200 mL: 56544 mL to 55344 mL").size() == 1, "and announced: ${app.notices}")
+    expect(app.tankAdjustMl == null, "the field is cleared, so a second press cannot apply it twice")
+    app.appButtonHandler("btnTankAdjust")
+    expect(app.state.tankRemainingMl == "55344" && app.noticesMatching("No tank adjustment applied").size() == 1, "a second press changes nothing")
+    app.tankAdjustMl = 100000
+    app.appButtonHandler("btnTankAdjust")
+    expect(Math.abs(new BigDecimal(app.state.tankRemainingMl) - 56781.176760G) < 0.001G, "limited to the container: ${app.state.tankRemainingMl}")
+    expect(app.noticesMatching("limited to the 56781 mL container").size() == 1, "and says so")
+    expect(app.state.doseMlToday == "475" && pump.commands.isEmpty(), "today's total and the pump are untouched")
+    expect(tile.lastSent("tankRemainingMl") != null && tile.sentEventsFor("lastDoseMl").isEmpty(), "the tile gets the tank, not a dose record")
+    app.state.remove("tankRemainingMl")
+    app.tankAdjustMl = 500
+    app.appButtonHandler("btnTankAdjust")
+    expect(app.state.tankRemainingMl == null && app.noticesMatching("not initialized").size() == 1, "an uninitialized tank is refused")
+}
+
+/** The live hub's dose history on 2026-10-05: the Oct 3 lost-ON phantom, then the Oct 4 dose. */
+def liveHistory = { app ->
+    long phantom = Instant.parse("2026-10-04T02:45:24.739Z").toEpochMilli()   // Oct 3, 19:45:24 PDT
+    long oct4 = Instant.parse("2026-10-05T02:45:28.967Z").toEpochMilli()      // Oct 4, 19:45:28 PDT
+    app.clockMs = Instant.parse("2026-10-05T18:00:00Z").toEpochMilli()
+    app.state.tankDoseHistory = [[t: phantom, ml: "475.0"], [t: oct4, ml: "1028.4184625"]]
+    app.state.lastDose = [time: oct4, ml: "1028", mlRaw: "1028.4184625", seconds: 280, confirmed: true]
+    app.state.doseDay = "2026-10-05"
+    app.state.doseMlToday = "0"
+    return [phantom, oct4]
+}
+
+check("2.4.2 fix 9b: voiding the Oct 3 phantom returns it to the tank and drops it from the FC-loss history") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    def tile = newTile(app)
+    def (long phantom, long oct4) = liveHistory(app)
+    app.volumeOverride = 25000G
+    app.chlorinePctOverride = 12.5G
+    app.state.tankRemainingMl = "51559.9753350"
+    Map choices = app.voidDoseChoices()
+    expect(choices[phantom.toString()] == "Oct 3, 2026 7:45:24 PM PDT · 475 mL" && choices.keySet().first() == oct4.toString(),
+           "the phantom is offered by its time, newest first: ${choices}")
+    app.voidDoseKey = phantom.toString()
+    expect(app.voidDosePreview()?.contains("return 475 mL to the tank (51560 to 52035 mL)"), "the page says what Void will do: ${app.voidDosePreview()}")
+    app.appButtonHandler("btnVoidDose")
+    expect(app.state.tankDoseHistory*.t == [oct4], "the phantom left the history: ${app.state.tankDoseHistory}")
+    expect(!app.appDoseEvents().any { (it.t as Long) == phantom }, "the FC-loss estimate no longer adds it back")
+    expect(Math.abs(new BigDecimal(app.state.tankRemainingMl) - 52034.9753350G) < 0.001G, "475 mL went back: ${app.state.tankRemainingMl}")
+    expect(app.state.lastDose?.time == oct4, "the Oct 4 dose stays the last dose")
+    expect(app.state.doseMlToday == "0" && pump.commands.isEmpty(), "today's total and the pump are untouched")
+    expect(app.voidDoseKey == null && app.noticesMatching("Recorded dose voided: Oct 3, 2026 7:45:24 PM PDT, 475 mL").size() == 1,
+           "announced once, selection cleared: ${app.notices}")
+    expect(collectorDoses(tile) == [(phantom): 0G], "the historian rewrites the phantom's point as 0 mL: ${collectorDoses(tile)}")
+    // The next calculation puts the Oct 4 dose back on the tile, and the historian keeps both right.
+    app.clockMs += 3_600_000L
+    app.updateTileDevice([status: "RED", headline: "Add", text: "x", fcVal: 5.0G, fcTarget: 6.0G, label: "pool"])
+    expect(tile.lastSent("lastDoseEpochMs") == oct4, "the tile shows the Oct 4 dose again")
+    expect(collectorDoses(tile) == [(phantom): 0G, (oct4): 1028.4184625G], "both points right: ${collectorDoses(tile)}")
+}
+
+check("2.4.2 fix 9b: voiding the last recorded dose clears it, so nothing adds it back") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    def (long phantom, long oct4) = liveHistory(app)
+    app.state.tankDoseHistory = [[t: oct4, ml: "1028.4184625"]]
+    app.voidDoseKey = oct4.toString()
+    app.appButtonHandler("btnVoidDose")
+    expect(app.state.lastDose == null, "the last dose is cleared when it is the voided dose")
+    expect(app.tankDoseHistory().isEmpty() && app.appDoseEvents().isEmpty(), "and is not re-seeded from it")
+    expect(app.state.doseMlToday == "0" && pump.commands.isEmpty(), "today's total and the pump are untouched")
+}
+
+check("2.4.2 fix 9b: a void is refused while a dose or a stop is open, and for a dose no longer listed") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    def (long phantom, long oct4) = liveHistory(app)
+    app.state.idleStopAt = app.clockMs - 1_000L
+    app.voidDoseKey = phantom.toString()
+    app.appButtonHandler("btnVoidDose")
+    expect(app.state.tankDoseHistory.size() == 2 && app.noticesMatching("No dose voided: the pump is running").size() == 1, "refused while a stop is open")
+    app.state.remove("idleStopAt")
+    app.voidDoseKey = "12345"
+    app.appButtonHandler("btnVoidDose")
+    expect(app.state.tankDoseHistory.size() == 2 && app.noticesMatching("no longer in the recent dose history").size() == 1, "an unknown dose changes nothing")
 }
 
 // --------------------------------------------------------------------------- summary

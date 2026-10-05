@@ -89,6 +89,7 @@ without pinning it.
 | **Start confirmation timeout** | How long to wait for fresh evidence before failing a start safely (default **20 s**), never past the planned stop. |
 | **Power-loss grace** | How long a confirmed run may go without fresh, adequate power before it is stopped (default **30 s**). A single bound is measured from the last usable reading for missing reports, or from the first low reading for low power. |
 | **Run now** | *Calculate & send now* and *Preview (log only)* buttons. |
+| **Correct the estimate** | *Adjust tank inventory by* a signed amount of mL, and *Void a recorded dose that never ran*. Each shows what its button will do before you press it; see *Correcting the tank estimate*. |
 
 Both delivery triggers are independent: you can notify on every new sample, send
 a once-a-day summary at a fixed time, or both. The daily summary runs the same
@@ -133,12 +134,12 @@ confirmed still reserves its sample and daily volume, but writes no `lastDose*` 
 | `tankCapacityMl` | mL | Configured container capacity. |
 | `tankRemainingMl` | mL | Estimated remaining inventory: capacity minus recorded app-controlled doses. |
 | `tankPercent` | % | `tankRemainingMl` as a percentage of capacity. |
-| `tankRunwayDays` | days | Estimated days until inventory reaches the configured low-tank threshold. May be absent until there is dose history. |
+| `tankRunwayDays` | days | Estimated days until inventory reaches the configured low-tank threshold. `-1` while there is not yet enough dose history. |
 | `freeChlorine` | ppm | The reading this calculation used. |
 | `targetFreeChlorine` | ppm | The FC target this app computed — CYA-aware, or your manual override. |
 | `lastCalcEpochMs` | epoch ms | The same instant as `lastCalc`, as epoch milliseconds. `lastCalc` is a formatted date string that cannot be parsed reliably off the hub, so an external tool should use this one. |
 
-Two behaviours an external reader has to know:
+Behaviours an external reader has to know:
 
 - **A dose carries its original timestamp**, so re-reading it does not create another dose
   record. A historian can poll as often as it likes without inflating usage totals.
@@ -146,8 +147,16 @@ Two behaviours an external reader has to know:
   and `lastDoseRuntimeSeconds` are republished with the same `lastDoseEpochMs`, so a historian that
   keys doses by that value (the Waterguru-Grafana-Chart collector does) overwrites the point rather
   than counting a second dose.
-- **Absent values stay absent rather than becoming zero.** `tankRunwayDays` may be missing while
-  the app is still learning consumption, and that is not the same as a zero-day runway.
+- **Dose records are forced events.** At confirmation and at a correction the three `lastDose*`
+  attributes are sent with `isStateChange: true`. The hub drops an event whose value did not
+  change, so without that a dose of the same volume as the previous one, or a corrected volume
+  under the unchanged `lastDoseEpochMs`, left a historian nothing to pair. A voided dose (see
+  *Correcting the tank estimate*) is republished the same way, as 0 mL under its own timestamp.
+- **An unknown value reads `-1`, never a stale number and never zero.** When the tank inventory is
+  not initialized (or the container size changed and was not marked full), the FC reading or the
+  target is missing, or the tank runway is still learning, the attribute is set to `-1`. The
+  Waterguru-Grafana-Chart collector drops it instead of storing it, and `-1` is not the same as a
+  zero-day runway.
 
 **Colour key**
 
@@ -279,6 +288,23 @@ for the OFF report before it says anything: a healthy stop sends only the final 
 and "stop requested ... Retrying" goes out only if the OFF is still unconfirmed after that wait.
 The retries and the independent cutoff are armed at the moment of the stop request either way.
 
+The same holds for a stop with nothing open: **STOP chlorine pump now** on an idle app, a save
+(**Done**), or a run the app did not start. Since 2.4.2 that stop is anchored to its own request, so
+an old cached "off" cannot confirm it; until a fresh OFF arrives it says "stop requested", keeps its
+retries and cutoff, and holds back a new dose. A notice that said "Retrying" is followed by a final
+one when the OFF does arrive. Removing the app sends OFF once and says plainly that nothing will
+retry, because removal deletes every job with the app.
+
+Once a stop is being enforced, a repeated ON report whose value did not change (for example a
+stuck relay answering the Pump Power Profiler's 3 s refresh) does not restart it: the retry count
+keeps counting up to the EMERGENCY escalation and the cutoff runs as scheduled. A changed ON (the
+relay closing again) is still answered with OFF at once. The EMERGENCY notices wait a few seconds
+for the plug's answer to the OFF just sent, like the stop notice, and an emergency cutoff that is
+overdue (a busy hub, or a save just after its deadline) runs at once instead of being rescheduled.
+The running power watch stops as soon as an OFF is requested, so falling power during a stop is
+never reported as a power loss, and the cutoff latches the start fault when it stops an attempt
+that was never confirmed.
+
 All confirmed-OFF paths use the same cleanup. An unconfirmed attempt always retains its fault,
 including an OFF report arriving near the planned end before a timer runs. Emergency stops record
 their reason before requesting OFF, so a delayed acknowledgement cannot be described as ordinary
@@ -307,6 +333,22 @@ both ends cancels out):
   a power-reporting switch), including a late ON during fault recovery, is counted too: the tank
   from the observed run, today's total beyond what the attempt already reserved, with the window in
   the final notice. It never becomes a start or a `lastDose` record.
+
+### Correcting the tank estimate
+
+Two controls under the tank inventory correct the estimate on any install. Neither runs the pump,
+and neither changes today's dose total, the sample lock or the one-AUTO-dose guard. Each value is
+saved as you enter it, the line under it says what the button will do, and the button applies it
+once and clears the field.
+
+- **Adjust tank inventory by (mL, signed)** + **Apply tank adjustment**: moves the remaining
+  estimate up or down, within zero and the container size. It needs an initialized tank.
+- **Void a recorded dose that never ran** + **Void the selected dose**: pick one of the ten most
+  recent recorded doses. It leaves the dose history (so the measured FC loss no longer adds it
+  back), its volume returns to the tank, and the last-dose record is cleared only if it is that
+  same dose. The tile republishes it as 0 mL under its own `lastDoseEpochMs`, so a historian
+  zeroes its point instead of keeping a dose that never ran; the next calculation puts the actual
+  last dose back on the tile. Voiding is refused while a dose or a stop is open.
 
 ## How it runs
 
