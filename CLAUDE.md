@@ -31,6 +31,10 @@ into a real pool: treat every pump-related change as safety critical.
 | Maker API | app 2142 |
 | ZEN20 power strip | device 150, outlets 151 to 155 (router and AV gear) |
 
+The WaterGuru Integration (app 2195, driver 3045) comes from Brian Wilson's HPM package. HPM (app
+546) auto-updates every package at 04:00 EXCEPT that one (excluded 2026-10-07): an upstream release
+reaches the hub only when someone installs it via HPM > Update, and a local build is not overwritten.
+
 Hub access is the `hubitat-rules` MCP server. Gateway tools (`hub_read_*`, `hub_manage_*`)
 list their sub-tools when called with no arguments.
 
