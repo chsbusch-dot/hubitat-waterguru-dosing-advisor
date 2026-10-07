@@ -8,8 +8,8 @@ or the build aborts, so a mutation that silently failed to apply can never be re
 "surviving" mutant. A mutant is KILLED when the suite fails against it.
 
 Origin: the M01-M21 / PC1-PC2 set from the independent review of 5f218c9 (2.4.0), re-anchored to
-the 2.4.1 code; F1-F6 revert one 2.4.1 fix each and R1-R9 one 2.4.2 fix each (WOR-718), and every one
-of those must be killed by the tests that guard it.
+the 2.4.1 code; F1-F6 revert one 2.4.1 fix each, R1-R9 one 2.4.2 fix each (WOR-718) and W1-W3 one
+2.4.3 fix each (WOR-724), and every one of those must be killed by the tests that guard it.
 
   python3 tests/mutation/mutants.py              # build every mutant
   python3 tests/mutation/mutants.py M04 F1       # build only these
@@ -199,6 +199,24 @@ mut("R9c", "killed", "fix 9b reverted: voiding the last dose leaves lastDose in 
     ("    if (wasLast) state.remove(\"lastDose\")\n", ""))
 mut("R9d", "killed", "fix 9b reverted: a void is not published to the historian",
     ("    boolean published = publishVoidedDose(t)\n", "    boolean published = false\n"))
+
+# ---- 2.4.3 (WOR-724): each fix reverted (must be killed) ----
+mut("W1", "killed", "fix 1 reverted: WaterGuru's maintenance steps pass through as dose advice",
+    ("    def skipPhrases = [\"measure again\", \"see the advice\",\n"
+     "                       \"cassette\", \"battery\", \"batteries\", \"calibrat\"]\n",
+     "    def skipPhrases = [\"measure again\", \"see the advice\"]\n"))
+mut("W2", "killed", "fix 2 reverted: the cassette line shows the pad count as tests left",
+    ("    if (days) parts << days\n",
+     "    parts << \"${attrRaw('CassetteChecksLeft')} tests left\"\n    if (days) parts << days\n"))
+mut("W2b", "killed", "fix 2: a cassetteDaysLeft older than WaterGuru's text is still shown",
+    ("    if (days != null && days >= 0G && !(text != null && sourceStateNewer(\"CassetteTimeLeft\", \"cassetteDaysLeft\"))) {\n",
+     "    if (days != null && days >= 0G) {\n"))
+mut("W3", "killed", "fix 3 reverted: the FC history is read when LastMeasurement arrives, before freeChlorine",
+    ("    runIn(20, \"processNewSample\", [data: [sampleKey: key], overwrite: true])\n",
+     "    recordFcSample(key)\n    runIn(20, \"processNewSample\", [data: [sampleKey: key], overwrite: true])\n"),
+    ("    state.lastProcessedSample = key\n    recordFcSample(key)\n", "    state.lastProcessedSample = key\n"))
+mut("W3b", "killed", "fix 3: readings stored before 2.4.3 still count in the measured loss",
+    ("        if (hist[i-1]?.settled != true || hist[i]?.settled != true) continue\n", ""))
 
 
 def build(name):

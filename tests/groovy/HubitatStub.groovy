@@ -120,6 +120,28 @@ abstract class HubitatStub extends Script {
             this."${it.handler}"([name: attr, value: value.toString(), date: new Date(clockMs), isStateChange: changed])
         }
     }
+    /**
+     * A WaterGuru sample reaching the hub (2.4.3), `batch` being [attribute, value] pairs in the order the
+     * WaterGuru Integration writes them (processWaterGuruData: ... CassetteTimeLeft, LastMeasurementHuman,
+     * LastMeasurement, CassetteChecksLeft, ..., freeChlorine, pH, ..., doseAdvice, ..., cassetteInfo). It
+     * sends a value only when it changed, or every value when its forceUpdate setting is on (`force`).
+     *
+     * Each event reaches its subscribers as it is written, so a LastMeasurement handler runs while the
+     * rest of the sample (freeChlorine, CassetteChecksLeft, doseAdvice) still holds the previous one.
+     * That is what the live hub showed: 2.4.2's onNewSample stored the previous sample's FC for 7 of the
+     * 8 samples from Sep 29 to Oct 5 (app 2200's state.fcHistory against device 4656's events).
+     */
+    def deliverSourceBatch(def device, List<List> batch, boolean force = false) {
+        batch.each { pair ->
+            String attr = pair[0].toString()
+            def value = pair[1]
+            boolean changed = device.write(attr, value, clockMs)
+            if (!changed && !force) return
+            subscriptions.findAll { it.device.is(device) && it.attr == attr }.each {
+                this."${it.handler}"([name: attr, value: value?.toString(), date: new Date(clockMs), isStateChange: true])
+            }
+        }
+    }
     def sendEvent(Map m) { emitted << new LinkedHashMap(m); null }
     def pause(Number n) { null }
 
