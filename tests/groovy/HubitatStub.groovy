@@ -71,7 +71,9 @@ abstract class HubitatStub extends Script {
     }
 
     // --- Hubitat DSL: no-ops --------------------------------------------------------
-    def definition(Map m) { null }
+    /** The app's definition(...) map, so a test can check a declared flag such as singleThreaded. */
+    Map definitionArgs
+    def definition(Map m) { definitionArgs = new LinkedHashMap(m); null }
     def definition(Closure c) { null }
     def preferences(Closure c) { null }
     def metadata(Closure c) { null }
@@ -211,7 +213,11 @@ abstract class HubitatStub extends Script {
     // --- File Manager (used by the Pump Power Profiler) ---------------------------------
     /** File name -> contents. (Not named hubFiles: Groovy would read that property through getHubFiles().) */
     Map<String, String> fileStore = [:]
-    /** ok | listThrows | listNull | downloadThrows | downloadNull | uploadThrows */
+    /**
+     * ok | listThrows | listNull | listEmpty | downloadThrows | downloadNull | downloadEmpty | uploadThrows.
+     * listEmpty (a listing that leaves out files that exist) and downloadEmpty (0 bytes for a file that has
+     * content) have not been seen on the hub; the profiler must not lose its summary if they happen.
+     */
     String hubFilesMode = "ok"
     List<String> uploads = []
 
@@ -219,12 +225,14 @@ abstract class HubitatStub extends Script {
     def getHubFiles(String folder = "") {
         if (hubFilesMode == "listThrows") throw new RuntimeException("simulated File Manager listing failure")
         if (hubFilesMode == "listNull") return null
+        if (hubFilesMode == "listEmpty") return []
         return fileStore.keySet().collect { [name: it, type: "file"] }
     }
     /** downloadHubFile(): bytes, or null when the file is unavailable (firmware 2.5.2.129 docs). */
     byte[] downloadHubFile(String name) {
         if (hubFilesMode == "downloadThrows") throw new RuntimeException("simulated transient File Manager error")
         if (hubFilesMode == "downloadNull") return null
+        if (hubFilesMode == "downloadEmpty" && fileStore.containsKey(name)) return new byte[0]
         return fileStore.containsKey(name) ? fileStore[name].getBytes("UTF-8") : null
     }
     void uploadHubFile(String name, byte[] bytes) {

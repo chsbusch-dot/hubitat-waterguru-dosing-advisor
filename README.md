@@ -152,6 +152,9 @@ Behaviours an external reader has to know:
   change, so without that a dose of the same volume as the previous one, or a corrected volume
   under the unchanged `lastDoseEpochMs`, left a historian nothing to pair. A voided dose (see
   *Correcting the tank estimate*) is republished the same way, as 0 mL under its own timestamp.
+  Since 2.4.4 so is a run that is counted against the tank without becoming the last dose (an
+  unconfirmed attempt that drew power, or a late ON while a fault is pending): it is published once,
+  under its dose-history timestamp, and `lastDose` stays the last confirmed dose.
 - **An unknown value reads `-1`, never a stale number and never zero.** When the tank inventory is
   not initialized (or the container size changed and was not marked full), the FC reading or the
   target is missing, or the tank runway is still learning, the attribute is set to `-1`. The
@@ -234,8 +237,10 @@ By default these are passed through from WaterGuru's `doseAdvice` — amounts
 already computed in the products you actually use. `doseAdvice` also carries
 WaterGuru's maintenance steps (replacing the cassette, the battery,
 calibration); those are left out, and the cassette line shows days left and
-"replace soon" or "replace now" when WaterGuru wants a new cassette. When that
-advice is not available, the app estimates generically:
+"replace soon" or "replace now" when WaterGuru wants a new cassette. Since 2.4.4
+that cassette status also turns the tile YELLOW (never RED) with "Replace
+cassette soon" or "Replace cassette now". When that advice is not available,
+the app estimates generically:
 
 - **TA up:** baking soda, 1.5 lb per 10 ppm per 10,000 gal.
 - **pH / TA down:** muriatic acid, TA-aware (~6.4 fl oz of 31.45% lowers pH 0.1 per
@@ -302,6 +307,14 @@ retries and cutoff, and holds back a new dose. A notice that said "Retrying" is 
 one when the OFF does arrive. Removing the app sends OFF once and says plainly that nothing will
 retry, because removal deletes every job with the app.
 
+Since 2.4.4 such a stop also ends when the switch never answers but has reported off since before
+the request (an unpowered or unreachable plug, or a driver that only reports changes): after its
+five retries it closes with a plain notice ("OFF sent 6 times with no answer; the switch last
+reported off") instead of escalating into EMERGENCY notices and holding every dose. A switch that
+reports ON at any point, or cannot be read, still escalates. When the emergency cutoff stops a run
+the app did not start, the OFF that answers it brings a final "EMERGENCY cutoff confirmed the
+chlorine pump OFF" notice, whether it lands before or after the EMERGENCY warning.
+
 Once a stop is being enforced, a repeated ON report whose value did not change (for example a
 stuck relay answering the Pump Power Profiler's 3 s refresh) does not restart it: the retry count
 keeps counting up to the EMERGENCY escalation and the cutoff runs as scheduled. A changed ON (the
@@ -310,7 +323,9 @@ for the plug's answer to the OFF just sent, like the stop notice, and an emergen
 overdue (a busy hub, or a save just after its deadline) runs at once instead of being rescheduled.
 The running power watch stops as soon as an OFF is requested, so falling power during a stop is
 never reported as a power loss, and the cutoff latches the start fault when it stops an attempt
-that was never confirmed.
+that was never confirmed. A power check that runs more than two intervals after the previous one
+(after a hub restart, for example) asks the plug to report and judges on the next check, so readings
+from before the gap cannot latch a false power loss; only one check in a row is put off.
 
 All confirmed-OFF paths use the same cleanup. An unconfirmed attempt always retains its fault,
 including an OFF report arriving near the planned end before a timer runs. Emergency stops record
