@@ -2425,7 +2425,8 @@ check("fix 5: the measured FC loss adds the app's own doses back (review probe)"
     // counted only the two intervals where FC fell and measured 0.2.
     List<BigDecimal> readings = [5.1G, 5.4G, 5.3G, 5.5G, 5.2G, 5.4G]
     long t0 = app.clockMs - 5 * DAY_MS
-    app.state.fcHistory = readings.withIndex().collect { fc, i -> [t: t0 + i * DAY_MS, fc: fc.toString()] }
+    // settled: read once the sample was in, as 2.4.3 records every reading (see the 2.4.3 fix 3 checks)
+    app.state.fcHistory = readings.withIndex().collect { fc, i -> [t: t0 + i * DAY_MS, fc: fc.toString(), settled: true] }
     app.state.tankDoseHistory = (0..4).collect { i ->
         [t: t0 + i * DAY_MS + 25 * 60_000L, ml: ((6.0G - readings[i]) * 2.5G * 10.7G * 29.5735G).toString()]
     }
@@ -2441,7 +2442,7 @@ check("fix 5: with the product strength unknown, intervals that contain a dose a
     app.volumeOverride = 25000G                                // no strength override, no device attribute
     List<BigDecimal> readings = [5.1G, 5.4G, 5.3G]
     long t0 = app.clockMs - 2 * DAY_MS
-    app.state.fcHistory = readings.withIndex().collect { fc, i -> [t: t0 + i * DAY_MS, fc: fc.toString()] }
+    app.state.fcHistory = readings.withIndex().collect { fc, i -> [t: t0 + i * DAY_MS, fc: fc.toString(), settled: true] }
     app.state.tankDoseHistory = [[t: t0 + 25 * 60_000L, ml: "722"]]                  // inside the first interval only
     def m = app.measuredFcLoss()
     expect(m != null && m.n == 1 && Math.abs((m.rate as BigDecimal).doubleValue() - 0.1d) < 0.001d,
@@ -2453,7 +2454,7 @@ check("fix 5: with the product strength unknown, intervals that contain a dose a
 check("fix 5: control, undosed samples measure exactly as before") {
     def app = newApp()
     List<BigDecimal> undosed = [6.0G, 5.4G, 4.7G, 4.2G]
-    app.state.fcHistory = undosed.withIndex().collect { fc, i -> [t: app.clockMs - (3 - i) * DAY_MS, fc: fc.toString()] }
+    app.state.fcHistory = undosed.withIndex().collect { fc, i -> [t: app.clockMs - (3 - i) * DAY_MS, fc: fc.toString(), settled: true] }
     def m = app.measuredFcLoss()
     expect(m != null && Math.abs((m.rate as BigDecimal).doubleValue() - 0.6d) < 0.001d, "expected 0.6 ppm/day, got ${m}")
 }
@@ -3152,6 +3153,192 @@ check("2.4.2 fix 9b: a void is refused while a dose or a stop is open, and for a
     app.voidDoseKey = "12345"
     app.appButtonHandler("btnVoidDose")
     expect(app.state.tankDoseHistory.size() == 2 && app.noticesMatching("no longer in the recent dose history").size() == 1, "an unknown dose changes nothing")
+}
+
+// ----------------------------------------------------------------------- 2.4.3 (WOR-724): the WaterGuru source
+
+/** The order the WaterGuru Integration writes a sample in (processWaterGuruData, as the hub runs it in app
+ *  1238, plus the cassetteDaysLeft of bdwilson/hubitat#76), cut to what this app reads. Device 4656's
+ *  Oct 5 19:45:03 batch arrived in this order: LastMeasurement before CassetteChecksLeft, freeChlorine
+ *  and doseAdvice. */
+def WG_ORDER = ["CassettePercent", "CassetteStatus", "CassetteTimeLeft", "cassetteDaysLeft", "LastMeasurementHuman",
+                "LastMeasurement", "CassetteChecksLeft", "freeChlorine", "pH", "totalAlkalinity", "calciumHardness",
+                "cyanuricAcid", "freeChlorineTarget", "poolVolume", "doseAdvice", "chlorineProductPct",
+                "cassetteType", "cassetteInfo"]
+
+/** Device 4656 after the Oct 5 19:30 sample (read on Oct 6). */
+def LIVE_OCT5 = [CassettePercent: 12.0G, CassetteStatus: "YELLOW", CassetteTimeLeft: "4 days left",
+                 LastMeasurementHuman: "14 minutes ago", LastMeasurement: "2026-10-06T02:30:48.000Z",
+                 CassetteChecksLeft: 24, freeChlorine: 5.6G, pH: 7.5G, totalAlkalinity: 97G, calciumHardness: 263G,
+                 cyanuricAcid: 39G, freeChlorineTarget: 3.0G, poolVolume: 25000G,
+                 doseAdvice: "Follow these steps to replace cassette\nDecrease dosing of liquid chlorine product.\nMeasure again to see the advice",
+                 chlorineProductPct: 12.5G, cassetteType: "C5", cassetteInfo: "C5 · installed Sep 12, 2026"]
+
+/** One sample as the integration delivers it: the given attributes, in its order. */
+def wgSample = { app, wg, Map values, boolean force = false ->
+    app.deliverSourceBatch(wg, WG_ORDER.findAll { values.containsKey(it) }.collect { [it, values[it]] }, force)
+}
+
+/** The source device holding `values` (by default the Oct 4 sample: FC 4.7), stored a day ago, and wired
+ *  to the app by initialize() as on the hub. */
+def liveWaterGuru = { app, Map values = null ->
+    def wg = new FakeWaterGuru()
+    Map start = values ?: LIVE_OCT5 + [LastMeasurement: "2026-10-05T02:30:27.000Z", freeChlorine: 4.7G,
+                                       CassetteChecksLeft: 30, CassetteTimeLeft: "5 days left", CassettePercent: 15.0G]
+    start.each { k, v -> wg.write(k, v, app.clockMs - DAY_MS) }
+    app.sourceDevice = wg
+    app.createTile = false
+    app.initialize()
+    return wg
+}
+
+def epoch = { String iso -> Instant.parse(iso).toEpochMilli() }
+
+/** The live dose history (app 2200, Oct 6): every app dose since Sep 29, booked about 26 s after the
+ *  19:45 refresh that brought in its sample. The Oct 3 phantom was voided on Oct 5 and is not in it. */
+def LIVE_DOSES = [[t: 1790736326145L, ml: "553.7637875"], [t: 1790822724556L, ml: "158.2182250"],
+                  [t: 1790909125019L, ml: "474.6546750"], [t: 1790995524460L, ml: "711.9820125"],
+                  [t: 1791168328967L, ml: "1028.4184625"], [t: 1791254729615L, ml: "316.4364500"]]
+
+check("2.4.3 fix 3: the Oct 5 sample is stored with its own FC (5.6), not the Oct 4 sample's (4.7)") {
+    def app = newApp()
+    def wg = liveWaterGuru(app)
+    app.clockMs = epoch("2026-10-06T02:45:03.033Z")            // Oct 5 19:45:03 PDT, the 19:45 refresh brings it in
+    wgSample(app, wg, LIVE_OCT5)
+    expect(!app.state.fcHistory, "onNewSample records nothing while the sample is still arriving: ${app.state.fcHistory}")
+    expect(app.dueAt["processNewSample"] == app.clockMs + 20_000L, "it schedules the processing: ${app.dueAt}")
+    app.advance(20_000L)
+    long t = epoch("2026-10-06T02:30:48Z")
+    expect(app.state.fcHistory == [[t: t, fc: "5.6", settled: true]], "its own FC under its measurement time: ${app.state.fcHistory}")
+    expect(app.state.lastProcessedSample == "2026-10-06T02:30:48.000Z", "and the sample was processed")
+    wgSample(app, wg, LIVE_OCT5, true)                         // forceUpdate re-sends the same sample on the next poll
+    app.advance(20_000L)
+    app.recordFcSample("2026-10-06T02:30:48.000Z")
+    expect(app.state.fcHistory.size() == 1, "a sample is recorded once, by its measurement time: ${app.state.fcHistory}")
+}
+
+check("2.4.3 fix 3: the live week replayed measures the real loss, each dose in the interval it fed") {
+    def app = newApp()
+    def wg = liveWaterGuru(app, LIVE_OCT5 + [LastMeasurement: "2026-09-29T02:30:31.000Z", freeChlorine: 6.0G])
+    app.state.tankDoseHistory = []
+    // [measurement time, FC WaterGuru sent for it, when the hub received it, the app dose that followed]
+    // from device 4656's events and app 2200's dose history. The 20:53 manual test on Oct 3 (received at
+    // the 22:00 poll) has no dose; neither has the Oct 3 evening sample since its phantom was voided.
+    def week = [["2026-09-30T02:30:50Z", 5.3G, "2026-09-30T02:45:04.811Z", LIVE_DOSES[0]],
+                ["2026-10-01T02:31:10Z", 5.8G, "2026-10-01T02:45:03.374Z", LIVE_DOSES[1]],
+                ["2026-10-02T02:30:30Z", 5.4G, "2026-10-02T02:45:03.280Z", LIVE_DOSES[2]],
+                ["2026-10-03T02:30:49Z", 5.1G, "2026-10-03T02:45:03.543Z", LIVE_DOSES[3]],
+                ["2026-10-04T02:31:08Z", 5.4G, "2026-10-04T02:45:03.319Z", null],
+                ["2026-10-04T03:53:06Z", 5.0G, "2026-10-04T05:00:04.145Z", null],
+                ["2026-10-05T02:30:27Z", 4.7G, "2026-10-05T02:45:03.368Z", LIVE_DOSES[4]],
+                ["2026-10-06T02:30:48Z", 5.6G, "2026-10-06T02:45:03.033Z", LIVE_DOSES[5]]]
+    week.each { sampledAt, fc, receivedAt, dose ->
+        app.clockMs = epoch(receivedAt)
+        wgSample(app, wg, [LastMeasurement: sampledAt.replace("Z", ".000Z"), freeChlorine: fc])
+        app.advance(20_000L)
+        if (dose) {
+            app.runUntil(dose.t as Long)
+            app.state.tankDoseHistory = app.state.tankDoseHistory + [dose]
+        }
+    }
+    expect(app.state.fcHistory*.fc == ["5.3", "5.8", "5.4", "5.1", "5.4", "5.0", "4.7", "5.6"],
+           "each sample's own FC: ${app.state.fcHistory*.fc}")
+    expect(app.state.fcHistory*.t == week.collect { epoch(it[0]) }, "under its measurement time")
+    // By hand, mL per ppm = 10.7 fl oz x 2.5 x 29.5735 = 791.09, so the doses add 0.7, 0.2, 0.6, 0.9, 1.3
+    // and 0.4 ppm. Losses: 5.3+0.7-5.8, 5.8+0.2-5.4, 5.4+0.6-5.1, 5.1+0.9-5.4 per day; Oct 3 20:53 to
+    // Oct 4 19:30 is 5.0-4.7 over 0.943 d; then 4.7+1.3-5.6. The last five average 0.5636 ppm/day. 2.4.2
+    // stored each previous FC and measured 1.1246.
+    def m = app.measuredFcLoss()
+    expect(m != null && m.n == 5 && Math.abs((m.rate as BigDecimal).doubleValue() - 0.5636d) < 0.0005d,
+           "the real loss over five intervals, got ${m}")
+}
+
+check("2.4.3 fix 3: readings stored before 2.4.3 are left out, and the measured loss restarts from settled ones") {
+    def app = newApp()
+    def wg = liveWaterGuru(app, LIVE_OCT5)
+    // The end of app 2200's history on Oct 6, as 2.4.2 left it: each entry but Oct 4's is the previous sample's FC.
+    app.state.fcHistory = [[t: 1790649031000L, fc: "5.2"], [t: 1790735450000L, fc: "6.0"], [t: 1790821870000L, fc: "5.3"],
+                           [t: 1790908230000L, fc: "5.8"], [t: 1790994649000L, fc: "5.4"], [t: 1791081068000L, fc: "5.1"],
+                           [t: 1791085986000L, fc: "5.4"], [t: 1791167427000L, fc: "4.7"], [t: 1791253848000L, fc: "4.7"]]
+    app.state.tankDoseHistory = LIVE_DOSES
+    expect(app.measuredFcLoss() == null, "nothing settled to measure yet: ${app.measuredFcLoss()}")
+    expect(app.computeRunway(5.6G, 39G).basis.contains("no sample history yet"), "the runway says it is estimating")
+    expect(app.runwayStatusLine().startsWith("Samples recorded so far: 0"), app.runwayStatusLine())
+    // The next two samples arrive under 2.4.3 (illustrative values), with a 632.87 mL (0.8 ppm) dose between them.
+    app.clockMs = epoch("2026-10-07T02:45:03Z")
+    wgSample(app, wg, [LastMeasurement: "2026-10-07T02:30:40.000Z", freeChlorine: 5.2G])
+    app.advance(20_000L)
+    expect(app.measuredFcLoss() == null, "a legacy reading does not pair with a settled one")
+    app.runUntil(epoch("2026-10-07T02:45:28Z"))
+    app.state.tankDoseHistory = app.state.tankDoseHistory + [[t: app.clockMs, ml: "632.8729000"]]
+    app.clockMs = epoch("2026-10-08T02:45:03Z")
+    wgSample(app, wg, [LastMeasurement: "2026-10-08T02:30:52.000Z", freeChlorine: 5.3G])
+    app.advance(20_000L)
+    def m = app.measuredFcLoss()
+    double expected = 0.7d / ((epoch("2026-10-08T02:30:52Z") - epoch("2026-10-07T02:30:40Z")) / 86_400_000.0d)
+    expect(m != null && m.n == 1 && Math.abs((m.rate as BigDecimal).doubleValue() - expected) < 0.0001d,
+           "5.2 + 0.8 - 5.3 over the one settled interval, got ${m}")
+    expect(app.runwayStatusLine() == "Currently using your measured loss (~0.7 ppm/day from 2 samples).", app.runwayStatusLine())
+}
+
+check("2.4.3 fix 1: WaterGuru's replace-cassette step is not dose advice (live Oct 5 doseAdvice)") {
+    def app = newApp()
+    liveWaterGuru(app, LIVE_OCT5)
+    def tile = newTile(app)
+    app.slamMode = false                                       // TFP target 0.115 x CYA 39 = 4.5 ppm: FC 5.6 holds
+    app.runAndDeliver(false, false, "preview")
+    String text = app.state.lastPreview
+    expect(tile.lastSent("status") == "GREEN" && tile.lastSent("recommendation") == "All in range",
+           "a maintenance step neither recommends nor turns the tile RED: ${tile.lastSent('status')} / ${tile.lastSent('recommendation')}")
+    expect(!text.toLowerCase().contains("follow these steps"), "nor appears as advice:\n${text}")
+    expect(text.contains("None — WaterGuru reports no pH / TA / CH / CYA adjustment needed."), "WaterGuru asked for no dose:\n${text}")
+    expect(text.contains("Cassette: C5 · installed Sep 12, 2026 · 4 days left · 12.0% · replace soon"), "the cassette line says it:\n${text}")
+    app.wgAdviceIncludeChlorine = true                         // the setting still governs WaterGuru's chlorine line
+    app.runAndDeliver(false, false, "preview")
+    expect(tile.lastSent("recommendation").startsWith("Decrease dosing of liquid chlorine") &&
+           !tile.lastSent("recommendation").toLowerCase().contains("cassette"), "only the chlorine line: ${tile.lastSent('recommendation')}")
+}
+
+check("2.4.3 fix 1: dose lines stay; cassette, battery and calibration steps go, whatever the chlorine setting") {
+    def app = newApp()
+    // Illustrative wording for battery and calibration; the live hub has shown only the cassette step so far.
+    String advice = "Replace the batteries in your pod\nAdd 2.4 cups of dry acid\nCalibrate the flow sensor\n" +
+                    "Add 3 lb of baking soda\nFollow these steps to replace cassette\nDecrease dosing of liquid chlorine product.\n" +
+                    "Battery low: replace soon"
+    app.wgAdviceIncludeChlorine = false
+    expect(app.filterWgAdvice(advice) == ["Add 2.4 cups of dry acid", "Add 3 lb of baking soda"], "${app.filterWgAdvice(advice)}")
+    app.wgAdviceIncludeChlorine = true
+    expect(app.filterWgAdvice(advice) == ["Add 2.4 cups of dry acid", "Add 3 lb of baking soda", "Decrease dosing of liquid chlorine product."],
+           "${app.filterWgAdvice(advice)}")
+    expect(app.filterWgAdvice("Follow these steps to replace cassette\nMeasure again to see the advice") == [], "maintenance alone is no advice")
+}
+
+check("2.4.3 fix 2: the cassette line counts days, not the 24 pads as tests (live Oct 5)") {
+    def app = newApp()
+    liveWaterGuru(app, LIVE_OCT5)
+    expect(app.cassetteText() == "C5 · installed Sep 12, 2026 · 4 days left · 12.0% · replace soon", "got: ${app.cassetteText()}")
+}
+
+check("2.4.3 fix 2: cassetteDaysLeft is shown while it is current, WaterGuru's text once it moves on, and gaps are left out") {
+    def app = newApp()
+    def wg = liveWaterGuru(app, LIVE_OCT5)
+    app.clockMs += DAY_MS                                      // bdwilson/hubitat#76 publishes the parsed number right after the text
+    wgSample(app, wg, [CassetteTimeLeft: "1 week left", cassetteDaysLeft: 7])
+    expect(app.cassetteText() == "C5 · installed Sep 12, 2026 · 7 days left · 12.0% · replace soon", "the number: ${app.cassetteText()}")
+    app.clockMs += DAY_MS
+    wgSample(app, wg, [CassetteStatus: "RED", CassetteTimeLeft: "1 day left", cassetteDaysLeft: 1])
+    expect(app.cassetteText() == "C5 · installed Sep 12, 2026 · 1 day left · 12.0% · replace now", "one day: ${app.cassetteText()}")
+    app.clockMs += DAY_MS                                      // a text it cannot parse: no number is published
+    wgSample(app, wg, [CassetteTimeLeft: "Cassette expired"])
+    expect(app.cassetteText() == "C5 · installed Sep 12, 2026 · Cassette expired · 12.0% · replace now",
+           "the older number is not shown against newer text: ${app.cassetteText()}")
+
+    def older = newApp()                                       // an integration without the new attributes
+    liveWaterGuru(older, [cassetteType: "C2", CassetteTimeLeft: "unknown"])
+    expect(older.cassetteText() == "C2", "only what is known: ${older.cassetteText()}")
+    def none = newApp()
+    liveWaterGuru(none, [CassetteTimeLeft: "4 days left", CassetteChecksLeft: 24])
+    expect(none.cassetteText() == null, "no cassette line without a type, as before: ${none.cassetteText()}")
 }
 
 // --------------------------------------------------------------------------- summary

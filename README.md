@@ -216,7 +216,11 @@ days = (FC − floor) ÷ dailyLoss
    interval where FC still rose is chlorine from elsewhere and is skipped. Adding a
    dose back needs the pool volume and the chlorine strength (an override, or the
    device's own value); without them, intervals that contain a dose are skipped
-   rather than guessed. This needs a couple of days of samples to appear.
+   rather than guessed. This needs a couple of days of samples to appear. Each
+   reading is taken when the app processes the sample, 20 seconds after it
+   arrives: WaterGuru sends the sample time before the chlorine reading, so
+   versions before 2.4.3 mostly stored the previous sample's FC, and those
+   readings are not used.
 3. **Estimated** — a modeled default (3 ppm/day, scaled to 60% when the device
    reports a cover) used until measured history exists.
 
@@ -227,8 +231,11 @@ is a planning aid, not a guarantee; confirm with your own test kit.
 ### pH / TA / CH / CYA
 
 By default these are passed through from WaterGuru's `doseAdvice` — amounts
-already computed in the products you actually use. When that advice is not
-available, the app estimates generically:
+already computed in the products you actually use. `doseAdvice` also carries
+WaterGuru's maintenance steps (replacing the cassette, the battery,
+calibration); those are left out, and the cassette line shows days left and
+"replace soon" or "replace now" when WaterGuru wants a new cassette. When that
+advice is not available, the app estimates generically:
 
 - **TA up:** baking soda, 1.5 lb per 10 ppm per 10,000 gal.
 - **pH / TA down:** muriatic acid, TA-aware (~6.4 fl oz of 31.45% lowers pH 0.1 per

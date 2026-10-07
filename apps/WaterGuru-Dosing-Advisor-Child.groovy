@@ -27,6 +27,18 @@
  * All doses are ESTIMATES. Always confirm with your own test kit before adding.
  *
  * Version history
+ *   2.4.3 - Three findings from a review of the WaterGuru Integration that feeds this app (WOR-724).
+ *           (1) WaterGuru's maintenance steps ("Follow these steps to replace cassette", battery,
+ *           calibration) are no longer passed through as dose advice. doseAdvice is built from every
+ *           WaterGuru alert, so they reached the tile's recommendation and turned the status RED. The
+ *           cassette line says when WaterGuru wants the cassette replaced. (2) The cassette line shows
+ *           days left, from the numeric cassetteDaysLeft while it is current, else WaterGuru's own text,
+ *           and no longer shows CassetteChecksLeft as "tests left": it is a pad count (a C5 uses 6 pads
+ *           per sample day, so 24 pads is 4 days). (3) The free-chlorine history behind the algae runway
+ *           is recorded when the sample is processed, 20 s after LastMeasurement. WaterGuru sends
+ *           LastMeasurement before freeChlorine, so the history mostly held the previous sample's FC (7 of
+ *           8 samples on the live hub) and lined each dose up with the wrong interval; the measured loss
+ *           came out about twice the real one. Readings stored before 2.4.3 are not used for it.
  *   2.4.2 - Follow-ups to 2.4.1 (WOR-718). (1) A stop with nothing open (the STOP button on an idle
  *           app, a save, a removal) is anchored to its own request, so a cached "off" no longer
  *           confirms it before the plug has answered; it says "stop requested" until a fresh OFF
@@ -158,7 +170,7 @@
 
 import groovy.transform.Field
 
-def appVersion() { "2.4.2" }
+def appVersion() { "2.4.3" }
 
 definition(
     name:        "WaterGuru Dosing Advisor Pool",
@@ -885,8 +897,10 @@ def refreshWaterGuruSource() {
 }
 
 def onNewSample(evt) {
+    // 2.4.3: this handler only schedules. The integration sends LastMeasurement BEFORE freeChlorine and
+    // the rest of the sample, so a reading taken here is usually the previous sample's: it was for 7 of
+    // the 8 samples from Sep 29 to Oct 5 on the live hub. processNewSample reads the sample once it is in.
     logDebug "New WaterGuru sample (${evt?.value}); waiting briefly for all attributes"
-    recordFcSample(evt)
     String key = evt?.value?.toString() ?: attrRaw("LastMeasurement") ?: now().toString()
     runIn(20, "processNewSample", [data: [sampleKey: key], overwrite: true])
 }
@@ -898,6 +912,7 @@ def processNewSample(Map data = [:]) {
         return
     }
     state.lastProcessedSample = key
+    recordFcSample(key)
     if (dailyDigest == true && autoDoseWindowOpen()) {
         sendDailyChlorineSummary(false, "new WaterGuru sample")
     } else if (dailyDigest == true) {
@@ -1189,13 +1204,19 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
             fcSummary: "FC ${n1(fc)} → ${n1(target)} ppm"]
 }
 
-/** Keep WaterGuru advice lines; drop chlorine lines unless the user opts in. */
+/** Keep WaterGuru's dose advice lines; drop its maintenance steps, and its chlorine lines unless the
+ *  user opts in. */
 private List filterWgAdvice(String doseAdvice) {
     if (!doseAdvice || doseAdvice.trim().equalsIgnoreCase("None")) return []
     def lines = doseAdvice.split("\n").collect { it.trim() }.findAll { it }
     // Drop WaterGuru's non-actionable placeholder lines (e.g. "Measure again to
     // see the advice") — they carry no dose and just add noise to tile/message.
-    def skipPhrases = ["measure again", "see the advice"]
+    // 2.4.3: and its maintenance steps. doseAdvice is built from EVERY WaterGuru alert, so "Follow these
+    // steps to replace cassette" arrived beside the doses, became the tile's recommendation and turned
+    // the status RED. Cassette, battery and calibration steps are pod upkeep, not a chemical, and no dose
+    // line names them; the cassette line shows the cassette's own state.
+    def skipPhrases = ["measure again", "see the advice",
+                       "cassette", "battery", "batteries", "calibrat"]
     lines = lines.findAll { line -> def ll = line.toLowerCase(); !skipPhrases.any { ll.contains(it) } }
     if (wgAdviceIncludeChlorine == true) return lines.unique()
     // We compute FC ourselves — strip WaterGuru's chlorine/shock lines so the
@@ -3453,8 +3474,13 @@ private String     attrRaw(String attr) { def v = sourceDevice?.currentValue(att
 
 /** WaterGuru cassette descriptor for the header/tile, or null when the source
  *  driver (older WaterGuru Integration) doesn't report it or it's unknown.
- *  Prefers the richer cassetteInfo (e.g. "C5 · installed Aug 12, 2026 ·
- *  28/30 pads") and falls back to the bare cassetteType. */
+ *  Prefers the richer cassetteInfo (e.g. "C5 · installed Sep 12, 2026") and
+ *  falls back to the bare cassetteType, then adds days left, percent left and
+ *  whether WaterGuru wants the cassette replaced. A missing attribute is left out.
+ *
+ *  2.4.3: no "N tests left". CassetteChecksLeft is a PAD count: a C5 uses 6 pads per sample day, so the
+ *  live 24 meant "4 days left", not 24 more tests. And since the replace-cassette step is no longer dose
+ *  advice, WaterGuru's cassette status (YELLOW: replace soon, RED: replace now) is shown here. */
 private String cassetteText() {
     def info = attrRaw("cassetteInfo")
     def type = attrRaw("cassetteType")
@@ -3462,13 +3488,40 @@ private String cassetteText() {
                   ((type && type.trim() && !type.trim().equalsIgnoreCase("unknown")) ? type.trim() : null)
     if (!base) return null
     def parts = [base]
-    def checks = attrRaw("CassetteChecksLeft")
-    def timeLeft = attrRaw("CassetteTimeLeft")
+    String days = cassetteDaysText()
     def percent = attrRaw("CassettePercent")
-    if (checks && checks.trim() && !checks.trim().equalsIgnoreCase("unknown")) parts << "${checks.trim()} tests left"
-    if (timeLeft && timeLeft.trim() && !timeLeft.trim().equalsIgnoreCase("unknown")) parts << timeLeft.trim()
+    String status = attrRaw("CassetteStatus")?.trim()?.toUpperCase()
+    if (days) parts << days
     if (percent && percent.trim() && !percent.trim().equalsIgnoreCase("unknown")) parts << "${percent.trim()}%"
+    if (status == "YELLOW") parts << "replace soon"
+    else if (status == "RED") parts << "replace now"
     return parts.join(" · ")
+}
+
+/** Days left on the cassette (2.4.3): the numeric cassetteDaysLeft when the driver publishes it (the
+ *  WaterGuru Integration change in bdwilson/hubitat#76), else WaterGuru's own CassetteTimeLeft text, else
+ *  null. The integration parses the number from that text and publishes nothing for a text it cannot
+ *  read, so a number dated before the text belongs to an older text and the text is shown instead. */
+private String cassetteDaysText() {
+    String text = attrRaw("CassetteTimeLeft")?.trim()
+    if (!text || text.equalsIgnoreCase("unknown")) text = null
+    BigDecimal days = attrNum("cassetteDaysLeft")
+    if (days != null && days >= 0G && !(text != null && sourceStateNewer("CassetteTimeLeft", "cassetteDaysLeft"))) {
+        return days == 1G ? "1 day left" : "${n0(days)} days left"
+    }
+    return text
+}
+
+/** Whether the source device last changed attribute `a` after attribute `b`, by their stored state dates.
+ *  False when either date is unknown. */
+private boolean sourceStateNewer(String a, String b) {
+    try {
+        Long at = stateDateToMs(sourceDevice?.currentState(a)?.date)
+        Long bt = stateDateToMs(sourceDevice?.currentState(b)?.date)
+        return at != null && bt != null && at > bt
+    } catch (ignored) {
+        return false
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3478,14 +3531,18 @@ private String cassetteText() {
 /** Append the current free-chlorine reading to the rolling sample history the
  *  runway forecast learns its decay rate from. Keyed by the sample's
  *  measurement time so repeated polls of the same sample don't double-count;
- *  bounded to RUNWAY_HISTORY_MAX entries. */
-private void recordFcSample(evt) {
+ *  bounded to RUNWAY_HISTORY_MAX entries.
+ *
+ *  2.4.3: called from processNewSample, once the whole sample is in, and the entry is marked settled.
+ *  An entry without the mark was read when LastMeasurement arrived, before the sample's freeChlorine, and
+ *  mostly holds the previous sample's FC; measuredFcLoss leaves those out. */
+private void recordFcSample(String sampleKey) {
     BigDecimal fc = attrNum("freeChlorine")
     if (fc == null) return
-    Long t = toEpochMs(evt?.value) ?: now()
+    Long t = toEpochMs(sampleKey) ?: now()
     def hist = (state.fcHistory instanceof List) ? state.fcHistory : []
     if (hist && hist[-1]?.t == t) return   // same sample already recorded
-    hist << [t: t, fc: fc.toString()]
+    hist << [t: t, fc: fc.toString(), settled: true]
     if (hist.size() > RUNWAY_HISTORY_MAX) hist = hist[(hist.size() - RUNWAY_HISTORY_MAX)..-1]
     state.fcHistory = hist
     logDebug "Recorded FC sample ${fc} ppm @ ${t} (${hist.size()} in history)"
@@ -3529,7 +3586,13 @@ private Map computeRunway(BigDecimal fc, BigDecimal cya) {
  *  loss is measured. Counting only intervals where FC fell made daily dosing hide the
  *  loss (review probe: a true 0.64 ppm/day measured as 0.2, a runway about 3x too
  *  long). When the pool volume or the product strength is unknown, a dose cannot be
- *  converted, so an interval that contains one is skipped instead of guessed. */
+ *  converted, so an interval that contains one is skipped instead of guessed.
+ *
+ *  2.4.3: only settled readings are measured. Each is filed under its sample's measurement time and the
+ *  app doses after the sample, so a dose falls in the interval that starts at the sample it answered and
+ *  ends at the next one, whose FC it raised. A reading stored before 2.4.3 was usually the previous
+ *  sample's FC, which also paired each dose with the wrong interval (live hub, Sep 29 to Oct 5: about
+ *  1.1 ppm/day measured where the samples give about 0.56). */
 private Map measuredFcLoss() {
     def hist = (state.fcHistory instanceof List) ? state.fcHistory : []
     if (hist.size() < 2) return null
@@ -3537,6 +3600,7 @@ private Map measuredFcLoss() {
     List doses = appDoseEvents()
     def rates = []
     for (int i = 1; i < hist.size(); i++) {
+        if (hist[i-1]?.settled != true || hist[i]?.settled != true) continue
         BigDecimal fa = toBD(hist[i-1]?.fc), fb = toBD(hist[i]?.fc)
         def ta = hist[i-1]?.t, tb = hist[i]?.t
         if (fa == null || fb == null || !(ta instanceof Number) || !(tb instanceof Number)) continue
@@ -3601,9 +3665,10 @@ private String runwayLine(Map r) {
 /** Config-page status: how much sample history the forecast has learned from. */
 private String runwayStatusLine() {
     def hist = (state.fcHistory instanceof List) ? state.fcHistory : []
+    int n = hist.count { it?.settled == true } as int   // 2.4.3: the readings measuredFcLoss can use
     def m = measuredFcLoss()
-    if (m != null) return "Currently using your measured loss (~${n1(m.rate)} ppm/day from ${hist.size()} samples)."
-    return "Samples recorded so far: ${hist.size()} (a couple of days of declines are needed before a measured rate replaces the estimate)."
+    if (m != null) return "Currently using your measured loss (~${n1(m.rate)} ppm/day from ${n} samples)."
+    return "Samples recorded so far: ${n} (a couple of days of declines are needed before a measured rate replaces the estimate)."
 }
 
 /** Parse a WaterGuru/Hubitat ISO-8601 timestamp string to epoch millis, or null. */

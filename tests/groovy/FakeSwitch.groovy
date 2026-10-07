@@ -242,6 +242,43 @@ class FakeSwitch {
 }
 
 /**
+ * The WaterGuru Integration's pool device (live: device 4656), as the app reads it (2.4.3).
+ *
+ * Each attribute keeps its value and the date that value was set. Like the hub, the stored date moves
+ * only when the value changes. The integration writes a whole sample as one batch of events, which
+ * HubitatStub.deliverSourceBatch replays in the integration's order.
+ */
+class FakeWaterGuru {
+    String label = "MPS BYD Pool Waterguru"
+    String getDisplayName() { label }
+    private final Map<String, Object> values = [:]
+    private final Map<String, Long> dates = [:]
+    int refreshCalls = 0
+
+    def currentValue(String attribute) { values[attribute] }
+
+    def currentState(String attribute, boolean skipCache = false) {
+        if (!values.containsKey(attribute)) return null
+        Long at = dates[attribute]
+        return [name: attribute, value: values[attribute], date: at != null ? new Date(at) : null]
+    }
+
+    def hasCommand(String command) { command == "refresh" }
+    def refresh() { refreshCalls++; null }
+
+    /** Store a value as the hub does: a changed value is stored and dated `at`, an unchanged one is not.
+     *  Returns whether it changed. */
+    boolean write(String attribute, def value, Long at) {
+        boolean changed = !values.containsKey(attribute) || values[attribute]?.toString() != value?.toString()
+        if (changed) {
+            values[attribute] = value
+            dates[attribute] = at
+        }
+        return changed
+    }
+}
+
+/**
  * Stands in for a PushOver-style notification device.
  *
  * The app defines sendNotice() itself, so a recorder on the stub would be shadowed and would
