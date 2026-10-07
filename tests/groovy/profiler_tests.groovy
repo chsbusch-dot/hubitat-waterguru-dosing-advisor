@@ -38,6 +38,8 @@ class FakeMeter {
     int refreshCalls = 0
     boolean refreshThrows = false
     Closure clock
+    /** Runs before each currentState read, so a test can land a report in the middle of a sample. */
+    Closure beforeStateRead = null
 
     FakeMeter(Closure clock) {
         this.clock = clock
@@ -45,6 +47,7 @@ class FakeMeter {
     }
     def currentValue(String a, boolean skipCache = false) { vals[a] }
     def currentState(String a, boolean skipCache = false) {
+        if (beforeStateRead != null) beforeStateRead.call(a)
         vals.containsKey(a) ? [name: a, value: vals[a], date: new Date(dates[a] as Long)] : null
     }
     def refresh() {
@@ -190,7 +193,77 @@ check("profiler fix 11: a 1.0.x summary keeps its rows and gains the new columns
     expect(lines[0] == legacyHeader + ",powerDelaySec,profilerVersion", "the header is extended at its end: ${lines[0]}")
     expect(lines[1] == oldRow, "the old row is kept as it was")
     List cells = lines[2].split(",", -1) as List
-    expect(cells.size() == 19 && cells[18] == "1.1.0", "the new row has every column: ${lines[2]}")
+    expect(cells.size() == 19 && cells[18] == "1.1.1", "the new row has every column: ${lines[2]}")
+}
+
+// --------------------------------------------------------------------------- 1.1.1 (WOR-731)
+// Each check below fails against 1.1.0 (3c52a10) and passes against 1.1.1.
+
+check("profiler 1.1.1 fix 1: a summary file the listing leaves out, or that reads as 0 bytes, is never written over") {
+    String old = "start,reason\nrow1\nrow2\nrow3\n"
+    // The listing leaves the file out, but it is there: the row is appended to it (1.1.0: header + row over it).
+    def (a1, m1) = newProfiler()
+    a1.fileStore["chlorine-pump-summary.csv"] = old
+    a1.hubFilesMode = "listEmpty"
+    normalRun(a1, m1)
+    List lines = summaryLines(a1)
+    expect(lines.take(4) == old.readLines() && lines.size() == 5, "[listing leaves it out] the old rows stay: ${lines}")
+    expect(a1.state.summaryBacklog == null, "[listing leaves it out] and the row is written")
+
+    // A listed file that reads as 0 bytes may have content: it is left alone and the row is kept for later.
+    def (a2, m2) = newProfiler()
+    a2.fileStore["chlorine-pump-summary.csv"] = old
+    a2.hubFilesMode = "downloadEmpty"
+    normalRun(a2, m2)
+    expect(a2.fileStore["chlorine-pump-summary.csv"] == old, "[0-byte read] the file is untouched: ${a2.fileStore['chlorine-pump-summary.csv']}")
+    expect(a2.state.summaryBacklog?.size() == 1, "[0-byte read] the row is kept: ${a2.state.summaryBacklog}")
+    a2.hubFilesMode = "ok"
+    a2.clockMs += 3_600_000L
+    normalRun(a2, m2)
+    expect(summaryLines(a2).take(4) == old.readLines() && summaryLines(a2).size() == 6, "[0-byte read] both rows are appended once it reads: ${summaryLines(a2)}")
+
+    // Control: with the listing leaving it out and no file there, a new summary still starts.
+    def (a3, m3) = newProfiler()
+    a3.hubFilesMode = "listEmpty"
+    normalRun(a3, m3)
+    expect(summaryLines(a3).size() == 2 && summaryLines(a3)[0].startsWith("start,reason,endReason"), "[no file] header and row: ${summaryLines(a3)}")
+}
+
+check("profiler 1.1.1 fix 2: the profiler declares singleThreaded, so the OFF handler and a poll cannot overlap") {
+    def (app, meter) = newProfiler()
+    expect(app.definitionArgs?.singleThreaded == true, "definition(singleThreaded: true), as the dosing app has: ${app.definitionArgs}")
+}
+
+check("profiler 1.1.1 fix 3: a power report landing during a sample is never paired with the value from before it") {
+    def (app, meter) = newProfiler()
+    long on = app.clockMs
+    boolean landed = false
+    // The plug's first power report lands while the +3 s poll is reading the meter.
+    meter.beforeStateRead = { String a ->
+        if (!landed && app.clockMs >= on + 3_000L) {
+            landed = true
+            meter.report("power", 7.0G)
+            meter.report("amperage", 0.09G)
+        }
+    }
+    switchTo(app, meter, "on")
+    app.runUntil(on + 3_000L)
+    [10_000L, 20_000L, 30_000L, 40_000L, 50_000L].eachWithIndex { long dt, int i ->
+        app.runUntil(on + dt)
+        meter.report("power", i % 2 == 0 ? 6.7G : 6.9G)
+    }
+    app.runUntil(on + 60_000L)
+    switchTo(app, meter, "off")
+    app.runUntil(on + 61_500L)
+    meter.report("power", 0G)
+    app.runUntil(on + 90_000L)
+    expect(landed, "sanity: the report landed during a sample")
+    Map s = app.state.lastSummary
+    expect(s.wattsMin == 6.70G && s.ampsMin == 0.090G, "no 0 W or 0 A from before the report (1.1.0: 0.00 and 0.000): ${s.wattsMin} W, ${s.ampsMin} A")
+    // 20 samples from +3 s to the OFF: 3 x 7.0 W, then 6.7 and 6.9 W as reported, 136.3 W in all.
+    expect(s.onSamples == 20 && s.wattsAvg == 6.82G, "the +3 s sample counts with the 7.0 W it saw (1.1.0: 6.47): ${s.onSamples} at ${s.wattsAvg} W")
+    List row = app.fileStore[runFiles(app)[0]].readLines()[2].split(",", -1) as List
+    expect(row[4] == "7.0" && (row[9] as Long) == on + 3_000L, "the +3 s row pairs 7.0 W with the report's own date: ${row}")
 }
 
 // --------------------------------------------------------------------------- fix 12: statistics
@@ -226,7 +299,7 @@ check("profiler fix 12: a normal run counts only fresh power, and Wh runs from t
     // About 6.8 W for the 60 s from the ON to the OFF; tail samples (7 W shown until the 0 W report) add nothing.
     BigDecimal wh = s.whIntegrated as BigDecimal
     expect(wh > 0.110G && wh < 0.119G, "Wh over the 60 s run only: ${wh}")
-    expect(s.profilerVersion == "1.1.0", "rows say which rules made them")
+    expect(s.profilerVersion == "1.1.1", "rows say which rules made them")
 }
 
 check("profiler fix 12: a manual capture of a pump already running counts from the switch's own ON") {

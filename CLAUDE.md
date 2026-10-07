@@ -74,14 +74,18 @@ reaches `filterEvents:false` subscribers as an event with a fresh date but never
 plug's report. Write new pump tests against that (`hubPlug` in `run_tests.groovy`). The tile fake
 also keeps `hubEvents`, the events the hub would store (a changed value, or `isStateChange: true`),
 and `collectorDoses` replays the Grafana collector's pairing on them. The profiler's tests
-(`profiler_tests.groovy`) use `FakeMeter` and the stub's File Manager (`fileStore`, `hubFilesMode`).
+(`profiler_tests.groovy`) use `FakeMeter` and the stub's File Manager (`fileStore`, `hubFilesMode`;
+`listEmpty` and `downloadEmpty` model a listing that misses a file and a 0-byte read, not seen live).
+The stub keeps an app's `definition(...)` map as `definitionArgs`.
 The WaterGuru source device is `FakeWaterGuru`, and `deliverSourceBatch` replays a sample in the
 integration's write order, LastMeasurement before freeChlorine, delivering each event as it is
 written (2026-10-06: 2.4.2's handler stored the previous sample's FC for 7 of 8 live samples). Write
 source tests against that (`liveWaterGuru`, `wgSample` in `run_tests.groovy`).
 
 Optional, not in CI (a few minutes): `tests/mutation/run.sh` reruns the 2.4.0 review's mutation set
-plus one mutant per 2.4.1 fix (F*), per 2.4.2 fix (R*) and per 2.4.3 fix (W*); it covers the child app only. The unmutated `base` must pass and every `[killed]` mutant must fail;
+plus one mutant per 2.4.1 fix (F*), per 2.4.2 fix (R*), per 2.4.3 fix (W*), per 2.4.4 fix (X*) and per
+profiler 1.1.1 fix (XP*, declared with `mutp`); each mutant runs the suite for its file, and the base
+runs both. The unmutated `base` must pass and every `[killed]` mutant must fail;
 anchors are exact strings, so re-anchor a mutant when the code under it changes.
 
 ## Branches and PRs

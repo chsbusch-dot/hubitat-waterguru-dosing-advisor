@@ -17,11 +17,18 @@
  *                      first sample used to race the plug's ~3 s power report), Wh is integrated from
  *                      the ON to the OFF, and the CSV gives each reading's date. Summary columns are
  *                      appended at the end, so an existing summary file keeps its layout.
+ *  v1.1.1  2026-10-06  Each reading's value and date come from the same read, so a report landing in the
+ *                      middle of a sample can no longer pair a value from before it with its fresh date (a
+ *                      stale 0 W counted as running power). The summary file is read even when File
+ *                      Manager's listing leaves it out, and a file known to exist is never written over: one
+ *                      that reads as 0 bytes, or that the listing shows but a read cannot return, keeps the
+ *                      row in the backlog. The app declares singleThreaded, so the OFF handler and a poll
+ *                      can no longer run at the same time.
  */
 
 import groovy.transform.Field
 
-@Field static final String PROFILER_VERSION = "1.1.0"
+@Field static final String PROFILER_VERSION = "1.1.1"
 // The summary columns: the 1.0.x columns unchanged and in order (the first LEGACY_SUMMARY_KEY_COUNT),
 // then the 1.1.0 columns appended. Spelled out in full: the hub's compiler rejects a @Field
 // initializer that refers to another @Field (tests/check_hubitat_fields.py guards that).
@@ -39,6 +46,9 @@ definition(
     author: "Christian Busch",
     description: "Samples a power-metering switch during each run and saves a CSV power profile to File Manager.",
     category: "Convenience",
+    // 1.1.1: one handler at a time, as the dosing app runs. Without it the OFF event and a poll in flight could
+    // overlap, and whichever saved its state last won: a lost OFF kept a capture polling to the sample cap.
+    singleThreaded: true,
     iconUrl: "",
     iconX2Url: "",
     singleInstance: false
@@ -132,7 +142,10 @@ void appButtonHandler(String btn) {
 
 void startCapture(String reason, Long onAt) {
     // A manual start on a pump that is already running takes the switch's own ON time.
-    if (onAt == null && meterDev.currentValue("switch", true) == "on") onAt = readingMs("switch")
+    if (onAt == null) {
+        Map sw = readingWithDate("switch")
+        if (sw.value?.toString() == "on") onAt = sw.at
+    }
     state.capturing = true
     state.reason = reason
     state.startMs = now()
@@ -178,18 +191,26 @@ void requestRefresh() {
 void recordRow() {
     // Each reading with the date the hub attached to it. The hub moves that date only when the value
     // changes (measured 2026-10-04), so a steady reading keeps the date of its last change.
+    // 1.1.1: each value and its date from the same read. 1.1.0 read every value, then every date, so a
+    // report landing in between paired the value from before it with the report's fresh date: a stale 0 W
+    // that counted as running power.
+    Map sw = readingWithDate("switch")
+    Map w = readingWithDate("power")
+    Map a = readingWithDate("amperage")
+    Map v = readingWithDate("voltage")
+    Map e = readingWithDate("energy")
     Map row = [
         t  : now(),
-        sw : meterDev.currentValue("switch", true),
-        w  : meterDev.currentValue("power", true),
-        a  : meterDev.currentValue("amperage", true),
-        v  : meterDev.currentValue("voltage", true),
-        e  : meterDev.currentValue("energy", true),
-        swAt: readingMs("switch"),
-        wAt : readingMs("power"),
-        aAt : readingMs("amperage"),
-        vAt : readingMs("voltage"),
-        eAt : readingMs("energy")
+        sw : sw.value,
+        w  : w.value,
+        a  : a.value,
+        v  : v.value,
+        e  : e.value,
+        swAt: sw.at,
+        wAt : w.at,
+        aAt : a.at,
+        vAt : v.at,
+        eAt : e.at
     ]
     List rows = state.rows ?: []
     rows << row
@@ -290,9 +311,13 @@ void finishCapture(String why) {
 
 /**
  * Add the run's row to <prefix>-summary.csv. 1.0.1 treated ANY failed read as "no file yet" and wrote a
- * fresh file over the old one. Now only a file that File Manager's listing does not show starts a new
- * file; a listing or read that fails leaves the file alone and keeps the row in state.summaryBacklog,
- * which is written ahead of the next row once a save succeeds.
+ * fresh file over the old one. Now a listing or read that fails leaves the file alone and keeps the row in
+ * state.summaryBacklog, which is written ahead of the next row once a save succeeds.
+ *
+ * 1.1.1: a new file starts only when neither File Manager's listing nor a read knows the file. 1.1.0 trusted
+ * the listing alone, and took a read that returned 0 bytes as an empty file, so either one wrote a header
+ * over the whole history. A file known to exist (listed, or returned by a read) is never written over:
+ * whatever a read returns is appended to, and a read with no content (null or 0 bytes) keeps the backlog.
  */
 void appendSummary(String prefix, Map s) {
     String name = "${prefix}-summary.csv"
@@ -301,21 +326,23 @@ void appendSummary(String prefix, Map s) {
     if (backlog.size() > SUMMARY_BACKLOG_MAX) backlog = backlog.drop(backlog.size() - SUMMARY_BACKLOG_MAX)
 
     Boolean present = hubFilePresent(name)
-    String existing
     if (present == null) {
         keepSummaryBacklog(backlog, "File Manager could not be listed, so ${name} was not touched")
         return
     }
-    if (present) {
-        byte[] b = null
-        try { b = downloadHubFile(name) } catch (e) { log.warn "Pump Power Profiler: reading ${name} failed: ${e.message}" }
-        if (b == null) {
-            keepSummaryBacklog(backlog, "${name} exists but could not be read, so it was not overwritten")
-            return
-        }
+    // Read even when the listing leaves the file out: a listing can miss a file that is there.
+    byte[] b = null
+    try { b = downloadHubFile(name) } catch (e) { log.warn "Pump Power Profiler: reading ${name} failed: ${e.message}" }
+    String existing
+    if (b != null && b.length > 0) {
         existing = new String(b, "UTF-8")
+    } else if (b == null && !present) {
+        existing = ""   // not listed and nothing to read: there is no file yet
     } else {
-        existing = ""
+        String what = b == null ? "exists but could not be read" :
+            "read as 0 bytes (if it really is empty, delete it in File Manager and the next run starts a new one)"
+        keepSummaryBacklog(backlog, "${name} ${what}, so it was not overwritten")
+        return
     }
 
     StringBuilder out = new StringBuilder()
@@ -365,14 +392,14 @@ int sampleInterval() {
     return (sampleSecs ?: 3) as Integer
 }
 
-/** The date the hub attached to one reading, as epoch ms, or null. */
-Long readingMs(String attr) {
-    try {
-        def d = meterDev.currentState(attr, true)?.date
-        if (d instanceof Date) return d.time
-        if (d instanceof Number) return d as Long
-    } catch (ignored) { }
-    return null
+/** One reading's value and the date the hub attached to it (epoch ms, or null), from the same read (1.1.1). */
+Map readingWithDate(String attr) {
+    def st = null
+    try { st = meterDev.currentState(attr, true) } catch (ignored) { st = null }
+    if (st == null) return [value: meterDev.currentValue(attr, true), at: null]
+    def d = st.date
+    Long at = d instanceof Date ? d.time : (d instanceof Number ? d as Long : null)
+    return [value: st.value, at: at]
 }
 
 Long eventMs(evt) {

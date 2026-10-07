@@ -8,8 +8,12 @@ or the build aborts, so a mutation that silently failed to apply can never be re
 "surviving" mutant. A mutant is KILLED when the suite fails against it.
 
 Origin: the M01-M21 / PC1-PC2 set from the independent review of 5f218c9 (2.4.0), re-anchored to
-the 2.4.1 code; F1-F6 revert one 2.4.1 fix each, R1-R9 one 2.4.2 fix each (WOR-718) and W1-W3 one
-2.4.3 fix each (WOR-724), and every one of those must be killed by the tests that guard it.
+the 2.4.1 code; F1-F6 revert one 2.4.1 fix each, R1-R9 one 2.4.2 fix each (WOR-718), W1-W3 one
+2.4.3 fix each (WOR-724), X1-X12 one 2.4.4 fix each and XP1-XP3 one Pump Power Profiler 1.1.1 fix
+each (WOR-731), and every one of those must be killed by the tests that guard it.
+
+A mutant edits the child app unless it is declared with mutp(), which edits the profiler. Each mutant
+runs the suite that covers its file (MUTATION.txt "suites:"); the base runs both.
 
   python3 tests/mutation/mutants.py              # build every mutant
   python3 tests/mutation/mutants.py M04 F1       # build only these
@@ -25,16 +29,22 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 OUT = ROOT / "tests" / "mutation" / "out"
 APP = "apps/WaterGuru-Dosing-Advisor-Child.groovy"
+PROFILER = "apps/PumpPowerProfiler.groovy"
+SUITES = {APP: ["run_tests.groovy"], PROFILER: ["profiler_tests.groovy"]}
 
-# name -> (expectation, description, [(old, new, count), ...])
+# name -> (expectation, description, [(old, new, count), ...], target file or None for the base)
 V = {}
 
 
-def mut(name, expect, desc, *edits):
-    V[name] = (expect, desc, [e if len(e) == 3 else (e[0], e[1], 1) for e in edits])
+def mut(name, expect, desc, *edits, target=APP):
+    V[name] = (expect, desc, [e if len(e) == 3 else (e[0], e[1], 1) for e in edits], target)
 
 
-mut("base", "control", "unmutated app (must pass every check)")
+def mutp(name, expect, desc, *edits):
+    mut(name, expect, desc, *edits, target=PROFILER)
+
+
+mut("base", "control", "unmutated apps (must pass every check)", target=None)
 
 # ---- positive controls from the review: guards the 2.4.0 suite already covered ----
 mut("PC1", "killed", "readingFresh ignores the start anchor (cached pre-ON reading confirms)",
@@ -46,9 +56,9 @@ mut("PC2", "killed", "armEmergencyPumpCutoff always opens a fresh window (postpo
 # ---- stop-evidence anchors on the timer paths ----
 mut("M01", "?", "verifyPumpOff accepts a cached pre-request OFF (anchor dropped)",
     ("    Long since = stopEvidenceAnchor(active)\n    try {\n        if (pumpIsOff(since)) {\n"
-     "            finishStop(\"WaterGuru Dosing Advisor: chlorine pump confirmed OFF\")",
+     "            finishStop(\"Chlorine pump confirmed OFF.\")",
      "    Long since = null   // MUTANT\n    try {\n        if (pumpIsOff(since)) {\n"
-     "            finishStop(\"WaterGuru Dosing Advisor: chlorine pump confirmed OFF\")"))
+     "            finishStop(\"Chlorine pump confirmed OFF.\")"))
 mut("M02", "?", "stopDose accepts a cached pre-request OFF (anchor dropped)",
     ("        Long since = stopEvidenceAnchor(active)\n        if (pumpIsOff(since)) {\n"
      "            finishStop(active ? scheduledStopMessage(active) : null)",
@@ -209,8 +219,8 @@ mut("W2", "killed", "fix 2 reverted: the cassette line shows the pad count as te
     ("    if (days) parts << days\n",
      "    parts << \"${attrRaw('CassetteChecksLeft')} tests left\"\n    if (days) parts << days\n"))
 mut("W2b", "killed", "fix 2: a cassetteDaysLeft older than WaterGuru's text is still shown",
-    ("    if (days != null && days >= 0G && !(text != null && sourceStateNewer(\"CassetteTimeLeft\", \"cassetteDaysLeft\"))) {\n",
-     "    if (days != null && days >= 0G) {\n"))
+    ("    if (days != null && days >= 0G && text != null && !sourceStateNewer(\"CassetteTimeLeft\", \"cassetteDaysLeft\")) {\n",
+     "    if (days != null && days >= 0G && text != null) {\n"))
 mut("W3", "killed", "fix 3 reverted: the FC history is read when LastMeasurement arrives, before freeChlorine",
     ("    runIn(20, \"processNewSample\", [data: [sampleKey: key], overwrite: true])\n",
      "    recordFcSample(key)\n    runIn(20, \"processNewSample\", [data: [sampleKey: key], overwrite: true])\n"),
@@ -219,23 +229,86 @@ mut("W3b", "killed", "fix 3: readings stored before 2.4.3 still count in the mea
     ("        if (hist[i-1]?.settled != true || hist[i]?.settled != true) continue\n", ""))
 
 
+# ---- 2.4.4 (WOR-731): each fix reverted (must be killed) ----
+mut("X1", "killed", "fix 1 reverted: finishStop ignores the deferred EMERGENCY notice's final word",
+    ("    if (!msg && emergency?.confirmed) msg = emergency.confirmed.toString()\n", ""))
+mut("X1b", "killed", "fix 1 reverted: an EMERGENCY notice that was sent keeps no final word for the OFF still to come",
+    ("        state.pendingEmergencyNotice = [confirmed: pending.confirmed ?: \"${pending.head}: the switch has now confirmed OFF.\".toString(),\n"
+     "                                        announced: true]\n", ""))
+mut("X2", "killed", "fix 2 reverted: a booked run with no lastDose never reaches the historian",
+    ("        publishDoseRecord(historyTime, ranMl, ranSec, \"the booked run\")\n", "        // MUTANT: not published\n"))
+mut("X3", "killed", "fix 3 reverted: the cassette status adds no chip and leaves the tile GREEN",
+    ("    String cassetteChip = cassetteReplaceChip()\n", "    String cassetteChip = null\n"))
+mut("X3b", "killed", "fix 3 reverted: no cassette line without a cassette type",
+    ("    if (!base && !parts) return null\n", "    if (!base) return null\n"))
+mut("X4", "killed", "fix 4 reverted: an idle stop the switch never answers is never closed",
+    ("            if (idleStopOffThroughout()) {\n", "            if (false) {\n"))
+mut("X4b", "killed", "fix 4 unsafe: the idle close ignores what the switch reports (closes against an ON)",
+    ("    return anchor != null && switchOffUnchangedSince(anchor)\n", "    return anchor != null\n"))
+mut("X5", "killed", "fix 5 reverted: a lost ON answered by an unchanged OFF gets 'Requesting OFF' and 'stopped'",
+    ("    if (wasActive && startNeverTookEffect(active)) {\n", "    if (false) {\n"))
+mut("X5b", "killed", "fix 5 reverted: the start alert says 'Requesting OFF' when the switch has just reported OFF",
+    ("    String stop = stopping ? \" Requesting OFF; the independent cutoff stays armed until the switch freshly reports OFF.\" : \"\"\n",
+     "    String stop = \" Requesting OFF; the independent cutoff stays armed until the switch freshly reports OFF.\"\n"))
+mut("X6", "killed", "fix 6 reverted: a power check long after the previous one judges stale evidence at once",
+    ("    if (previousCheck != null && nowMs - previousCheck > 2L * RUN_POWER_CHECK_SECONDS * 1000L && active.powerCheckDeferred != true) {\n",
+     "    if (false) {\n"))
+mut("X6b", "killed", "fix 6 unsafe: every late power check is put off, so a silent run is never aborted",
+    ("    if (previousCheck != null && nowMs - previousCheck > 2L * RUN_POWER_CHECK_SECONDS * 1000L && active.powerCheckDeferred != true) {\n",
+     "    if (previousCheck != null && nowMs - previousCheck > 2L * RUN_POWER_CHECK_SECONDS * 1000L) {\n"))
+mut("X7", "killed", "fix 7 reverted: a queue reset drops a sample that is waiting to be processed",
+    ("        runIn(20, \"processNewSample\", [data: [sampleKey: pendingSample], overwrite: true])\n", ""))
+mut("X8", "killed", "fix 8 reverted: every unchanged ON during an outside run re-arms and logs a WARN",
+    ("        if (unchangedOn && emergencyCutoffPendingNotDue()) {\n", "        if (false) {\n"))
+mut("X9", "killed", "fix 9 reverted: the confirmed-OFF notice carries the app name and no period",
+    ("            finishStop(\"Chlorine pump confirmed OFF.\")\n",
+     "            finishStop(\"WaterGuru Dosing Advisor: chlorine pump confirmed OFF\")\n"))
+mut("X10", "killed", "fix 10 reverted: the status line counts settled samples, the runway line intervals",
+    ("    if (m != null) return \"Currently using your measured loss (~${n1(m.rate)} ppm/day ${intervalCountText(m.n as Integer)}).\"\n",
+     "    if (m != null) return \"Currently using your measured loss (~${n1(m.rate)} ppm/day from ${n} samples).\"\n"))
+mut("X11", "killed", "fix 11 reverted: with a dose on record the tank runway still asks for a completed dose",
+    ("            if (((runway.n ?: 0) as Integer) > 0) {\n", "            if (false) {\n"))
+mut("X12", "killed", "fix 12 reverted: a day count is shown when WaterGuru's text is blank or unknown",
+    ("    if (days != null && days >= 0G && text != null && !sourceStateNewer(\"CassetteTimeLeft\", \"cassetteDaysLeft\")) {\n",
+     "    if (days != null && days >= 0G && !(text != null && sourceStateNewer(\"CassetteTimeLeft\", \"cassetteDaysLeft\"))) {\n"))
+
+# ---- Pump Power Profiler 1.1.1 (WOR-731): each fix reverted (must be killed) ----
+mutp("XP1", "killed", "profiler fix 1 reverted: a file the listing leaves out is written over (the listing alone decides)",
+     ("    if (b != null && b.length > 0) {\n", "    if (present && b != null && b.length > 0) {\n"),
+     ("    } else if (b == null && !present) {\n", "    } else if (!present) {\n"))
+mutp("XP1b", "killed", "profiler fix 1 reverted: a read that returns 0 bytes is taken as an empty file and written over",
+     ("    if (b != null && b.length > 0) {\n", "    if (b != null) {\n"))
+mutp("XP2", "killed", "profiler fix 2 reverted: not singleThreaded",
+     ("    singleThreaded: true,\n", ""))
+mutp("XP3", "killed", "profiler fix 3 reverted: every value is read first and every date second",
+     ("    Map sw = readingWithDate(\"switch\")\n    Map w = readingWithDate(\"power\")\n",
+      "    Map vals = [sw: meterDev.currentValue(\"switch\", true), w: meterDev.currentValue(\"power\", true),\n"
+      "                a: meterDev.currentValue(\"amperage\", true), v: meterDev.currentValue(\"voltage\", true),\n"
+      "                e: meterDev.currentValue(\"energy\", true)]\n"
+      "    Map sw = readingWithDate(\"switch\")\n    Map w = readingWithDate(\"power\")\n"),
+     ("        sw : sw.value,\n        w  : w.value,\n        a  : a.value,\n        v  : v.value,\n        e  : e.value,\n",
+      "        sw : vals.sw,\n        w  : vals.w,\n        a  : vals.a,\n        v  : vals.v,\n        e  : vals.e,\n"))
+
+
 def build(name):
-    expect, desc, edits = V[name]
+    expect, desc, edits, target = V[name]
     dst = OUT / name
     if dst.exists():
         shutil.rmtree(dst)
     (dst / "tests").mkdir(parents=True)
     shutil.copytree(ROOT / "apps", dst / "apps")
     shutil.copytree(ROOT / "tests" / "groovy", dst / "tests" / "groovy")
-    app = dst / APP
-    src = app.read_text()
-    for old, new, count in edits:
-        n = src.count(old)
-        if n != count:
-            sys.exit(f"ABORT {name}: anchor matched {n}x, expected {count}x:\n{old}")
-        src = src.replace(old, new)
-    app.write_text(src)
-    (dst / "MUTATION.txt").write_text(f"{name}: {desc}\nexpectation: {expect}\n")
+    if target is not None:
+        app = dst / target
+        src = app.read_text()
+        for old, new, count in edits:
+            n = src.count(old)
+            if n != count:
+                sys.exit(f"ABORT {name}: anchor matched {n}x, expected {count}x:\n{old}")
+            src = src.replace(old, new)
+        app.write_text(src)
+    suites = SUITES[target] if target is not None else sorted({s for v in SUITES.values() for s in v}, reverse=True)
+    (dst / "MUTATION.txt").write_text(f"{name}: {desc}\nexpectation: {expect}\nsuites: {' '.join(suites)}\n")
     print(f"built {name:5s} [{expect:7s}] {desc}")
 
 

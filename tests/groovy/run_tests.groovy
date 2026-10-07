@@ -894,8 +894,9 @@ check("run: power loss during a confirmed run aborts safely, latches a fault and
     app.fire("verifyRunPower")
     expect(app.state.activeDose.fault == null, "a short dip must be tolerated inside the grace period")
 
-    app.clockMs += 35_000L
-    app.fire("verifyRunPower")
+    // The watch runs every 10 s, as on the hub (2.4.4 puts off a check that runs long after the previous
+    // one, a hub restart); the first check past the grace latches the loss.
+    app.advance(35_000L)
     expect(app.state.startFault?.kind == "power-loss", "the loss must latch a fault")
     expect(app.noticesMatching("power LOST").size() == 1,
            "the loss must alert once; got ${app.noticesMatching('power LOST').size()} :: ${app.notices}")
@@ -1102,8 +1103,7 @@ check("run: a throwing power read cannot strand a confirmed pump with no stop jo
     expect(app.scheduled["verifyRunPower"] != null, "the power watch must keep running")
     expect(app.scheduled["emergencyPumpOff"] != null, "and the cutoff must stay armed")
 
-    app.clockMs += 35_000L
-    app.fire("verifyRunPower")
+    app.advance(35_000L)                                       // the regular 10 s checks, as on the hub
     expect(app.state.startFault?.kind == "power-loss", "a persistent unreadable value must latch a fault")
     expect(app.scheduled["verifyPumpOff"] != null, "and stop retries must continue")
     expect(app.scheduled["emergencyPumpOff"] != null, "with the cutoff still armed")
@@ -1900,15 +1900,14 @@ check("a throwing dashboard cannot suppress running power protection or duplicat
 
     // With reports lost, the still-scheduled watch must actually execute the stop path.
     pump.powerMode = "powerMissing"
-    app.clockMs += 31000L
-    app.fire("verifyRunPower")
+    app.advance(31_000L)                                       // the regular 10 s checks; the one at 30 s stops it
     expect(pump.offCalls > 0 && app.state.startFault?.kind == "power-loss", "missing power still causes OFF and a fault")
-    // 2.4.1: the OFF confirmed 31 s into a 65 s plan, so the tank is booked from the observed run (an
+    // 2.4.1: the OFF confirmed 30 s into a 65 s plan, so the tank is booked from the observed run (an
     // upper bound on what an uncertain run delivered), today's total keeps the full reservation, and a
     // dashboard that throws on lastDoseMl cannot undo the booking or the cleanup.
-    BigDecimal ranMl = 31G * 221G / 60G
+    BigDecimal ranMl = 30G * 221G / 60G
     expect(Math.abs(new BigDecimal(app.state.tankRemainingMl) - (56544G - ranMl)) < 0.01G,
-           "the tank is booked from the observed 31 s, got ${app.state.tankRemainingMl}")
+           "the tank is booked from the observed 30 s, got ${app.state.tankRemainingMl}")
     expect(app.state.doseMlToday == "237", "today's total keeps the planned reservation")
     expect(app.state.activeDose == null, "and the confirmed OFF still completes the cleanup")
     expect(app.logLines.any { it.contains("observed run was booked but dashboard telemetry failed") },
@@ -1937,8 +1936,7 @@ check("unchanged power reports sustain a healthy run, while silence still fails 
         expect(pump.currentState("power").date.time == firstReport, "a repeat report does not re-date the state")
         expect(app.state.activeDose.lastPowerEventAt == app.clockMs, "its receipt time is what keeps the run alive")
     }
-    app.clockMs += 31000L
-    app.fire("verifyRunPower")
+    app.advance(41_000L)                                       // the regular checks; the first past the grace stops it
     expect(app.state.startFault?.kind == "power-loss" && pump.offCalls > 0, "actual silence still causes a stop")
 }
 
@@ -3158,7 +3156,7 @@ check("2.4.2 fix 9b: a void is refused while a dose or a stop is open, and for a
 // ----------------------------------------------------------------------- 2.4.3 (WOR-724): the WaterGuru source
 
 /** The order the WaterGuru Integration writes a sample in (processWaterGuruData, as the hub runs it in app
- *  1238, plus the cassetteDaysLeft of bdwilson/hubitat#76), cut to what this app reads. Device 4656's
+ *  1238, plus the cassetteDaysLeft a later upstream change adds), cut to what this app reads. Device 4656's
  *  Oct 5 19:45:03 batch arrived in this order: LastMeasurement before CassetteChecksLeft, freeChlorine
  *  and doseAdvice. */
 def WG_ORDER = ["CassettePercent", "CassetteStatus", "CassetteTimeLeft", "cassetteDaysLeft", "LastMeasurementHuman",
@@ -3278,7 +3276,7 @@ check("2.4.3 fix 3: readings stored before 2.4.3 are left out, and the measured 
     double expected = 0.7d / ((epoch("2026-10-08T02:30:52Z") - epoch("2026-10-07T02:30:40Z")) / 86_400_000.0d)
     expect(m != null && m.n == 1 && Math.abs((m.rate as BigDecimal).doubleValue() - expected) < 0.0001d,
            "5.2 + 0.8 - 5.3 over the one settled interval, got ${m}")
-    expect(app.runwayStatusLine() == "Currently using your measured loss (~0.7 ppm/day from 2 samples).", app.runwayStatusLine())
+    expect(app.runwayStatusLine() == "Currently using your measured loss (~0.7 ppm/day over 1 interval).", app.runwayStatusLine())
 }
 
 check("2.4.3 fix 1: WaterGuru's replace-cassette step is not dose advice (live Oct 5 doseAdvice)") {
@@ -3288,15 +3286,17 @@ check("2.4.3 fix 1: WaterGuru's replace-cassette step is not dose advice (live O
     app.slamMode = false                                       // TFP target 0.115 x CYA 39 = 4.5 ppm: FC 5.6 holds
     app.runAndDeliver(false, false, "preview")
     String text = app.state.lastPreview
-    expect(tile.lastSent("status") == "GREEN" && tile.lastSent("recommendation") == "All in range",
+    // 2.4.4: the tile front shows the cassette's own state (CassetteStatus YELLOW) instead: YELLOW, never RED.
+    expect(tile.lastSent("status") == "YELLOW" && tile.lastSent("recommendation") == "Replace cassette soon",
            "a maintenance step neither recommends nor turns the tile RED: ${tile.lastSent('status')} / ${tile.lastSent('recommendation')}")
     expect(!text.toLowerCase().contains("follow these steps"), "nor appears as advice:\n${text}")
     expect(text.contains("None — WaterGuru reports no pH / TA / CH / CYA adjustment needed."), "WaterGuru asked for no dose:\n${text}")
     expect(text.contains("Cassette: C5 · installed Sep 12, 2026 · 4 days left · 12.0% · replace soon"), "the cassette line says it:\n${text}")
     app.wgAdviceIncludeChlorine = true                         // the setting still governs WaterGuru's chlorine line
     app.runAndDeliver(false, false, "preview")
-    expect(tile.lastSent("recommendation").startsWith("Decrease dosing of liquid chlorine") &&
-           !tile.lastSent("recommendation").toLowerCase().contains("cassette"), "only the chlorine line: ${tile.lastSent('recommendation')}")
+    String rec = tile.lastSent("recommendation").toString()
+    expect(rec.startsWith("Decrease dosing of liquid chlorine") && rec.endsWith(" · Replace cassette soon") && !rec.toLowerCase().contains("follow these steps"),
+           "the chlorine line, then the cassette's state, and no maintenance step: ${rec}")
 }
 
 check("2.4.3 fix 1: dose lines stay; cassette, battery and calibration steps go, whatever the chlorine setting") {
@@ -3322,7 +3322,7 @@ check("2.4.3 fix 2: the cassette line counts days, not the 24 pads as tests (liv
 check("2.4.3 fix 2: cassetteDaysLeft is shown while it is current, WaterGuru's text once it moves on, and gaps are left out") {
     def app = newApp()
     def wg = liveWaterGuru(app, LIVE_OCT5)
-    app.clockMs += DAY_MS                                      // bdwilson/hubitat#76 publishes the parsed number right after the text
+    app.clockMs += DAY_MS                                      // the upstream change publishes the parsed number right after the text
     wgSample(app, wg, [CassetteTimeLeft: "1 week left", cassetteDaysLeft: 7])
     expect(app.cassetteText() == "C5 · installed Sep 12, 2026 · 7 days left · 12.0% · replace soon", "the number: ${app.cassetteText()}")
     app.clockMs += DAY_MS
@@ -3338,7 +3338,386 @@ check("2.4.3 fix 2: cassetteDaysLeft is shown while it is current, WaterGuru's t
     expect(older.cassetteText() == "C2", "only what is known: ${older.cassetteText()}")
     def none = newApp()
     liveWaterGuru(none, [CassetteTimeLeft: "4 days left", CassetteChecksLeft: 24])
-    expect(none.cassetteText() == null, "no cassette line without a type, as before: ${none.cassetteText()}")
+    // 2.4.4: without a type the cassette's state is still shown, under the plain word.
+    expect(none.cassetteText() == "Cassette · 4 days left", "no type, the plain word: ${none.cassetteText()}")
+}
+
+// =========================================================================== 2.4.4 (WOR-731)
+//
+// The second review of 2.4.3 (3c52a10). Each check marked "fix" fails against 3c52a10 and passes against
+// 2.4.4; each "control" passes on both and pins what a fix must not weaken.
+
+// ----------------------------------------------------------------------- 2.4.4 fix 1: the cutoff on an outside run
+
+check("2.4.4 fix 1: the cutoff stopping a run this app did not start ends with its confirmation, whenever the OFF lands") {
+    [500L, 5_000L].each { long answerMs ->
+        String tag = "[OFF answered after ${answerMs} ms]"
+        def app = newApp()
+        def pump = hubPlug(app)
+        app.deliverDeviceReport(pump, "switch", "on")          // a manual ON, or a rule whose OFF was lost
+        app.advance(1_000L)
+        app.deliverDeviceReport(pump, "power", 6.7G)
+        app.runUntil(app.dueAt["emergencyPumpOff"] as Long)    // the cutoff fires and sends OFF
+        expect(pump.commands.count("off") == 1, "${tag} sanity: the cutoff sent OFF: ${pump.commands}")
+        app.advance(answerMs)
+        app.deliverDeviceReport(pump, "switch", "off")
+        app.deliverDeviceReport(pump, "power", 0G)
+        app.advance(60_000L)
+        expect(app.notices && app.notices[-1].contains("EMERGENCY cutoff confirmed the chlorine pump OFF after 15.0 minutes."),
+               "${tag} the last word is the confirmation (3c52a10: nothing, or an EMERGENCY with no follow-up): ${app.notices}")
+        expect(app.noticesMatching("EMERGENCY cutoff confirmed").size() == 1, "${tag} said once")
+        if (answerMs == 500L) {
+            expect(app.notices.size() == 1, "${tag} and nothing else, the OFF landed within the wait: ${app.notices}")
+        } else {
+            expect(app.notices.size() == 2 && app.notices[0].contains("has not been able to turn the chlorine pump off (attempt 1)"),
+                   "${tag} after the EMERGENCY it had to send: ${app.notices}")
+        }
+        expect(app.dueAt.isEmpty() && app.state.pendingEmergencyNotice == null, "${tag} nothing is left behind: ${app.dueAt}")
+        expect(app.state.doseMlToday == "0" && app.state.tankRemainingMl == "56544" && !app.state.tankDoseHistory,
+               "${tag} a run the app did not start is not booked: ${app.state.doseMlToday} / ${app.state.tankRemainingMl}")
+    }
+}
+
+// ----------------------------------------------------------------------- 2.4.4 fix 2: booked runs reach the historian
+
+/** The tile as it stands before the review's P2 run: yesterday's 316 mL dose published. */
+def yesterdayOnTile = { app, tile ->
+    long yesterday = app.clockMs - DAY_MS
+    app.state.lastDose = [time: yesterday, ml: "316", mlRaw: "316.4364500", seconds: 86, confirmed: true, attemptId: "att-0"]
+    app.state.tankDoseHistory = [[t: yesterday, ml: "316.4364500"]]
+    app.publishTileTelemetry(null, tile, true)
+    return yesterday
+}
+
+check("2.4.4 fix 2: an unconfirmed attempt that drew power reaches the historian under its history time, and voiding it pairs") {
+    def app = newApp()
+    app.clockMs = epoch("2026-10-07T02:45:00Z")
+    def pump = hubPlug(app)
+    def tile = newTile(app)
+    long yesterday = yesterdayOnTile(app, tile)
+    app.startDose(incidentDose(app), "AUTO 19:45")
+    long requested = app.clockMs
+    app.advance(500L)
+    app.deliverDeviceReport(pump, "switch", "on")              // the ON report, but the power stays low ...
+    app.advance(1_000L)
+    app.deliverDeviceReport(pump, "power", 1.2G)               // ... 1.2 W, under the 3 W minimum
+    app.runUntil(requested + 20_000L)                          // the start window ends: fault and OFF
+    app.advance(300L)
+    app.deliverDeviceReport(pump, "power", 6.7G)               // the pump spins up just after
+    app.advance(9_000L)                                        // and the relay ignores OFF for a while
+    app.deliverDeviceReport(pump, "switch", "off")
+    app.deliverDeviceReport(pump, "power", 0G)
+    Map run = app.state.tankDoseHistory.find { (it.t as Long) != yesterday }
+    expect(run != null && (run.t as Long) == requested + 500L, "sanity: the run is in the dose history at its ON report: ${app.state.tankDoseHistory}")
+    BigDecimal ranMl = bd(run.ml)
+    expect(ranMl > 100G && ranMl < 110G, "sanity: about 106 mL ran: ${ranMl}")
+    Map doses = collectorDoses(tile)
+    expect(doses[run.t as Long] == ranMl, "the historian has the booked run under the same time (3c52a10: nothing): ${doses}")
+    expect(doses[yesterday] == bd("316.4364500"), "and yesterday's dose as it was: ${doses}")
+    expect(tile.lastSent("lastDoseRuntimeSeconds") == 29, "with the observed run time: ${tile.lastSent('lastDoseRuntimeSeconds')}")
+    expect(bd(tile.lastSent("tankRemainingMl")) == bd(app.state.tankRemainingMl), "the tile's tank follows the booking: ${tile.lastSent('tankRemainingMl')}")
+    expect(app.state.lastDose.time == yesterday && app.state.lastDose.attemptId == "att-0", "lastDose stays the last confirmed dose: ${app.state.lastDose}")
+
+    app.advance(120_000L)
+    app.voidDoseKey = (run.t as Long).toString()
+    app.appButtonHandler("btnVoidDose")
+    Map after = collectorDoses(tile)
+    expect(after[run.t as Long] == 0G && after[yesterday] == bd("316.4364500"), "a void of that entry rewrites the same point as 0 mL: ${after}")
+}
+
+check("2.4.4 fix 2: a late ON during fault recovery that drew power reaches the historian too") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    def tile = newTile(app)
+    app.startDose(incidentDose(app), "AUTO 19:45")
+    app.advance(21_450L)
+    app.deliverDeviceReport(pump, "switch", "off")             // the lost ON's attempt is cleaned up
+    app.advance(60_000L)
+    long lateOn = app.clockMs
+    app.deliverDeviceReport(pump, "switch", "on")              // the relay closes after all
+    app.deliverDeviceReport(pump, "power", 6.7G)
+    app.advance(500L)
+    app.deliverDeviceReport(pump, "switch", "off")
+    BigDecimal ranMl = 0.5G * 221G / 60G
+    expect(app.state.tankDoseHistory.any { (it.t as Long) == lateOn }, "sanity: booked at the late ON: ${app.state.tankDoseHistory}")
+    Map doses = collectorDoses(tile)
+    expect(doses.size() == 1 && Math.abs(doses[lateOn] - ranMl) < 0.0001G, "the historian has the half second under the same time: ${doses}")
+    expect(app.state.lastDose == null, "and there is still no lastDose")
+}
+
+// ----------------------------------------------------------------------- 2.4.4 fix 3: the cassette on the tile front
+
+check("2.4.4 fix 3: a cassette WaterGuru wants replaced turns the tile YELLOW with its own chip, never RED") {
+    def app = newApp()
+    def wg = liveWaterGuru(app, LIVE_OCT5 + [CassetteStatus: "RED", CassetteTimeLeft: "Replace cassette", CassettePercent: 0G,
+                                             doseAdvice: "Follow these steps to replace cassette"])
+    def tile = newTile(app)
+    app.slamMode = false
+    app.fcTargetOverride = 5.0G                                // FC 5.6 holds: no chemical is needed
+    app.runAndDeliver(false, false, "preview")
+    expect(tile.lastSent("status") == "YELLOW" && tile.lastSent("recommendation") == "Replace cassette now",
+           "the tile front says it (3c52a10: GREEN, All in range): ${tile.lastSent('status')} / ${tile.lastSent('recommendation')}")
+    expect(tile.lastSent("tileHtml").toString().contains("Replace cassette now"), "so does the card")
+    expect(!app.state.lastPreview.toLowerCase().contains("follow these steps"), "the maintenance step is still not dose advice")
+    wg.write("CassetteStatus", "YELLOW", app.clockMs)
+    app.runAndDeliver(false, false, "preview")
+    expect(tile.lastSent("status") == "YELLOW" && tile.lastSent("recommendation") == "Replace cassette soon", "YELLOW is 'soon': ${tile.lastSent('recommendation')}")
+    wg.write("CassetteStatus", "GREEN", app.clockMs)
+    app.runAndDeliver(false, false, "preview")
+    expect(tile.lastSent("status") == "GREEN" && tile.lastSent("recommendation") == "All in range", "control: a good cassette leaves the tile GREEN")
+    wg.write("CassetteStatus", "RED", app.clockMs)
+    app.fcTargetOverride = 8.0G                                // a chemical need stays RED and comes first
+    app.runAndDeliver(false, false, "preview")
+    String rec = tile.lastSent("recommendation").toString()
+    expect(tile.lastSent("status") == "RED" && rec.startsWith("Add ") && rec.endsWith(" · Replace cassette now"), "the dose, then the cassette: ${rec}")
+}
+
+check("2.4.4 fix 3: an integration without a cassette type still shows the cassette's state, under the plain word") {
+    def app = newApp()
+    liveWaterGuru(app, LIVE_OCT5.findAll { k, v -> !(k in ["cassetteType", "cassetteInfo"]) } + [CassetteStatus: "RED"])
+    def tile = newTile(app)
+    app.slamMode = false
+    app.fcTargetOverride = 5.0G
+    app.runAndDeliver(false, false, "preview")
+    expect(app.cassetteText() == "Cassette · 4 days left · 12.0% · replace now", "the text (3c52a10: none): ${app.cassetteText()}")
+    expect(app.state.lastPreview.readLines().contains("Cassette · 4 days left · 12.0% · replace now"), "as its own line:\n${app.state.lastPreview}")
+    expect(tile.lastSent("status") == "YELLOW" && tile.lastSent("recommendation") == "Replace cassette now", "and on the tile front")
+    def bare = newApp()
+    liveWaterGuru(bare, [freeChlorine: 5.6G, pH: 7.5G])
+    expect(bare.cassetteText() == null, "control: nothing known about a cassette, no line: ${bare.cassetteText()}")
+}
+
+// ----------------------------------------------------------------------- 2.4.4 fix 4: an idle stop the plug never answers
+
+check("2.4.4 fix 4: a save on an idle app whose plug never answers closes after its retries, without EMERGENCY, while the switch reads off") {
+    def app = newApp()
+    def pump = hubPlug(app)                                    // off since yesterday; it answers nothing from now on
+    app.updated()
+    app.advance(2L * 3_600_000L)
+    expect(app.state.idleStopAt == null && app.dueAt.isEmpty(), "the stop is closed and nothing is left scheduled (3c52a10: still open): ${app.dueAt}")
+    expect(pump.commands.count("off") == 6, "the save's OFF and five retries, then no more (3c52a10: 14 in 2 h): ${pump.commands.count('off')}")
+    expect(app.noticesMatching("EMERGENCY").isEmpty(), "no EMERGENCY for a switch that read off throughout: ${app.notices}")
+    expect(app.noticesMatching("OFF sent 6 times with no answer; the switch last reported off").size() == 1, "one plain closing notice: ${app.notices}")
+    expect(app.notices.size() == 2, "after the one 'stop requested ... Retrying': ${app.notices}")
+    def blocks = app.doseSafetyBlocks(incidentDose(app))
+    expect(!blocks.any { it.contains("stop") }, "a new dose is no longer held by it: ${blocks}")
+}
+
+check("2.4.4 fix 4 control: an idle stop still escalates when the switch reports ON, turns ON during the stop, or cannot be read") {
+    ["on before the save", "on during the stop", "unreadable"].each { kind ->
+        def app = newApp()
+        def pump = hubPlug(app)
+        if (kind == "on before the save") app.deliverDeviceReport(pump, "switch", "on")
+        app.advance(1_000L)
+        app.updated()
+        if (kind == "on during the stop") {
+            app.advance(30_000L)
+            app.deliverDeviceReport(pump, "switch", "on")
+        }
+        if (kind == "unreadable") pump.mode = "silent"
+        app.advance(3_600_000L)
+        expect(app.noticesMatching("EMERGENCY").size() >= 1, "[${kind}] the escalation is reached: ${app.notices}")
+        expect(app.noticesMatching("with no answer").isEmpty(), "[${kind}] it is never closed as an idle stop")
+        expect(app.state.idleStopAt != null && app.dueAt["emergencyPumpOff"] != null, "[${kind}] the stop and its cutoff stay: ${app.dueAt}")
+    }
+}
+
+// ----------------------------------------------------------------------- 2.4.4 fix 5: lost-ON wording
+
+check("2.4.4 fix 5: a lost ON answered by the plug's unchanged OFF says the ON did not take effect, not 'Requesting OFF' or 'stopped'") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    app.startDose(incidentDose(app), "AUTO 19:45")             // on() is sent; the frame never lands
+    long t0 = app.clockMs
+    runPlug(app, pump, t0 + 5_000L) {                          // the plug answers the start check's refresh 0.4 s later
+        app.advance(400L)
+        app.deliverDeviceReport(pump, "switch", "off")
+        app.deliverDeviceReport(pump, "power", 0G)
+    }
+    expect(pump.commands == ["on", "refresh"], "sanity: no OFF was ever sent: ${pump.commands}")
+    expect(app.state.activeDose == null && app.dueAt.isEmpty() && app.state.startFault?.kind == "start-unconfirmed",
+           "sanity: the attempt is closed with its fault latched: ${app.dueAt}")
+    List said = app.notices.drop(1)                            // after "start requested"
+    expect(said.size() == 1 && said[0].contains("the ON did not take effect and nothing was dosed") && said[0].contains("475 mL attempt stays reserved"),
+           "one notice that says what happened: ${said}")
+    expect(app.notices.every { !it.contains("Requesting OFF") && !it.contains("stopped before the planned dose") && !it.contains("cutoff stays armed") },
+           "no OFF, stop or armed cutoff is claimed (3c52a10 claimed all three): ${app.notices}")
+    expect(app.state.doseMlToday == "475" && app.state.tankRemainingMl == "56544", "reserved, not delivered")
+    app.advance(60_000L)
+    app.appButtonHandler("btnAckFault")
+    expect(app.state.startFault == null, "the plug's answer acknowledges the fault")
+}
+
+check("2.4.4 fix 5: an ON report then an OFF on its own still says 'stopped', but never 'Requesting OFF'") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    app.startDose(incidentDose(app), "AUTO 19:45")
+    app.advance(500L)
+    app.deliverDeviceReport(pump, "switch", "on")              // the relay closes, no power yet
+    app.advance(4_500L)
+    app.deliverDeviceReport(pump, "switch", "off")             // and opens on its own
+    expect(app.state.activeDose == null && app.state.startFault?.kind == "start-unconfirmed", "sanity: faulted and closed")
+    expect(app.noticesMatching("start NOT confirmed").size() == 1 && app.noticesMatching("stopped before the planned dose completed").size() == 1,
+           "the pump did close, so it stopped early: ${app.notices}")
+    expect(app.notices.every { !it.contains("Requesting OFF") }, "but no OFF was requested (3c52a10 said so): ${app.notices}")
+    expect(pump.commands == ["on", "refresh"] || !pump.commands.contains("off"), "sanity: no OFF was sent: ${pump.commands}")
+}
+
+// ----------------------------------------------------------------------- 2.4.4 fix 6: a hub restart mid-dose
+
+/** A confirmed 10-minute run, healthy for two minutes, then the hub is down for 90 s: no job runs and no event
+ *  arrives, and at start-up the overdue power check fires (the review's S2). */
+def restartMidRun = { app, pump ->
+    confirmedHubStart(app, pump, incidentDose(app) + [doseMl: 2210G, runSeconds: 600])
+    healthyUntil(app, pump, app.clockMs + 120_000L)
+    app.clockMs += 90_000L
+    app.runUntil(app.clockMs)
+}
+
+check("2.4.4 fix 6: a hub restart in the middle of a confirmed run does not latch a false power loss") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    restartMidRun(app, pump)
+    app.advance(400L)
+    app.deliverDeviceReport(pump, "power", 6.7G)               // the plug answers the start-up refresh ...
+    healthyUntil(app, pump, app.clockMs + 30_000L)             // ... and every later one, as before
+    expect(app.state.startFault == null && app.noticesMatching("power LOST").isEmpty(),
+           "no false power loss (3c52a10: power-loss fault and OFF): ${app.state.startFault} ${app.notices}")
+    expect(app.state.activeDose?.offRequestedAt == null && pump.commands.count("off") == 0, "the run continues: ${pump.commands}")
+    expect(app.dueAt["verifyRunPower"] != null, "and is still watched: ${app.dueAt}")
+}
+
+check("2.4.4 fix 6 control: a plug that stays silent after the restart is still aborted, one check later") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    restartMidRun(app, pump)
+    long up = app.clockMs
+    runPlug(app, pump, up + 11_000L)                           // no answer to anything
+    expect(app.state.startFault?.kind == "power-loss" && pump.commands.count("off") >= 1,
+           "silence is still a power loss within one check interval: ${app.state.startFault}")
+}
+
+check("2.4.4 fix 6 control: a scheduler that runs every check late still aborts a silent run") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    confirmedHubStart(app, pump, incidentDose(app) + [doseMl: 2210G, runSeconds: 600])
+    app.clockMs += 25_000L                                     // every check 25 s after the previous one; no report at all
+    app.fire("verifyRunPower")
+    app.clockMs += 25_000L
+    app.fire("verifyRunPower")
+    expect(app.state.startFault?.kind == "power-loss", "only one late check in a row is put off, so silence is still a power loss: ${app.state.startFault}")
+}
+
+// ----------------------------------------------------------------------- 2.4.4 fix 7: a save while a sample waits
+
+check("2.4.4 fix 7: a save between LastMeasurement and processNewSample still processes the sample") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    def wg = liveWaterGuru(app)
+    app.slamMode = false                                       // FC 5.6 holds: no dose is queued
+    long t0 = app.clockMs
+    wgSample(app, wg, [LastMeasurement: "2026-10-06T02:30:48.000Z", freeChlorine: 5.6G])
+    expect(app.dueAt["processNewSample"] == t0 + 20_000L, "sanity: the sample waits 20 s: ${app.dueAt}")
+    app.advance(10_000L)
+    app.updated()                                              // Done, 10 s later
+    app.advance(400L)
+    app.deliverDeviceReport(pump, "switch", "off")             // the save's OFF is answered
+    app.advance(60_000L)
+    expect(app.state.lastProcessedSample == "2026-10-06T02:30:48.000Z", "the sample is processed (3c52a10: dropped): ${app.state.lastProcessedSample}")
+    expect(app.state.fcHistory?.any { it.fc == "5.6" && it.settled == true }, "with its FC reading: ${app.state.fcHistory}")
+    expect(app.state.pendingSampleKey == null && app.dueAt["processNewSample"] == null, "and nothing is left pending: ${app.dueAt}")
+}
+
+// ----------------------------------------------------------------------- 2.4.4 fix 8: WARN flood on an outside run
+
+check("2.4.4 fix 8: a run this app did not start, answering a 3 s poll, logs a throttled line instead of a WARN per report") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    long t0 = app.clockMs
+    app.deliverDeviceReport(pump, "switch", "on")
+    app.deliverDeviceReport(pump, "power", 6.7G)
+    long due = app.dueAt["emergencyPumpOff"] as Long
+    int before = app.logLines.count { it.startsWith("WARN") }
+    profilerAnswers(app, pump, t0 + 897_000L, "on", 6.7G)     // 299 unchanged ON reports, up to just before the cutoff
+    int warns = app.logLines.count { it.startsWith("WARN") } - before
+    expect(warns >= 1 && warns <= 16, "at most about one line a minute (3c52a10: 299): ${warns}")
+    expect(app.dueAt["emergencyPumpOff"] == due, "the cutoff is neither moved nor dropped: ${app.dueAt}")
+    app.runUntil(due)
+    expect(pump.commands.count("off") == 1, "and it fires on time: ${pump.commands}")
+}
+
+// ----------------------------------------------------------------------- 2.4.4 fix 9: the confirmed-OFF notice
+
+check("2.4.4 fix 9: verifyPumpOff's own confirmed-OFF notice reads as one sentence") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    def active = confirmedHubStart(app, pump)
+    long stopAt = active.stopAt as Long
+    healthyUntil(app, pump, stopAt + 1_000L)                   // stopDose has sent OFF; its report is lost
+    app.runUntil(stopAt + 19_000L)
+    pump.setReportedAt("off", app.clockMs)                     // the relay's OFF is stored, its event still queued ...
+    app.runUntil(stopAt + 20_000L)                             // ... behind verifyPumpOff, which sees it first
+    app.pumpSwitchHandler([name: "switch", value: "off", date: new Date(stopAt + 19_000L), isStateChange: true])
+    expect(app.state.activeDose == null, "sanity: the stop is complete")
+    expect(app.noticesMatching("WaterGuru dosing: Chlorine pump confirmed OFF. It ran ").size() == 1,
+           "one sentence, then the booking: ${app.notices}")
+    expect(app.notices.every { !it.contains("WaterGuru Dosing Advisor:") }, "no app name inside a notice (3c52a10 had one): ${app.notices}")
+}
+
+// ----------------------------------------------------------------------- 2.4.4 fix 10: one interval count
+
+check("2.4.4 fix 10: the runway line and the status line count the same intervals, and call them intervals") {
+    def app = newApp()
+    def wg = liveWaterGuru(app, LIVE_OCT5)
+    app.slamMode = false
+    app.fcTargetOverride = 6.0G
+    app.state.fcHistory = []
+    app.state.tankDoseHistory = []
+    [5.6G, 5.2G, 5.5G, 5.1G, 5.4G, 5.0G, 5.3G, 4.9G, 5.2G, 4.8G, 5.1G, 4.7G].eachWithIndex { BigDecimal fc, int i ->
+        app.clockMs = epoch("2026-10-06T02:45:03Z") + i * DAY_MS
+        wgSample(app, wg, [LastMeasurement: Instant.ofEpochMilli(epoch("2026-10-06T02:30:48Z") + i * DAY_MS).toString(), freeChlorine: fc])
+        app.advance(20_000L)
+        if (i == 1 || i == 11) {
+            String want = i == 1 ? "over 1 interval" : "over 5 intervals"
+            String line = app.runwayLine(app.computeRunway(fc, 39G))
+            String status = app.runwayStatusLine()
+            expect(line.contains("(measured 0.4 ppm/day ${want})"), "[${i + 1} samples] runway line: ${line}")
+            expect(status == "Currently using your measured loss (~0.4 ppm/day ${want}).", "[${i + 1} samples] status line (3c52a10: 'from ${i + 1} samples'): ${status}")
+        }
+    }
+}
+
+// ----------------------------------------------------------------------- 2.4.4 fix 11: tank runway after the first dose
+
+check("2.4.4 fix 11: right after the first dose the tank runway asks for half a day of history, not for a completed dose") {
+    def app = newApp()
+    app.clockMs = epoch("2026-10-07T02:45:00Z")
+    def pump = hubPlug(app)
+    app.state.tankDoseHistory = []
+    app.state.remove("lastDose")
+    expect(app.tankRunwayLine(app.computeTankRunway()) == "⏳ Tank runway: learning — a completed app-controlled dose is needed to estimate days until 10%.",
+           "control: with no dose on record the old text stays")
+    confirmedHubStart(app, pump)
+    expect(app.state.tankDoseHistory.size() == 1, "sanity: the dose is on record: ${app.state.tankDoseHistory}")
+    String line = app.tankRunwayLine(app.computeTankRunway())
+    expect(line == "⏳ Tank runway: learning, 1 dose recorded so far; days until 10% can be estimated once the dose history spans half a day.",
+           "it says what is missing (3c52a10: 'a completed app-controlled dose is needed'): ${line}")
+}
+
+// ----------------------------------------------------------------------- 2.4.4 fix 12: cassette days after a swap
+
+check("2.4.4 fix 12: after a cassette swap clears WaterGuru's text, the old day count is not shown beside the new cassette") {
+    def app = newApp()
+    def wg = liveWaterGuru(app, LIVE_OCT5 + [CassetteTimeLeft: "1 day left", cassetteDaysLeft: 1])
+    expect(app.cassetteText() == "C5 · installed Sep 12, 2026 · 1 day left · 12.0% · replace soon", "control: the current number: ${app.cassetteText()}")
+    app.clockMs += DAY_MS
+    wgSample(app, wg, [CassetteStatus: "GREEN", CassettePercent: 100G, CassetteTimeLeft: "", cassetteInfo: "C5 · installed Oct 8, 2026"])
+    expect(app.cassetteText() == "C5 · installed Oct 8, 2026 · 100%", "a blank text (3c52a10: '1 day left' beside 100%): ${app.cassetteText()}")
+    wgSample(app, wg, [CassetteTimeLeft: "unknown"])
+    expect(app.cassetteText() == "C5 · installed Oct 8, 2026 · 100%", "an 'unknown' text: ${app.cassetteText()}")
+    app.clockMs += DAY_MS
+    wgSample(app, wg, [CassetteTimeLeft: "2 weeks left", cassetteDaysLeft: 14])
+    expect(app.cassetteText() == "C5 · installed Oct 8, 2026 · 14 days left · 100%", "control: a new text brings its number back: ${app.cassetteText()}")
 }
 
 // --------------------------------------------------------------------------- summary
