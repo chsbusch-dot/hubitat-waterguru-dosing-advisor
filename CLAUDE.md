@@ -24,12 +24,16 @@ into a real pool: treat every pump-related change as safety critical.
 | Parent app instance | 2198 (app code 1241) |
 | Child app instance | 2200 (app code 1242). 2199 was an orphaned clone and was deleted |
 | Tile device | 4658 (driver code 3046) |
-| Pump Power Profiler | instance 2214 (app code 1250) |
+| Pump Power Profiler | instance 2214 (app code 1250), labelled "WaterGuru Pump Power Profiler", sampleSecs 5 since 2026-10-07 |
 | Pump plug | device 4674, Zooz ZEN05, Z-Wave node 259 |
-| PushOver notifier | device 1955 |
+| Notifier for 2200 and 2195 | device 4679 "Pool Chlorine (Pushover)", its own Pushover app (token in BWS as `PUSHOVER_POOL_DOSING_APP_TOKEN`), since 2026-10-07. Device 1955 "PushOver" stays the hub's shared notifier for other apps |
 | RM rule "POOL 60 seconds" | rule 2207, triggered by virtual button 4609 |
 | Maker API | app 2142 |
 | ZEN20 power strip | device 150, outlets 151 to 155 (router and AV gear) |
+
+The WaterGuru Integration (app 2195, driver 3045) comes from Brian Wilson's HPM package. HPM (app
+546) auto-updates every package at 04:00 EXCEPT that one (excluded 2026-10-07): an upstream release
+reaches the hub only when someone installs it via HPM > Update, and a local build is not overwritten.
 
 Hub access is the `hubitat-rules` MCP server. Gateway tools (`hub_read_*`, `hub_manage_*`)
 list their sub-tools when called with no arguments.
@@ -42,14 +46,22 @@ driver) and compare the `source` field byte for byte with the file at `origin/ma
 ## Safety rules (hard)
 
 - **Never switch the pump plug 4674 without Chris's explicit yes.** It doses real chlorine.
-- **`hub_create_backup` before ANY write** to devices, drivers, apps or the radio.
+- **`hub_create_backup` before ANY write** to devices, drivers, apps or the radio. From Claude Code
+  the tool refuses its own key (the key is dropped on the client path, upstream issue
+  kingpanther13/Hubitat-local-MCP-server#518). Chris approved (2026-10-07) taking the backup by a
+  direct JSON-RPC `tools/call` to the MCP server with its token from BWS; otherwise ask Chris for a
+  UI backup. Confirm with `hub_list_backups` (scope hub_local): the day's `~manual` file is replaced
+  by each new manual backup.
 - **Never toggle the ZEN20 outlets** (device 150, children 151 to 155): router and AV gear.
 - **Tank inventory corrections and profiler `sampleSecs` changes only after Chris confirms.**
 - **Never use `hub_set_native_app` to WRITE settings on the custom apps 2198/2200.** It
   clones the child and orphans the original (that is how 2199 happened). Button presses are
-  fine. For a lifecycle refresh use `hub_update_app` with `triggerUpdated`.
-- The write-gate key (`bestPracticeKey`) comes from
-  `hub_get_tool_guide(section='best_practice_reference')`. Read it fresh; never hard-code it.
+  fine, but on MCP Rule Server 4.5.5 a press (e.g. `btnPreview`) also fires `updated()` on 2200:
+  the routine OFF + refresh goes to plug 4674, and when the plug answers after the 4 s wait Chris
+  gets two notices. For a lifecycle refresh use `hub_update_app` with `triggerUpdated`.
+- The write-gate key (`bestPracticeKey`) comes from the guide section the refusal names (on
+  4.5.5 for example `backup`, `update_device`, `hub_admin_write_devices`); it rotates hourly.
+  Read it fresh; never hard-code or quote it.
 - Deploying code to the hub is Chris's call: open the PR, he approves anything that lands on
   the hub.
 
