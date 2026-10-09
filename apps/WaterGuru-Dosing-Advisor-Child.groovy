@@ -27,6 +27,20 @@
  * All doses are ESTIMATES. Always confirm with your own test kit before adding.
  *
  * Version history
+ *   2.4.5 - Two changes for the evening dose (WOR-739). (1) The start judgment leaves room for the hub's
+ *           Command Retry (enabled on the plug on 2026-10-08): a lost ON answered by the plug's unchanged OFF
+ *           no longer ends the attempt on that first answer. The attempt keeps waiting inside the start
+ *           window, and a retried ON that lands in it, with power, confirms the start like a prompt one. The
+ *           "ON did not take effect" close needs RETRY_SETTLE_SECONDS (10 s) since the ON and a second OFF
+ *           answer; the window (startConfirmTimeoutSeconds) stays the outer bound, and the app still sends
+ *           no ON of its own a second time. On 2026-10-07 the first answer closed the attempt 2.3 s after the
+ *           ON, so the hub's retried ON arrived as an ON during a pending fault and was switched off again.
+ *           (2) A second evening fetch: when the daily refresh (sourceRefreshTime) brings no new
+ *           LastMeasurement, the source device is refreshed once more 45 minutes later (20:30 for a 19:45
+ *           refresh), inside the AUTO dosing window only; a sample it brings in takes the usual path and
+ *           every dosing guard. If that brings nothing either, one log line and nothing else. The
+ *           integration polls every 6 h, so a sample late for the 19:45 refresh was not fetched again before
+ *           the window closed and that day's dose was skipped.
  *   2.4.4 - Fixes from the second review of 2.4.3 (WOR-731). (1) The emergency cutoff stopping a pump run
  *           this app did not start ends with "EMERGENCY cutoff confirmed the chlorine pump OFF" once the OFF
  *           lands, before or after its EMERGENCY notice; it was silent, or ended on the EMERGENCY. Such runs
@@ -192,7 +206,7 @@
 
 import groovy.transform.Field
 
-def appVersion() { "2.4.4" }
+def appVersion() { "2.4.5" }
 
 definition(
     name:        "WaterGuru Dosing Advisor Pool",
@@ -268,6 +282,18 @@ preferences {
 @Field static final int        START_CHECK_SECONDS          = 2
 @Field static final int        START_REFRESH_THROTTLE_SECONDS = 10
 @Field static final int        RUN_POWER_CHECK_SECONDS      = 10
+// 2.4.5: the hub's Command Retry (enabled on the plug 2026-10-08) re-sends a command whose expected report
+// does not arrive, up to five times. For a switch the first retry goes out 1.5 s after the command and each
+// later one waits (retry number x 1.5 s) more (Hubitat staff announcement, 2025-04-02), so the first three
+// retries land within 9 to 13.5 s of the first send. A lost ON is therefore not judged on the plug's first
+// unchanged OFF answer: the attempt keeps waiting inside the start window until this long has passed since
+// the ON and a second refresh answer still reads OFF (the 10 s refresh throttle puts that answer at about
+// 12.4 s). The window (startConfirmTimeoutSeconds) stays the outer bound; the app never re-sends an ON.
+@Field static final int        RETRY_SETTLE_SECONDS         = 10
+// 2.4.5: a second refresh of the WaterGuru device this long after the daily one (19:45 + 45 min = 20:30)
+// when that one brought no new sample, and how long after the second one its outcome is logged.
+@Field static final int        SOURCE_RETRY_DELAY_SECONDS   = 2700
+@Field static final int        SOURCE_RETRY_SETTLE_SECONDS  = 120
 // Stop notice and run booking (2.4.1). A real plug answers OFF asynchronously (about 450 ms on
 // Oct 2), so the "stop requested" notice waits this long for the OFF report before it speaks.
 @Field static final int        STOP_CONFIRM_SECONDS         = 4
@@ -924,7 +950,42 @@ def refreshWaterGuruSource() {
         log.warn "WaterGuru Dosing Advisor: scheduled refresh skipped; ${sourceDevice.displayName} has no refresh command"
         return
     }
+    // 2.4.5: the pod's sample can be late for this refresh, and the integration's own poll is hours away (every
+    // 6 h on the live hub), so nothing fetched it again before the AUTO window closed and that day's dose was
+    // skipped. Ask once more later. The job carries what LastMeasurement reads now, so it can tell whether
+    // this refresh brought a new sample; scheduled first, so a refresh that throws still gets its second try.
+    runIn(SOURCE_RETRY_DELAY_SECONDS, "retryWaterGuruRefresh",
+          [data: [before: attrRaw("LastMeasurement") ?: ""], overwrite: true])
     log.info "WaterGuru Dosing Advisor: refreshing ${sourceDevice.displayName} after its scheduled measurement"
+    sourceDevice.refresh()
+}
+
+/**
+ * The second evening fetch (2.4.5), SOURCE_RETRY_DELAY_SECONDS after the daily refresh. When that refresh
+ * brought no new LastMeasurement and the AUTO dosing window is still open, the source device is refreshed
+ * once more, and the outcome is checked once, SOURCE_RETRY_SETTLE_SECONDS later (`again`). A sample it brings
+ * in takes the usual path (onNewSample, processNewSample, every dosing guard); nothing is dosed from here,
+ * and a refresh that re-sends the same sample is dropped by processNewSample's duplicate lock. Nothing is
+ * scheduled beyond the one check, and no notice is sent.
+ */
+def retryWaterGuruRefresh(Map data = [:]) {
+    String before = data?.before?.toString() ?: ""
+    String current = attrRaw("LastMeasurement") ?: ""
+    if (current != before) {
+        logDebug "The scheduled WaterGuru refresh brought a new sample (${current}); no second refresh"
+        return
+    }
+    if (data?.again == true) {
+        log.warn "WaterGuru Dosing Advisor: the second WaterGuru refresh brought no new sample either (LastMeasurement still ${before ?: 'unset'}); nothing more is fetched today"
+        return
+    }
+    if (!sourceDevice || !sourceDevice.hasCommand("refresh")) return
+    if (!autoDoseWindowOpen()) {
+        log.info "WaterGuru Dosing Advisor: the scheduled refresh brought no new WaterGuru sample, but the AUTO dosing window is closed; no second refresh"
+        return
+    }
+    runIn(SOURCE_RETRY_SETTLE_SECONDS, "retryWaterGuruRefresh", [data: [before: before, again: true], overwrite: true])
+    log.warn "WaterGuru Dosing Advisor: the scheduled refresh brought no new WaterGuru sample (LastMeasurement still ${before ?: 'unset'}); refreshing ${sourceDevice.displayName} once more"
     sourceDevice.refresh()
 }
 
@@ -1699,6 +1760,23 @@ private boolean switchOffUnchangedSince(Long t) {
     Map sw = readDeviceReading("switch")
     Long at = sw.at as Long
     return sw.ok == true && sw.value?.toString() == "off" && at != null && !futureDated(at) && at < t
+}
+
+/**
+ * Count an unchanged OFF answer to a start whose ON never took effect (2.4.5), and say whether the hub's
+ * retries have had their chance: RETRY_SETTLE_SECONDS since the ON request and at least two such answers.
+ * Until then the attempt keeps waiting inside the start window with its stop, verification and cutoff jobs
+ * in place; verifyStartConfirmation still ends it at the deadline. The count lives in the attempt and goes
+ * with it.
+ */
+private boolean hubRetriesSettled(Map active) {
+    int answers = ((active.offAnswers ?: 0) as Integer) + 1
+    active.offAnswers = answers
+    state.activeDose = active
+    long sinceOn = now() - (active.requestedAt as Long)
+    if (answers >= 2 && sinceOn >= RETRY_SETTLE_SECONDS * 1000L) return true
+    log.warn "WaterGuru Dosing Advisor: the switch answered OFF ${Math.round(sinceOn / 1000.0d)}s after the ON request (answer ${answers}); the ON may have been lost, waiting for the hub's retries inside the start window"
+    return false
 }
 
 /** Record the latch that keeps a fault visible until the operator acknowledges it. */
@@ -2502,6 +2580,11 @@ private void handlePumpOffEvent(evt) {
     // instead of "Requesting OFF; the independent cutoff stays armed" and "stopped before the planned dose
     // completed". The fault is latched as for every unconfirmed start.
     if (wasActive && startNeverTookEffect(active)) {
+        // 2.4.5: not on the first answer. The hub re-sends a lost ON (Command Retry), so an unchanged OFF this
+        // early says only that the first send was lost: the start check keeps polling, and a retried ON that
+        // lands inside the window confirms the start like a prompt one. The attempt is closed here only once
+        // the retries have had their chance. Nothing is energised meanwhile.
+        if (!hubRetriesSettled(active)) return
         markStartUnconfirmed(active, "the ON did not take effect: the switch answered OFF and never reported ON")
         finishStop("Chlorine pump start NOT confirmed: the switch answered OFF and never reported ON, so the ON did not take effect and nothing was dosed. " +
                    "The ${active.ml} mL attempt stays reserved and is not counted as delivered.")

@@ -10,7 +10,8 @@ or the build aborts, so a mutation that silently failed to apply can never be re
 Origin: the M01-M21 / PC1-PC2 set from the independent review of 5f218c9 (2.4.0), re-anchored to
 the 2.4.1 code; F1-F6 revert one 2.4.1 fix each, R1-R9 one 2.4.2 fix each (WOR-718), W1-W3 one
 2.4.3 fix each (WOR-724), X1-X12 one 2.4.4 fix each and XP1-XP3 one Pump Power Profiler 1.1.1 fix
-each (WOR-731), and every one of those must be killed by the tests that guard it.
+each (WOR-731), Y1-Y2 one 2.4.5 change each (WOR-739), and every one of those must be killed by the tests
+that guard it.
 
 A mutant edits the child app unless it is declared with mutp(), which edits the profiler. Each mutant
 runs the suite that covers its file (MUTATION.txt "suites:"); the base runs both.
@@ -288,6 +289,13 @@ mutp("XP3", "killed", "profiler fix 3 reverted: every value is read first and ev
       "    Map sw = readingWithDate(\"switch\")\n    Map w = readingWithDate(\"power\")\n"),
      ("        sw : sw.value,\n        w  : w.value,\n        a  : a.value,\n        v  : v.value,\n        e  : e.value,\n",
       "        sw : vals.sw,\n        w  : vals.w,\n        a  : vals.a,\n        v  : vals.v,\n        e  : vals.e,\n"))
+
+# ---- 2.4.5 (WOR-739): each change reverted (must be killed) ----
+mut("Y1", "killed", "change 1 reverted: the plug's first unchanged OFF answer closes a lost ON before the hub's retries",
+    ("        if (!hubRetriesSettled(active)) return\n", ""))
+mut("Y2", "killed", "change 2 reverted: no second evening fetch when the daily refresh brings no new sample",
+    ("    runIn(SOURCE_RETRY_DELAY_SECONDS, \"retryWaterGuruRefresh\",\n"
+     "          [data: [before: attrRaw(\"LastMeasurement\") ?: \"\"], overwrite: true])\n", ""))
 
 
 def build(name):

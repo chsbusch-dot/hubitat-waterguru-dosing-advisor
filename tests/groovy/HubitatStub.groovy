@@ -150,10 +150,14 @@ abstract class HubitatStub extends Script {
     // --- scheduling -----------------------------------------------------------------
     /** Absolute due time of every pending runIn job, so runUntil() can fire them in time order. */
     Map<String, Long> dueAt = [:]
+    /** The data map a runIn job carries (runIn(..., [data: m])); the hub hands it to the handler when it fires. */
+    Map<String, Map> jobData = [:]
 
     def runIn(Number seconds, String handler, Map opts = [:]) {
         scheduled[handler] = seconds
         dueAt[handler] = clockMs + ((seconds as BigDecimal) * 1000G).longValue()
+        if (opts?.data instanceof Map) jobData[handler] = new LinkedHashMap(opts.data as Map)
+        else jobData.remove(handler)
         null
     }
     def schedule(String when, String handler) {
@@ -161,8 +165,8 @@ abstract class HubitatStub extends Script {
         null
     }
     def runEvery1Minute(String handler) { scheduled[handler] = 60; null }
-    def unschedule() { scheduled.clear(); dueAt.clear(); null }
-    def unschedule(String handler) { scheduled.remove(handler); dueAt.remove(handler); unscheduled << handler; null }
+    def unschedule() { scheduled.clear(); dueAt.clear(); jobData.clear(); null }
+    def unschedule(String handler) { scheduled.remove(handler); dueAt.remove(handler); jobData.remove(handler); unscheduled << handler; null }
 
     /** Move the clock to `t`, firing every runIn job that falls due on the way, in due-time order. */
     void runUntil(Long t) {
@@ -283,6 +287,8 @@ abstract class HubitatStub extends Script {
     Object fire(String handler) {
         scheduled.remove(handler)
         dueAt.remove(handler)
+        Map data = jobData.remove(handler)
+        if (data != null) return this.invokeMethod(handler, [data] as Object[])
         def m = this.metaClass.getMetaMethod(handler)
         if (m == null) throw new IllegalStateException("no handler named ${handler}")
         return m.invoke(this)
