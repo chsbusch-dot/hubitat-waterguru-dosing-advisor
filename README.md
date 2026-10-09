@@ -83,6 +83,7 @@ without pinning it.
 | **Also include WaterGuru's chlorine advice** | Off by default — this app computes FC, so WaterGuru's (CYA-blind) chlorine line is dropped to avoid a conflicting recommendation. |
 | **Target overrides** | pH / TA / CYA / CH targets; blank = read the device's targets. |
 | **Delivery** | The notification device(s) to send to, whether to notify automatically on each new sample, and an optional **daily summary** at a set time. |
+| **Refresh WaterGuru once daily** | Ask the source device to refresh at a set time after WaterGuru's scheduled measurement, so the evening sample is imported promptly instead of waiting for the integration's next poll. If that refresh brings no new sample, the device is refreshed once more 45 minutes later (20:30 for a 19:45 refresh), only while the AUTO dosing window is open; a sample it brings in goes through every dosing guard as usual, and if it brings nothing either, one log line and nothing more. |
 | **Dashboard tile** | Whether to create/maintain a companion tile device for this pool (on by default). |
 | **Confirm the pump is actually running** | Automatic: a power-capable switch requires fresh power; a switch that does not report power is confirmed by a fresh ON with an explicit power/flow-unverified notice. There is no setting that bypasses power confirmation. |
 | **Minimum running power** | The watts a power-capable switch must report before a start is confirmed (default **3 W**; 0, blank or negative uses 3 W, and 0 W never confirms a start). |
@@ -274,6 +275,15 @@ unchanged. A refresh request alone is never confirmation.
 After upgrading, use **Done** once while the pump is idle to install these subscriptions; this
 also requests OFF through the normal configuration-change stop path. Verify the subscription
 settings before enabling automatic dosing.
+
+A lost ON is not judged on the plug's first answer. With Hubitat's **Command Retry** enabled for the
+plug (device page, or Settings > Command Retry), the hub re-sends a command whose expected report
+does not arrive, up to five times; for a switch the first retry goes out 1.5 s after the command and
+each later one waits a further 1.5 s times the retry number, so the first three land within 9 to
+13.5 s. When the start check's refresh is answered with an unchanged OFF, the attempt therefore keeps
+waiting inside the start window, and a retried ON that lands in it, with power, confirms the start
+like a prompt one. The attempt is closed as "the ON did not take effect" only 10 s after the ON and
+on a second OFF answer; the window below stays the outer bound. The app itself never re-sends an ON.
 
 If a start is not confirmed within the timeout (default **20 s**, never past the planned stop):
 

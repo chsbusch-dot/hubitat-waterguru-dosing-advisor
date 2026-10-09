@@ -3529,12 +3529,13 @@ check("2.4.4 fix 5: a lost ON answered by the plug's unchanged OFF says the ON d
     def pump = hubPlug(app)
     app.startDose(incidentDose(app), "AUTO 19:45")             // on() is sent; the frame never lands
     long t0 = app.clockMs
-    runPlug(app, pump, t0 + 5_000L) {                          // the plug answers the start check's refresh 0.4 s later
+    // 2.4.5: the first answer (+2.4 s) is a wait for the hub's retries; the second (+12.4 s) closes the attempt.
+    runPlug(app, pump, t0 + 15_000L) {                         // the plug answers each start-check refresh 0.4 s later
         app.advance(400L)
         app.deliverDeviceReport(pump, "switch", "off")
         app.deliverDeviceReport(pump, "power", 0G)
     }
-    expect(pump.commands == ["on", "refresh"], "sanity: no OFF was ever sent: ${pump.commands}")
+    expect(pump.commands == ["on", "refresh", "refresh"], "sanity: no OFF was ever sent: ${pump.commands}")
     expect(app.state.activeDose == null && app.dueAt.isEmpty() && app.state.startFault?.kind == "start-unconfirmed",
            "sanity: the attempt is closed with its fault latched: ${app.dueAt}")
     List said = app.notices.drop(1)                            // after "start requested"
@@ -3718,6 +3719,188 @@ check("2.4.4 fix 12: after a cassette swap clears WaterGuru's text, the old day 
     app.clockMs += DAY_MS
     wgSample(app, wg, [CassetteTimeLeft: "2 weeks left", cassetteDaysLeft: 14])
     expect(app.cassetteText() == "C5 · installed Oct 8, 2026 · 14 days left · 100%", "control: a new text brings its number back: ${app.cassetteText()}")
+}
+
+// ----------------------------------------------------------------------- 2.4.5 change 1 (WOR-739): room for the hub's Command Retry
+
+/** The plug's answer to a start-check refresh after a lost ON: 0.4 s later, an unchanged OFF and 0 W. */
+def lostOnAnswered = { app, pump ->
+    app.advance(400L)
+    app.deliverDeviceReport(pump, "switch", "off")
+    app.deliverDeviceReport(pump, "power", 0G)
+}
+
+check("harness: a runIn job carries its data map to its handler when it fires, and loses it with the job") {
+    def app = newApp()
+    List got = []
+    app.metaClass.dataHandler = { Map m -> got << m }
+    app.runIn(5, "dataHandler", [data: [k: "v"]])
+    app.advance(5_000L)
+    expect(got == [[k: "v"]], "the data arrives: ${got}")
+    app.runIn(5, "dataHandler", [data: [k: "w"]])
+    app.unschedule("dataHandler")
+    app.advance(10_000L)
+    expect(got.size() == 1 && app.jobData.isEmpty(), "an unscheduled job neither fires nor keeps its data: ${got} / ${app.jobData}")
+}
+
+check("2.4.5 change 1: a retried ON landing 6 s after a lost one confirms the start, and the dose runs to its planned stop") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    app.startDose(incidentDose(app), "AUTO 19:45")             // on() is sent; the frame never lands (Oct 7)
+    long t0 = app.clockMs
+    runPlug(app, pump, t0 + 3_000L) { lostOnAnswered(app, pump) }   // the +2 s refresh is answered with an unchanged OFF
+    expect(app.state.activeDose != null && app.state.activeDose.fault == null && app.state.startFault == null && app.dueAt["stopDose"] == t0 + 129_000L,
+           "the attempt stays open after the first OFF answer (0cab41e closed it): ${app.state.activeDose} / ${app.state.startFault}")
+    expect(app.noticesMatching("NOT confirmed").isEmpty(), "and nothing is alerted yet: ${app.notices}")
+    app.runUntil(t0 + 6_000L)
+    app.deliverDeviceReport(pump, "switch", "on")              // the hub's retried ON reaches the plug
+    app.advance(500L)
+    app.deliverDeviceReport(pump, "power", 6.7G)
+    expect(app.state.activeDose?.startConfirmed == true, "a late ON plus power inside the window confirms the start: ${app.state.activeDose}")
+    expect(app.noticesMatching("Chlorine pump started").size() == 1 && app.noticesMatching("NOT confirmed").isEmpty(), "and says so once: ${app.notices}")
+    expect(pump.commands.count("on") == 1 && !pump.commands.contains("off"), "the app sent no ON of its own and no OFF: ${pump.commands}")
+    healthyUntil(app, pump, t0 + 129_000L)                     // the run, each power poll answered with 6.7 W; stopDose fires at +129 s
+    expect(pump.commands.count("off") == 1 && app.state.activeDose?.offRequestedAt == t0 + 129_000L, "OFF goes out at the planned stop: ${pump.commands}")
+    app.advance(450L)
+    app.deliverDeviceReport(pump, "switch", "off")
+    app.deliverDeviceReport(pump, "power", 0G)
+    expect(app.state.activeDose == null && app.state.startFault == null && app.dueAt.isEmpty(), "the dose ends clean: ${app.dueAt} / ${app.state.startFault}")
+    expect(app.state.lastDose != null && app.noticesMatching("stopped after scheduled").size() == 1, "and is booked: ${app.state.lastDose} / ${app.notices}")
+}
+
+check("2.4.5 change 1: a lost ON the plug keeps answering OFF closes on the second answer, after the retry settle, with nothing sent") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    app.startDose(incidentDose(app), "AUTO 19:45")
+    long t0 = app.clockMs
+    runPlug(app, pump, t0 + 25_000L) { lostOnAnswered(app, pump) }   // refreshes at +2 s and +12 s (the 10 s throttle), each answered OFF
+    expect(pump.commands == ["on", "refresh", "refresh"], "two refreshes, no OFF: ${pump.commands}")
+    expect(app.state.activeDose == null && app.state.startFault?.kind == "start-unconfirmed" && app.dueAt.isEmpty(),
+           "closed with its fault latched: ${app.dueAt} / ${app.state.startFault}")
+    // The +2.4 s answer re-runs the check at once, so the checks fall at +4.4, +6.4 ... and the second refresh at
+    // +12.4 s (10 s throttle), answered at +12.8 s.
+    long at = app.state.startFault.at as Long
+    expect(at >= t0 + 12_000L && at <= t0 + 13_000L, "on the second answer, after the retry settle (0cab41e: +2.4 s): +${at - t0} ms")
+    List said = app.notices.drop(1)                            // after "start requested"
+    expect(said.size() == 1 && said[0].contains("the ON did not take effect and nothing was dosed"), "one notice: ${said}")
+    expect(app.logLines.count { it.contains("waiting for the hub's retries") } == 1, "the first answer is logged as a wait: ${app.logLines.findAll { it.contains('answered OFF') }}")
+}
+
+check("2.4.5 change 1: a lost ON with one OFF answer and then silence still faults at the 20 s window, OFF requested, cutoff armed") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    app.startDose(incidentDose(app), "AUTO 19:45")
+    long t0 = app.clockMs
+    int answers = 0
+    runPlug(app, pump, t0 + 25_000L) { if (answers++ == 0) lostOnAnswered(app, pump) }   // only the first refresh is answered
+    long at = (app.state.startFault?.at ?: 0L) as Long                 // the first check past the deadline: +20.4 s
+    expect(app.state.startFault?.kind == "start-unconfirmed" && at >= t0 + 20_000L && at < t0 + 21_000L,
+           "the window ends the attempt at +20 s (0cab41e: +2.4 s): ${app.state.startFault}")
+    expect(pump.commands.count("off") == 1 && app.state.activeDose?.offRequestedAt == at, "OFF was requested then: ${pump.commands}")
+    expect(app.dueAt["verifyPumpOff"] != null && app.dueAt["emergencyPumpOff"] != null, "the stop retry and the cutoff are armed: ${app.dueAt}")
+    expect(app.noticesMatching("Requesting OFF; the independent cutoff stays armed").size() == 1, "and the alert says so once: ${app.notices}")
+}
+
+// ----------------------------------------------------------------------- 2.4.5 change 2 (WOR-739): a second evening fetch
+
+/** The hub's evening: AUTO with the 19:30 to 23:00 window, the daily refresh at 19:45, the plug, and the
+ *  WaterGuru device still holding the Oct 7 sample at 19:45 PDT on Oct 8 (the integration polls every 6 h). */
+def eveningApp = { app ->
+    app.clockMs = epoch("2026-10-09T02:45:00Z")                // 19:45 PDT, Oct 8
+    def pump = hubPlug(app)
+    app.dosingMode = "AUTO"
+    app.limitAutoDoseWindow = true
+    app.autoDoseWindowStart = "19:30"
+    app.autoDoseWindowEnd = "23:00"
+    app.refreshSourceDaily = true
+    app.sourceRefreshTime = "19:45"
+    app.slamMode = false                                       // TFP at CYA 39: min 2.9, target 4.5 ppm
+    def wg = liveWaterGuru(app, LIVE_OCT5 + [LastMeasurement: "2026-10-08T02:30:52.000Z", freeChlorine: 5.3G])
+    return [pump: pump, wg: wg]
+}
+
+/** The late Oct 8 sample: FC 2.5 needs about 1570 mL, 7 min 7 s at 221 mL/min. */
+def LATE_SAMPLE = [LastMeasurementHuman: "1 hour ago", LastMeasurement: "2026-10-09T02:30:11.000Z", freeChlorine: 2.5G]
+
+/** Confirm a start as the plug does and run it to its planned stop, answering each power poll. */
+def runToPlannedStop = { app, pump ->
+    app.advance(500L)
+    app.deliverDeviceReport(pump, "switch", "on")
+    app.advance(1_000L)
+    app.deliverDeviceReport(pump, "power", 6.7G)
+    healthyUntil(app, pump, app.state.activeDose.stopAt as Long)
+    app.advance(450L)
+    app.deliverDeviceReport(pump, "switch", "off")
+    app.deliverDeviceReport(pump, "power", 0G)
+}
+
+check("2.4.5 change 2: a sample late for the 19:45 refresh is fetched again at 20:30 and dosed inside the window") {
+    def app = newApp()
+    def d = eveningApp(app)
+    def pump = d.pump, wg = d.wg
+    long t0 = app.clockMs
+    expect(app.scheduled["refreshWaterGuruSource"] == "19:45", "sanity: the daily refresh is scheduled: ${app.scheduled}")
+    app.fire("refreshWaterGuruSource")                         // 19:45: the pod's sample is late, nothing new comes back
+    expect(wg.refreshCalls == 1 && app.dueAt["retryWaterGuruRefresh"] == t0 + 2_700_000L,
+           "a second fetch is set for 20:30 (0cab41e: none): ${app.dueAt}")
+    app.runUntil(t0 + 2_700_000L)                               // 20:30
+    expect(wg.refreshCalls == 2, "the second fetch goes out: ${wg.refreshCalls}")
+    expect(app.notices.isEmpty(), "silently: ${app.notices}")
+    app.advance(3_000L)
+    wgSample(app, wg, LATE_SAMPLE)                             // the integration brings the 19:30 sample in
+    app.advance(20_000L)                                        // processNewSample
+    expect(app.state.lastProcessedSample == "2026-10-09T02:30:11.000Z", "the sample is processed: ${app.state.lastProcessedSample}")
+    BigDecimal ml = app.state.activeDose?.mlRaw ? bd(app.state.activeDose.mlRaw) : null
+    expect(pump.commands == ["on"] && ml != null && ml > 1560G && ml < 1580G, "and dosed at 20:30, inside the window: ${pump.commands} / ${app.state.activeDose} / ${app.notices}")
+    runToPlannedStop(app, pump)
+    expect(app.state.activeDose == null && app.state.startFault == null && app.state.lastDose != null, "the dose completes: ${app.state.lastDose} / ${app.state.startFault}")
+    app.runUntil(t0 + 3_600_000L)                               // 20:45: the settle check finds the sample in
+    expect(wg.refreshCalls == 2 && app.dueAt["retryWaterGuruRefresh"] == null && pump.commands.count("on") == 1,
+           "nothing more is fetched and nothing is dosed twice: ${app.dueAt} / ${pump.commands}")
+}
+
+check("2.4.5 change 2: when the second fetch brings nothing either, one log line, no notice, nothing further") {
+    def app = newApp()
+    def d = eveningApp(app)
+    def wg = d.wg
+    long t0 = app.clockMs
+    app.fire("refreshWaterGuruSource")
+    app.runUntil(t0 + 2_700_000L)
+    expect(wg.refreshCalls == 2, "the second fetch goes out at 20:30 (0cab41e: none): ${wg.refreshCalls}")
+    app.runUntil(t0 + 3_600_000L)                               // 20:45
+    expect(wg.refreshCalls == 2 && app.dueAt["retryWaterGuruRefresh"] == null, "no third fetch and no job left: ${app.dueAt}")
+    expect(app.logLines.count { it.contains("brought no new sample either") } == 1, "one line says so: ${app.logLines.findAll { it.contains('no new') }}")
+    expect(app.notices.isEmpty() && d.pump.commands.isEmpty(), "no notice and no pump command: ${app.notices} / ${d.pump.commands}")
+}
+
+check("2.4.5 change 2: a sample the 19:45 refresh brings in is neither fetched nor dosed again at 20:30") {
+    def app = newApp()
+    def d = eveningApp(app)
+    def pump = d.pump, wg = d.wg
+    long t0 = app.clockMs
+    app.fire("refreshWaterGuruSource")
+    expect(app.dueAt["retryWaterGuruRefresh"] == t0 + 2_700_000L, "the second fetch is set (0cab41e: none): ${app.dueAt}")
+    app.advance(5_000L)
+    wgSample(app, wg, LATE_SAMPLE)                             // the sample is in at 19:45:05
+    app.advance(20_000L)
+    expect(pump.commands == ["on"], "dosed at 19:45: ${pump.commands} / ${app.notices}")
+    runToPlannedStop(app, pump)
+    app.runUntil(t0 + 3_600_000L)                               // past 20:30
+    expect(wg.refreshCalls == 1 && app.dueAt["retryWaterGuruRefresh"] == null, "no second fetch, the sample was in: ${wg.refreshCalls} / ${app.dueAt}")
+    expect(pump.commands.count("on") == 1 && app.noticesMatching("BLOCKED").isEmpty(), "and no second dose or blocked attempt: ${pump.commands} / ${app.notices}")
+}
+
+check("2.4.5 change 2: the second fetch is skipped when the AUTO window has closed by then") {
+    def app = newApp()
+    def d = eveningApp(app)
+    def wg = d.wg
+    app.autoDoseWindowEnd = "20:00"
+    long t0 = app.clockMs
+    app.fire("refreshWaterGuruSource")
+    expect(app.dueAt["retryWaterGuruRefresh"] == t0 + 2_700_000L, "the second fetch is set (0cab41e: none): ${app.dueAt}")
+    app.runUntil(t0 + 3_600_000L)
+    expect(wg.refreshCalls == 1 && app.dueAt["retryWaterGuruRefresh"] == null, "but does not go out: ${wg.refreshCalls} / ${app.dueAt}")
+    expect(app.logLines.count { it.contains("AUTO dosing window is closed; no second refresh") } == 1, "one line says why: ${app.logLines.findAll { it.contains('window') }}")
 }
 
 // --------------------------------------------------------------------------- summary
