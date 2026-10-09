@@ -83,12 +83,9 @@ without pinning it.
 | **Also include WaterGuru's chlorine advice** | Off by default — this app computes FC, so WaterGuru's (CYA-blind) chlorine line is dropped to avoid a conflicting recommendation. |
 | **Target overrides** | pH / TA / CYA / CH targets; blank = read the device's targets. |
 | **Delivery** | The notification device(s) to send to, whether to notify automatically on each new sample, and an optional **daily summary** at a set time. |
-| **Refresh WaterGuru once daily** | Ask the source device to refresh at a set time after WaterGuru's scheduled measurement, so the evening sample is imported promptly instead of waiting for the integration's next poll. If that refresh brings no new sample, the device is refreshed once more 45 minutes later (20:30 for a 19:45 refresh), only while the AUTO dosing window is open; a sample it brings in goes through every dosing guard as usual, and if it brings nothing either, one log line and nothing more. |
+| **Refresh WaterGuru once daily** and **Daily WaterGuru fetch time** | Ask the source device to refresh at a set time, so the evening sample is imported promptly instead of waiting for the integration's next poll. Set the time to about 30 minutes after the measurement time configured in the WaterGuru app: the pod needs 12 to 15 minutes to read, and the dose starts as soon as the new reading arrives. The default is 19:45. If that fetch brings no new sample, the device is refreshed once more 45 minutes later (20:30 for a 19:45 fetch), only while the AUTO dosing window is open; a sample it brings in goes through every dosing guard as usual, and if it brings nothing either, one log line and nothing more. The app page shows the time of day WaterGuru has actually been measuring at, taken from the recent samples. |
 | **Dashboard tile** | Whether to create/maintain a companion tile device for this pool (on by default). |
-| **Confirm the pump is actually running** | Automatic: a power-capable switch requires fresh power; a switch that does not report power is confirmed by a fresh ON with an explicit power/flow-unverified notice. There is no setting that bypasses power confirmation. |
-| **Minimum running power** | The watts a power-capable switch must report before a start is confirmed (default **3 W**; 0, blank or negative uses 3 W, and 0 W never confirms a start). |
-| **Start confirmation timeout** | How long to wait for fresh evidence before failing a start safely (default **20 s**), never past the planned stop. |
-| **Power-loss grace** | How long a confirmed run may go without fresh, adequate power before it is stopped (default **30 s**). A single bound is measured from the last usable reading for missing reports, or from the first low reading for low power. |
+| **Automated liquid-chlorine dosing** | The dosing mode and the pump settings, including the start confirmation and the safety limits; see *Dosing modes and pump settings* below. |
 | **Run now** | *Calculate & send now* and *Preview (log only)* buttons. |
 | **Correct the estimate** | *Adjust tank inventory by* a signed amount of mL, and *Void a recorded dose that never ran*. Each shows what its button will do before you press it; see *Correcting the tank estimate*. |
 
@@ -99,6 +96,53 @@ calculation and sends it to the same notification device(s).
 When **Use WaterGuru advice** is off (or the source device does not report
 `doseAdvice`), the app falls back to generic formulas for pH/TA/CH/CYA and uses
 the acid type / strength settings.
+
+## Dosing modes and pump settings
+
+The *Automated liquid-chlorine dosing* section decides whether this app can run a liquid
+chlorine pump at all, and under which limits. Three modes:
+
+- **ADVISORY** (default): calculate and notify only. The pump is never started by this app.
+- **APPROVAL**: a valid new sample queues one dose; you start it yourself with *Run the pending
+  chlorine dose now* on the app page. Every safety limit below still applies at that moment.
+- **AUTO**: a new, valid WaterGuru sample may start the pump unattended once every safety check
+  passes. Daily summaries, previews and manual calculations never start it.
+
+The pump settings, one line each. *Safety* marks the ones that decide whether or how long the
+pump may run; the others shape the dose.
+
+| Setting | Default | What it does | Safety |
+| --- | --- | --- | --- |
+| **Dedicated chlorine pump switch** | none | The switch this app turns on and off. Without one no dose can start. | yes |
+| **Pump delivery rate (mL/min)** | 185 | Converts a dose volume into a pump runtime. A wrong rate doses the wrong volume. | yes |
+| **Minimum running power (W)** | 3 | On a power-reporting switch, the watts a fresh report must show before a start counts as confirmed. 0, blank or negative uses 3 W; 0 W never confirms a start. | yes |
+| **How long to wait for start evidence (s)** | 20 | The start is failed safely if no fresh ON (plus power, where reported) arrives in this time, never past the planned stop. | yes |
+| **How long a confirmed run may lose power (s)** | 30 | A confirmed run without fresh, adequate power for this long is stopped and a fault latched. | yes |
+| **Pool circulation/filter switch** | none | The interlock: APPROVAL and AUTO dosing need it on. | yes |
+| **Require circulation switch to already be on** | on | Whether the interlock switch must report on. | yes |
+| **I confirm the circulation pump runs continuously** | off | Replaces the interlock when there is no circulation switch; your statement stands in for a measured one. | yes |
+| **Allow automatic dosing when FC is above the minimum but below target** | off | Optional top-ups. Off, only a reading below the minimum doses. | no |
+| **Only allow AUTO dosing during an evening time window** (start, end) | off | Keeps a manual daytime measurement from starting the pump; readings outside the window are recorded only. | yes |
+| **Limit AUTO mode to one completed dose per calendar day** | on | A second AUTO dose on the same day is blocked, whatever the reading says. A failed attempt counts too. | yes |
+| **Maximum WaterGuru sample age (hours)** | 18 | No dose on a reading older than this. | yes |
+| **Minimum dose to run (mL)** | 50 | A smaller calculated dose is not run. | no |
+| **Maximum single dose (mL)** | 3000 | A larger calculated dose is blocked, not capped. | yes |
+| **Maximum total dose per day (mL)** | 3500 | Blocks a dose that would take the day's total (including reserved failed attempts) over this. | yes |
+| **Absolute maximum pump runtime (minutes)** | 20 | A dose whose runtime would exceed this is blocked. | yes |
+| **Block dosing below pH / above pH** | 6.8 / 8.2 | No dose outside this pH range. | yes |
+| **Arm an independent emergency cutoff for every pump run** | on | A second, independent OFF timer for every pump start, retried until the switch freshly reports off. The last backstop. | yes |
+| **Independent emergency cutoff after this many minutes** | 21 | When the cutoff fires. It must be later than the maximum runtime, or no dose can start and the page shows the problem in red. | yes |
+| **Chlorine container capacity** and **low-tank warning percent** | 1 gal, 20 % | The tank estimate: a dose larger than what is estimated to remain is blocked, and a low tank sends a warning. | yes |
+
+Two checks run before every start and are reported like any other block:
+
+- **The cutoff must be later than the maximum runtime.** Equal or lower is refused, because the
+  cutoff would stop a dose that is still within its plan.
+- **The app's subscriptions must be this version's.** A code update (Hubitat Package Manager, or
+  saving new code under *Apps Code*) replaces the code without running the app's setup, so the
+  hub may still hold the previous version's subscriptions. Until you open the pool and press
+  **Done**, every start is refused with *"the app's subscriptions are out of date after a code
+  update; open the app and press Done"*, and the dosing status on the page says the same.
 
 ## Dashboard tile
 
@@ -273,8 +317,11 @@ that was already off still counts as a fresh OFF once it passes the same anchor 
 other OFF. The selected driver must publish received reports even when their values are
 unchanged. A refresh request alone is never confirmation.
 After upgrading, use **Done** once while the pump is idle to install these subscriptions; this
-also requests OFF through the normal configuration-change stop path. Verify the subscription
-settings before enabling automatic dosing.
+also requests OFF through the normal configuration-change stop path. The app checks this itself:
+a code update does not run its setup, so until **Done** is pressed every start is refused with
+"the app's subscriptions are out of date after a code update; open the app and press Done" (see
+*Dosing modes and pump settings*). Verify the subscription settings before enabling automatic
+dosing.
 
 A lost ON is not judged on the plug's first answer. With Hubitat's **Command Retry** enabled for the
 plug (device page, or Settings > Command Retry), the hub re-sends a command whose expected report
