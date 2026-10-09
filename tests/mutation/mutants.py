@@ -10,8 +10,8 @@ or the build aborts, so a mutation that silently failed to apply can never be re
 Origin: the M01-M21 / PC1-PC2 set from the independent review of 5f218c9 (2.4.0), re-anchored to
 the 2.4.1 code; F1-F6 revert one 2.4.1 fix each, R1-R9 one 2.4.2 fix each (WOR-718), W1-W3 one
 2.4.3 fix each (WOR-724), X1-X12 one 2.4.4 fix each and XP1-XP3 one Pump Power Profiler 1.1.1 fix
-each (WOR-731), Y1-Y2 one 2.4.5 change each (WOR-739), and every one of those must be killed by the tests
-that guard it.
+each (WOR-731), Y1-Y2 one 2.4.5 change each (WOR-739), Z1-Z2 one 2.4.6 item each (WOR-740), and every one
+of those must be killed by the tests that guard it.
 
 A mutant edits the child app unless it is declared with mutp(), which edits the profiler. Each mutant
 runs the suite that covers its file (MUTATION.txt "suites:"); the base runs both.
@@ -296,6 +296,12 @@ mut("Y1", "killed", "change 1 reverted: the plug's first unchanged OFF answer cl
 mut("Y2", "killed", "change 2 reverted: no second evening fetch when the daily refresh brings no new sample",
     ("    runIn(SOURCE_RETRY_DELAY_SECONDS, \"retryWaterGuruRefresh\",\n"
      "          [data: [before: attrRaw(\"LastMeasurement\") ?: \"\"], overwrite: true])\n", ""))
+
+# ---- 2.4.6 (WOR-740): each item reverted (must be killed) ----
+mut("Z1", "killed", "item 1 reverted: a stale or missing subscription stamp no longer blocks a start",
+    ("    if (!subscriptionsCurrent()) blocks << \"the app's subscriptions are out of date after a code update; open the app and press Done\"\n", ""))
+mut("Z2", "killed", "item 2 reverted: a cutoff equal to or below the maximum runtime no longer blocks a start",
+    ("    String cutoffProblem = cutoffSettingProblem()\n    if (cutoffProblem) blocks << cutoffProblem\n", ""))
 
 
 def build(name):

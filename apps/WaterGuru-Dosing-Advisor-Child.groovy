@@ -27,6 +27,24 @@
  * All doses are ESTIMATES. Always confirm with your own test kit before adding.
  *
  * Version history
+ *   2.4.6 - Four items from the 2026-10-08 debt review (WOR-740); none of them pump logic. (1) A code update
+ *           (Hubitat Package Manager, or new code saved under Apps Code) replaces the code without running
+ *           updated(), so an install keeps the subscriptions of the code it was last saved with. initialize()
+ *           now stamps the subscribe set it installs (SUBSCRIPTION_SET, kept apart from appVersion()) into
+ *           state, and a start is refused while the stamp is missing or older: "the app's subscriptions are
+ *           out of date after a code update; open the app and press Done". The dosing status line says the
+ *           same. No self-healing: re-running initialize() from a handler is a queue reset and a pump stop
+ *           in this app. (2) The independent emergency cutoff must be later than the absolute maximum
+ *           runtime (defaults 21 and 20 min; the cutoff default was 20, equal to the maximum, and nothing
+ *           checked the pair). Equal or lower refuses the start and the settings page shows the problem in
+ *           red. (3) The hard-coded 19:20 WaterGuru measurement time is gone. The daily fetch setting is
+ *           documented in its place ("Daily WaterGuru fetch time", about 30 minutes after the measurement
+ *           time configured in the WaterGuru app, default 19:45), the page shows the time of day WaterGuru
+ *           has actually been measuring at (the median of the last seven recorded samples) and shows the
+ *           dosing line only in AUTO mode. The second evening fetch stays relative to the setting. (4) The
+ *           README documents the three dosing modes and every pump setting with its safety relevance, and
+ *           the version-tagged comments that only restated history ("2.4.2: ...") are folded into this
+ *           changelog; the code keeps the reasons that still hold.
  *   2.4.5 - Two changes for the evening dose (WOR-739). (1) The start judgment leaves room for the hub's
  *           Command Retry (enabled on the plug on 2026-10-08): a lost ON answered by the plug's unchanged OFF
  *           no longer ends the attempt on that first answer. The attempt keeps waiting inside the start
@@ -206,7 +224,7 @@
 
 import groovy.transform.Field
 
-def appVersion() { "2.4.5" }
+def appVersion() { "2.4.6" }
 
 definition(
     name:        "WaterGuru Dosing Advisor Pool",
