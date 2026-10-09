@@ -237,12 +237,15 @@ preferences {
 @Field static final BigDecimal ML_PER_FLOZ = 29.5735G
 @Field static final BigDecimal ML_PER_US_GALLON = 3785.411784G
 @Field static final BigDecimal DEFAULT_PUMP_RATE_ML_MIN = 185G
-// WaterGuru's configured schedule. Hubitat refreshes the integration at the
-// user-selected sourceRefreshTime (currently 19:45) after this 19:20 reading.
-@Field static final int WATERGURU_MEASUREMENT_HOUR = 19
-@Field static final int WATERGURU_MEASUREMENT_MINUTE = 20
-@Field static final int DEFAULT_DOSING_CHECK_HOUR = 19
-@Field static final int DEFAULT_DOSING_CHECK_MINUTE = 45
+// Pump runtime limits (minutes). The independent emergency cutoff must be later than the maximum runtime,
+// or it would stop a dose that is still within its plan: doseSafetyBlocks refuses a start otherwise, and the
+// settings page says so. The defaults keep a one-minute gap.
+@Field static final BigDecimal DEFAULT_MAX_PUMP_RUN_MINUTES = 20G
+@Field static final BigDecimal DEFAULT_FAILSAFE_PUMP_RUN_MINUTES = 21G
+// The daily WaterGuru fetch (sourceRefreshTime) when the setting is unset: 19:45, about 30 minutes after a
+// WaterGuru measurement at 19:15. Only the page's next-dose line uses it; nothing is scheduled without the setting.
+@Field static final int DEFAULT_SOURCE_REFRESH_HOUR = 19
+@Field static final int DEFAULT_SOURCE_REFRESH_MINUTE = 45
 // TFP FC/CYA model (SLAM off): FC min and target as a fraction of CYA.
 @Field static final BigDecimal TFP_MIN_FACTOR    = 0.075G
 @Field static final BigDecimal TFP_TARGET_FACTOR = 0.115G
@@ -312,6 +315,15 @@ preferences {
 @Field static final BigDecimal UNKNOWN_TELEMETRY            = -1G
 // 2.4.2: how many recent dose-history entries the "void a recorded dose" control offers.
 @Field static final int        VOID_CHOICES_MAX             = 10
+// The subscribe set initialize() installs, stamped into state.subscriptionSet when it runs. A Hubitat
+// Package Manager code update (or saving new code under Apps Code) replaces the code without running
+// updated(), so until the app is opened and Done pressed an install keeps the subscriptions of the code
+// it was last saved with. Under the set before 2.4.1 (the hub's default event filtering) the power watch
+// reads every steady run as a power loss, so doseSafetyBlocks refuses a start while the stamp is missing
+// or older than this. Bump it whenever a subscribe() call in initialize() changes, never with appVersion().
+//   1  up to 2.4.0: switch and power with the hub's default event filtering (never stamped)
+//   2  since 2.4.1: switch and power with filterEvents:false; LastMeasurement as before
+@Field static final int        SUBSCRIPTION_SET             = 2
 @Field static final BigDecimal FC_LOSS_MODELED_DEFAULT = 3.0G
 @Field static final BigDecimal FC_LOSS_COVER_FACTOR    = 0.6G
 
@@ -341,9 +353,11 @@ def mainPage() {
                     defaultValue: false, submitOnChange: true
                 if (refreshSourceDaily == true) {
                     input "sourceRefreshTime", "time",
-                        title: "Daily WaterGuru refresh time",
+                        title: "Daily WaterGuru fetch time",
                         required: true
-                    paragraph "Choose a time after WaterGuru finishes measuring. A new sample triggers the normal duplicate lock and every dosing safety check."
+                    paragraph "Set this to about 30 minutes after the measurement time configured in the WaterGuru app: " +
+                              "the pod needs 12 to 15 minutes to read, and the dose starts as soon as the new reading arrives. " +
+                              "The default is 19:45. A new reading goes through the duplicate lock and every dosing safety check."
                 }
             }
         }
@@ -482,7 +496,7 @@ def mainPage() {
             input "minDoseMl", "decimal", title: "Minimum dose to run (mL)", defaultValue: 50, required: true
             input "maxSingleDoseMl", "decimal", title: "Maximum single dose (mL)", defaultValue: 3000, required: true
             input "maxDailyDoseMl", "decimal", title: "Maximum total dose per day (mL)", defaultValue: 3500, required: true
-            input "maxPumpRunMinutes", "decimal", title: "Absolute maximum pump runtime (minutes)", defaultValue: 20, required: true
+            input "maxPumpRunMinutes", "decimal", title: "Absolute maximum pump runtime (minutes)", defaultValue: 20, required: true, submitOnChange: true
             input "minSafePh", "decimal", title: "Block dosing below pH", defaultValue: 6.8, required: true
             input "maxSafePh", "decimal", title: "Block dosing above pH", defaultValue: 8.2, required: true
             input "watchdogAnyPumpRun", "bool",
@@ -490,8 +504,13 @@ def mainPage() {
                 defaultValue: true, submitOnChange: true
             if (watchdogAnyPumpRun != false) {
                 input "failsafePumpRunMinutes", "decimal",
-                    title: "Independent emergency cutoff after this many minutes",
-                    defaultValue: 20, required: true
+                    title: "Independent emergency cutoff after this many minutes (must be later than the maximum runtime)",
+                    defaultValue: 21, required: true, submitOnChange: true
+                String cutoffProblem = cutoffSettingProblem()
+                if (cutoffProblem) {
+                    paragraph "<div style='background:#c0392b;color:#ffffff;padding:8px;border-radius:6px'>" +
+                              "<b>Check the limits:</b> ${cutoffProblem}. No dose can start until it is.</div>"
+                }
             }
 
             paragraph dosingStatusHtml()
@@ -674,6 +693,34 @@ private int powerLossGraceSeconds() {
     return Math.max(1, Math.round(v.doubleValue()) as Integer)
 }
 
+/** The absolute maximum pump runtime (minutes), with its default. */
+private BigDecimal maxRunMinutes() { firstNum(maxPumpRunMinutes, DEFAULT_MAX_PUMP_RUN_MINUTES) }
+
+/** The independent emergency cutoff (minutes after a start), with its default. */
+private BigDecimal failsafeMinutes() { firstNum(failsafePumpRunMinutes, DEFAULT_FAILSAFE_PUMP_RUN_MINUTES) }
+
+/**
+ * Why the two runtime limits cannot be used as set, in plain words, or null when they can: with the
+ * cutoff enabled it must be later than the maximum runtime, or it would stop a dose still within its
+ * plan. Shown on the settings page and a dosing block in doseSafetyBlocks().
+ */
+private String cutoffSettingProblem() {
+    if (watchdogAnyPumpRun == false) return null
+    BigDecimal cutoff = failsafeMinutes(), maxRun = maxRunMinutes()
+    if (cutoff == null || maxRun == null || cutoff > maxRun) return null
+    return "the emergency cutoff (${n1(cutoff)} min) must be later than the maximum pump runtime (${n1(maxRun)} min)"
+}
+
+/**
+ * Whether this install's subscriptions were made by this code's subscribe set (SUBSCRIPTION_SET): the stamp
+ * initialize() leaves in state. Missing (a code update, or an install older than the stamp) or older reads
+ * as not current, and a start is refused until the app is opened and Done pressed.
+ */
+private boolean subscriptionsCurrent() {
+    BigDecimal stamp = toBD(state.subscriptionSet)
+    return stamp != null && stamp.intValue() == SUBSCRIPTION_SET
+}
+
 private String dosingStatusHtml() {
     String sw = pumpSwitch ? (pumpSwitch.currentValue("switch") ?: "unknown") : "not selected"
     Map active = state.activeDose instanceof Map ? state.activeDose : null
@@ -700,8 +747,11 @@ private String dosingStatusHtml() {
         : "fresh ON report only (this switch does not report power) — power and flow are unverified"
     String circulation = circulationSwitch ? "${circulationSwitch.displayName} (${circulationSwitch.currentValue('switch') ?: 'unknown'})" :
                          (circulationAlwaysOn == true ? "confirmed continuous (24/7)" : "not confirmed")
+    String subs = subscriptionsCurrent() ? "current" :
+                  "not yet installed by this code (a code update runs nothing). Press Done; no dose can start until then"
     return "Pump: <b>${pumpSwitch?.displayName ?: 'not selected'}</b> (${sw}) · controller: <b>${activeText}</b><br>" +
            "Start confirmation: <b>${confirm}</b><br>" +
+           "Subscriptions: <b>${subs}</b><br>" +
            "Pump fault: <b>${fault}</b><br>" +
            "Circulation: <b>${circulation}</b><br>" +
            "Pending dose: <b>${pending}</b><br>Last started dose: <b>${last}</b>"
@@ -719,14 +769,55 @@ private String tankStatusHtml() {
            "This estimate subtracts pump-planned volume; reset it whenever the container is replaced or refilled."
 }
 
+/**
+ * The page's schedule lines. WaterGuru's measurement time is not configured here, so it is OBSERVED: the
+ * time of day of the recent samples the app has recorded. The dosing line is shown in AUTO mode only, the
+ * one mode in which the app starts the pump, and follows the daily fetch setting (sourceRefreshTime).
+ */
 private String nextCycleHtml() {
-    Date measurement = nextDailyTime(null, WATERGURU_MEASUREMENT_HOUR, WATERGURU_MEASUREMENT_MINUTE)
-    Date dosing = nextDailyTime(sourceRefreshTime, DEFAULT_DOSING_CHECK_HOUR, DEFAULT_DOSING_CHECK_MINUTE)
+    String observed = observedMeasurementTimeText()
+    String first = observed ? "WaterGuru has been measuring at about <b>${observed}</b>." :
+                              "WaterGuru's measurement time is not known yet; it is read from the samples as they arrive."
+    if ((dosingMode ?: "ADVISORY").toString() != "AUTO") return first
+    String dosingLine
+    if (refreshSourceDaily == true) {
+        TimeZone tz = location?.timeZone ?: TimeZone.getDefault()
+        Date dosing = nextDailyTime(sourceRefreshTime, DEFAULT_SOURCE_REFRESH_HOUR, DEFAULT_SOURCE_REFRESH_MINUTE)
+        dosingLine = "Next AUTO dosing check: <b>${dosing.format("EEE, MMM d 'at' h:mm a", tz)}</b>, the daily WaterGuru fetch " +
+                     "(only if the new reading needs chlorine and every safety check passes)."
+    } else {
+        dosingLine = "AUTO dosing runs when the WaterGuru Integration's own poll brings a new reading (the daily fetch is off), " +
+                     "only if it needs chlorine and every safety check passes."
+    }
+    return "${first}<br>${dosingLine}"
+}
+
+/**
+ * The time of day WaterGuru has been measuring at, as "h:mm a" in the hub's time zone: the median over the
+ * last seven recorded samples' measurement times (fcHistory is keyed by each sample's LastMeasurement), so
+ * one manual daytime measurement does not move it. Null without history.
+ */
+private String observedMeasurementTimeText() {
+    def hist = (state.fcHistory instanceof List) ? state.fcHistory : []
+    List times = hist.findAll { it?.t instanceof Number }.collect { it.t as Long }
+    if (!times) return null
+    if (times.size() > 7) times = times[-7..-1]
     TimeZone tz = location?.timeZone ?: TimeZone.getDefault()
-    String measurementText = measurement.format("EEE, MMM d 'at' h:mm a", tz)
-    String dosingText = dosing.format("EEE, MMM d 'at' h:mm a", tz)
-    return "Next WaterGuru measurement: <b>${measurementText}</b><br>" +
-           "Next dosing time: <b>${dosingText}</b> (only if the new reading needs chlorine and every safety check passes)."
+    List minutes = times.collect { Long t ->
+        Calendar c = Calendar.getInstance(tz)
+        c.setTimeInMillis(t)
+        c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE)
+    }.sort()
+    int n = minutes.size()
+    int median = (n % 2 == 1) ? (minutes[n.intdiv(2)] as int) :
+                 (((minutes[n.intdiv(2) - 1] as int) + (minutes[n.intdiv(2)] as int)).intdiv(2) as int)
+    Calendar cal = Calendar.getInstance(tz)
+    cal.setTimeInMillis(now())
+    cal.set(Calendar.HOUR_OF_DAY, median.intdiv(60))
+    cal.set(Calendar.MINUTE, median % 60)
+    cal.set(Calendar.SECOND, 0)
+    cal.set(Calendar.MILLISECOND, 0)
+    return cal.time.format("h:mm a", tz)
 }
 
 private Date nextDailyTime(def configuredTime, int fallbackHour, int fallbackMinute) {
@@ -862,6 +953,9 @@ def initialize() {
         subscribe(pumpSwitch, "switch", "pumpSwitchHandler", [filterEvents: false])
         if (pumpReportsPower()) subscribe(pumpSwitch, "power", "pumpSwitchHandler", [filterEvents: false])
     }
+    // The subscriptions above are now the current set; doseSafetyBlocks reads this stamp. Only here, after
+    // they are made, so an initialize() that fails before this point leaves the install reading as stale.
+    state.subscriptionSet = SUBSCRIPTION_SET
 
     if (dailyDigest == true && digestTime) {
         // A time-of-day input schedules a daily recurring job at that clock time.
@@ -2629,7 +2723,7 @@ private boolean armEmergencyPumpCutoff(String reason) {
         log.warn "WaterGuru Dosing Advisor: ${reason}, but the independent cutoff is disabled (watchdogAnyPumpRun is off)"
         return false
     }
-    Integer fullSeconds = Math.max(60, Math.round((firstNum(failsafePumpRunMinutes, 20G) * 60G).doubleValue()) as Integer)
+    Integer fullSeconds = Math.max(60, Math.round((failsafeMinutes() * 60G).doubleValue()) as Integer)
     Long nowMs = now()
     Long existing = state.emergencyDeadline as Long
     boolean jobPending = state.emergencyJobScheduled == true
@@ -2713,7 +2807,7 @@ def emergencyPumpOff() {
     catch (e) { log.error "WaterGuru Dosing Advisor: cutoff OFF command failed — ${e.message}" }
     requestStopRefresh(active)
 
-    String confirmed = "EMERGENCY cutoff confirmed the chlorine pump OFF after ${n1(firstNum(failsafePumpRunMinutes, 20G))} minutes."
+    String confirmed = "EMERGENCY cutoff confirmed the chlorine pump OFF after ${n1(failsafeMinutes())} minutes."
     if (pumpIsOff(stopEvidenceAnchor(active))) {
         finishStop(confirmed)
         return
@@ -2730,6 +2824,10 @@ def emergencyPumpOff() {
 private List doseSafetyBlocks(Map result) {
     def blocks = []
     if (!pumpSwitch) blocks << "no dedicated pump switch selected"
+    // A code update runs no updated(): the subscriptions may be the previous code's until Done is pressed.
+    if (!subscriptionsCurrent()) blocks << "the app's subscriptions are out of date after a code update; open the app and press Done"
+    String cutoffProblem = cutoffSettingProblem()
+    if (cutoffProblem) blocks << cutoffProblem
     // A latched fault is a SAFETY GATE, not a UI notice: no start may be attempted (and no new
     // attempt may be reserved) while a fault or a standalone stop recovery is unreviewed.
     if (state.startFault != null) blocks << "an unacknowledged pump fault must be reviewed first"
@@ -2751,7 +2849,7 @@ private List doseSafetyBlocks(Map result) {
     BigDecimal minMl = firstNum(minDoseMl, 50G)
     BigDecimal maxSingle = firstNum(maxSingleDoseMl, 3000G)
     BigDecimal maxDaily = firstNum(maxDailyDoseMl, 3500G)
-    BigDecimal maxMinutes = firstNum(maxPumpRunMinutes, 20G)
+    BigDecimal maxMinutes = maxRunMinutes()
 
     if (rate == null || rate <= 0) blocks << "pump rate must be greater than zero"
     if (ml == null || ml <= 0) blocks << "calculated dose is not positive"
