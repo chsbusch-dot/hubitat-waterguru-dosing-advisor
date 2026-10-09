@@ -633,7 +633,7 @@ def primeForStart = { app, pump ->
     app.minDoseMl = 50
     app.maxSingleDoseMl = 3000
     app.maxDailyDoseMl = 3500
-    app.maxPumpRunMinutes = 40
+    app.maxPumpRunMinutes = 19         // 2.4.6: the cutoff below must be later than this
     app.minSafePh = 6.8
     app.maxSafePh = 8.2
     app.maxSampleAgeHours = 18
@@ -650,6 +650,20 @@ def primeForStart = { app, pump ->
     app.startPowerMinWatts = 3
     app.startConfirmTimeoutSeconds = 20
     app.powerLossGraceSeconds = 30
+    // 2.4.6: the stamp initialize() leaves when Done is pressed; without it every start is refused as the
+    // subscriptions of a code update (the stale-stamp tests unset it on purpose).
+    app.state.subscriptionSet = appClass.SUBSCRIPTION_SET
+}
+
+/**
+ * Bring the independent cutoff forward to `seconds` from now, as armEmergencyPumpCutoff() leaves it. Since
+ * 2.4.6 the settings cannot express a cutoff shorter than the maximum runtime (doseSafetyBlocks refuses the
+ * start), so a test of the cutoff firing INSIDE a dose moves the armed cutoff instead of the setting.
+ */
+def shortenCutoff = { app, int seconds ->
+    app.state.emergencyDeadline = app.clockMs + seconds * 1000L
+    app.state.emergencyJobScheduled = true
+    app.runIn(seconds, "emergencyPumpOff", [overwrite: true])
 }
 
 /**
@@ -2539,6 +2553,12 @@ check("guards: control, an open AUTO window and a running circulation switch let
     ["circulation switch off", ["circulation/filter switch is not on"], { app, pump, dose ->
         app.circulationSwitch = new FakeSwitch("off"); app.requireCirculationOn = true }],
     ["no circulation interlock", ["no circulation interlock"], { app, pump, dose -> app.circulationAlwaysOn = false }],
+    // 2.4.6: the stamp of the subscribe set before this one, as an HPM code update leaves it (it runs no updated()).
+    ["subscriptions from the previous code", ["subscriptions are out of date after a code update"], { app, pump, dose ->
+        app.state.subscriptionSet = appClass.SUBSCRIPTION_SET - 1 }],
+    // 2.4.6: the cutoff equal to the maximum runtime (the baseline's 14 min).
+    ["cutoff not later than the maximum runtime", ["must be later than the maximum pump runtime"], { app, pump, dose ->
+        app.failsafePumpRunMinutes = 14 }],
 ].each { name, reasons, breakIt ->
     check("guard: ${name} blocks the start before ON or any reservation") {
         def app = newApp()
@@ -2669,9 +2689,9 @@ check("start: once the cutoff has requested OFF, later ON and power cannot confi
     primeForStart(app, pump)
     pump.powerCapable = true
     pump.mode = "ignoresOff"                                   // the relay closes on ON and ignores OFF
-    app.failsafePumpRunMinutes = 1                             // a 60 s cutoff ...
-    app.startConfirmTimeoutSeconds = 120                       // ... inside a 120 s start window
+    app.startConfirmTimeoutSeconds = 120                       // a 120 s start window ...
     app.startDose(incidentDose(app), "short cutoff")
+    shortenCutoff(app, 60)                                     // ... with the cutoff due 60 s in
     app.advance(60_000L)
     expect(app.state.activeDose?.offRequestedAt != null, "sanity: the cutoff requested OFF")
     pump.setPower(7.0G)                                        // now the pump shows power
@@ -2865,10 +2885,10 @@ check("2.4.2 fix 4: a cutoff that is due but has not run is fired now, never pus
     def pump = bindClock(app, new FakeSwitch("off"))
     pump.setSwitchAt("off", app.clockMs - 600_000L)
     primeForStart(app, pump)
-    app.failsafePumpRunMinutes = 2                             // the cutoff is due 120 s after the start
     app.initialize()
     long t0 = app.clockMs
     app.startDose(sampleDose(app), "test")
+    shortenCutoff(app, 120)                                    // the cutoff is due 120 s after the start
     app.fire("verifyStartConfirmation")                        // a switch-only plug: a fresh ON confirms
     pump.mode = "ignoresOff"                                   // the relay sticks from here
     app.runUntil(t0 + 119_000L)
@@ -2916,8 +2936,8 @@ check("2.4.2 fix 5: the cutoff's EMERGENCY notice waits for the OFF answer; it s
     ["answered", "silent"].each { kind ->
         def app = newApp()
         def pump = hubPlug(app)
-        app.failsafePumpRunMinutes = 1                         // the cutoff fires 60 s into a 10-minute dose
         confirmedHubStart(app, pump, incidentDose(app) + [doseMl: 2210G, runSeconds: 600])
+        shortenCutoff(app, 60)                                 // the cutoff fires 60 s into a 10-minute dose
         healthyUntil(app, pump, app.dueAt["emergencyPumpOff"] as Long)
         expect(pump.commands.count("off") == 1, "[${kind}] sanity: the cutoff sent OFF")
         if (kind == "answered") {
@@ -2965,9 +2985,9 @@ check("2.4.2 fix 6: Done during a confirmed run does not bring the power watch b
 check("2.4.2 fix 7: the cutoff latches the start fault, from its own OFF request, on an attempt never confirmed") {
     def app = newApp()
     def pump = hubPlug(app)
-    app.failsafePumpRunMinutes = 1                             // a 60 s cutoff ...
-    app.startConfirmTimeoutSeconds = 120                       // ... inside a 120 s start window
+    app.startConfirmTimeoutSeconds = 120                       // a 120 s start window ...
     app.startDose(incidentDose(app) + [doseMl: 1105G, runSeconds: 300], "short cutoff")
+    shortenCutoff(app, 60)                                     // ... with the cutoff due 60 s in
     app.advance(60_000L)
     def active = app.state.activeDose
     expect(active?.offRequestedAt != null && active.fault == "start-unconfirmed", "the cutoff faults the attempt: ${active?.fault}")
@@ -3901,6 +3921,116 @@ check("2.4.5 change 2: the second fetch is skipped when the AUTO window has clos
     app.runUntil(t0 + 3_600_000L)
     expect(wg.refreshCalls == 1 && app.dueAt["retryWaterGuruRefresh"] == null, "but does not go out: ${wg.refreshCalls} / ${app.dueAt}")
     expect(app.logLines.count { it.contains("AUTO dosing window is closed; no second refresh") } == 1, "one line says why: ${app.logLines.findAll { it.contains('window') }}")
+}
+
+// ----------------------------------------------------------------------- 2.4.6 (WOR-740): debt review items
+
+check("2.4.6 item 1: a stamp from the previous subscribe set, or none, blocks a start until Done re-runs initialize()") {
+    def app = newApp()
+    def pump = guardBaseline(app)
+    def dose = sampleDose(app)
+    String msg = "the app's subscriptions are out of date after a code update; open the app and press Done"
+    app.state.subscriptionSet = appClass.SUBSCRIPTION_SET - 1  // the code before this one subscribed; the HPM update ran no updated()
+    expect(app.doseSafetyBlocks(dose) == [msg], "the one block, with the message: ${app.doseSafetyBlocks(dose)}")
+    app.handleDoseDecision(dose, "stale stamp")
+    expect(pump.onCalls == 0 && app.noticesMatching("dose BLOCKED").size() == 1 && app.noticesMatching("press Done").size() == 1,
+           "no ON, and the notice says what to do: ${app.notices}")
+    app.state.remove("subscriptionSet")                        // an install from before the stamp existed
+    expect(app.doseSafetyBlocks(dose) == [msg], "never stamped reads as stale too: ${app.doseSafetyBlocks(dose)}")
+    app.initialize()                                           // Done
+    expect(app.state.subscriptionSet == appClass.SUBSCRIPTION_SET, "initialize() stamps the current set: ${app.state.subscriptionSet}")
+    expect(app.subscriptions.count { it.attr == "switch" && it.options?.filterEvents == false } == 1, "with the current subscriptions: ${app.subscriptions}")
+    expect(app.doseSafetyBlocks(dose).isEmpty(), "and the start is allowed again: ${app.doseSafetyBlocks(dose)}")
+    app.handleDoseDecision(dose, "after Done")
+    expect(pump.onCalls == 1, "ON goes out: ${app.notices}")
+}
+
+check("2.4.6 item 1: the stamp is keyed to the subscribe set, so a save with no pump leaves it current, and a string stamp reads") {
+    def app = newApp()
+    app.createTile = false
+    app.initialize()
+    expect(app.state.subscriptionSet == appClass.SUBSCRIPTION_SET && app.subscriptions.isEmpty(), "stamped with nothing to subscribe to")
+    app.state.subscriptionSet = appClass.SUBSCRIPTION_SET.toString()   // state can come back as text
+    expect(app.subscriptionsCurrent(), "a text stamp of the current set is current")
+    app.state.subscriptionSet = "garbage"
+    expect(!app.subscriptionsCurrent(), "an unreadable stamp is not")
+}
+
+check("2.4.6 item 2: the cutoff must be later than the maximum runtime; 14/15 and the defaults pass, equal or lower blocks") {
+    def app = newApp()
+    def pump = hubPlug(app)                                    // the live pair: max 14 min, cutoff 15 min
+    def dose = incidentDose(app)
+    expect(app.maxPumpRunMinutes == 14 && app.failsafePumpRunMinutes == 15, "sanity: the live pair")
+    expect(app.cutoffSettingProblem() == null && app.doseSafetyBlocks(dose).isEmpty(), "14/15 is valid: ${app.doseSafetyBlocks(dose)}")
+    app.maxPumpRunMinutes = null; app.failsafePumpRunMinutes = null
+    expect(app.maxRunMinutes() == 20G && app.failsafeMinutes() == 21G, "the defaults: ${app.maxRunMinutes()} / ${app.failsafeMinutes()}")
+    expect(app.cutoffSettingProblem() == null && app.doseSafetyBlocks(dose).isEmpty(), "and they are valid: ${app.doseSafetyBlocks(dose)}")
+    app.maxPumpRunMinutes = 15; app.failsafePumpRunMinutes = 15
+    String msg = "the emergency cutoff (15.0 min) must be later than the maximum pump runtime (15.0 min)"
+    expect(app.cutoffSettingProblem() == msg, "the page's problem line: ${app.cutoffSettingProblem()}")
+    expect(app.doseSafetyBlocks(dose) == [msg], "equal blocks, with the same words: ${app.doseSafetyBlocks(dose)}")
+    app.startDose(dose, "cutoff equal")                        // the fixture is APPROVAL: start directly
+    expect(pump.commands.isEmpty() && app.noticesMatching("must be later than the maximum pump runtime").size() == 1, "no ON, and the block is announced: ${app.notices}")
+    app.failsafePumpRunMinutes = 14.5
+    expect(app.doseSafetyBlocks(dose).size() == 1, "lower blocks too: ${app.doseSafetyBlocks(dose)}")
+    app.failsafePumpRunMinutes = 15.5
+    expect(app.doseSafetyBlocks(dose).isEmpty(), "half a minute later passes: ${app.doseSafetyBlocks(dose)}")
+    app.failsafePumpRunMinutes = 1
+    app.watchdogAnyPumpRun = false
+    expect(app.cutoffSettingProblem() == null && app.doseSafetyBlocks(dose).isEmpty(), "with the cutoff disabled there is nothing to compare")
+}
+
+check("2.4.6 item 2: the cutoff default of 21 min arms a 1260 s window, and the EMERGENCY final notice names it") {
+    def app = newApp()
+    def pump = bindClock(app, new FakeSwitch("off"))
+    primeForStart(app, pump)
+    app.maxPumpRunMinutes = null; app.failsafePumpRunMinutes = null
+    app.startDose(sampleDose(app), "defaults")
+    expect(app.state.emergencyDeadline == app.clockMs + 1_260_000L && app.scheduled["emergencyPumpOff"] == 1260,
+           "armed for 21 minutes: ${app.state.emergencyDeadline} / ${app.scheduled}")
+}
+
+check("2.4.6 item 3: the page shows the observed measurement time (median of the last seven samples), never 19:20, and a neutral line without history") {
+    def app = newApp()
+    app.clockMs = epoch("2026-10-09T02:45:00Z")                // 19:45 PDT, Oct 8
+    app.dosingMode = "AUTO"
+    app.refreshSourceDaily = true
+    app.sourceRefreshTime = "19:45"
+    String empty = app.nextCycleHtml()
+    expect(empty.contains("measurement time is not known yet") && !empty.contains("19:20") && !empty.contains("7:20 PM"),
+           "no history: a neutral line and no hard-coded time: ${empty}")
+    expect(empty.contains("Next AUTO dosing check: <b>Fri, Oct 9 at 7:45 PM</b>"), "the dosing line follows the fetch setting: ${empty}")
+    // Eight live samples (02:30 UTC is 19:30 PDT) plus one manual morning measurement: the median ignores it.
+    def times = ["2026-09-29T02:30:31.000Z", "2026-09-30T02:30:27.000Z", "2026-10-01T02:30:40.000Z", "2026-10-02T02:30:11.000Z",
+                 "2026-10-02T16:12:00.000Z", "2026-10-03T02:30:48.000Z", "2026-10-04T02:30:52.000Z", "2026-10-05T02:30:27.000Z",
+                 "2026-10-06T02:30:48.000Z"]
+    app.state.fcHistory = times.withIndex().collect { iso, i -> [t: epoch(iso), fc: "5.${i}".toString(), settled: i > 1] }
+    String html = app.nextCycleHtml()
+    expect(html.contains("WaterGuru has been measuring at about <b>7:30 PM</b>."), "the observed time: ${html}")
+    expect(!html.contains("7:20 PM") && !html.contains("19:20") && !html.contains("Next WaterGuru measurement"), "and nothing hard-coded: ${html}")
+    expect(html.contains("Next AUTO dosing check: <b>Fri, Oct 9 at 7:45 PM</b>"), "with the dosing line in AUTO: ${html}")
+    app.sourceRefreshTime = "20:15"
+    expect(app.nextCycleHtml().contains("at 8:15 PM"), "the dosing line follows a changed fetch time: ${app.nextCycleHtml()}")
+    app.refreshSourceDaily = false
+    expect(app.nextCycleHtml().contains("the daily fetch is off") && !app.nextCycleHtml().contains("Next AUTO dosing check"),
+           "without the daily fetch the line says the poll brings the reading: ${app.nextCycleHtml()}")
+    app.refreshSourceDaily = true
+    ["APPROVAL", "ADVISORY", null].each { mode ->
+        app.dosingMode = mode
+        String h = app.nextCycleHtml()
+        expect(h.contains("about <b>7:30 PM</b>") && !h.toLowerCase().contains("dosing"), "[${mode}] only the observed time, no dosing line: ${h}")
+    }
+}
+
+check("2.4.6 item 3: an even count of samples takes the middle pair, and a manual measurement alone is what it is") {
+    def app = newApp()
+    app.clockMs = epoch("2026-10-09T02:45:00Z")
+    app.state.fcHistory = [[t: epoch("2026-10-07T02:30:00.000Z"), fc: "5.0"], [t: epoch("2026-10-08T02:40:00.000Z"), fc: "5.1"]]
+    expect(app.observedMeasurementTimeText() == "7:35 PM", "two samples at 19:30 and 19:40 read 19:35: ${app.observedMeasurementTimeText()}")
+    app.state.fcHistory = [[t: epoch("2026-10-08T16:12:00.000Z"), fc: "5.1"]]
+    expect(app.observedMeasurementTimeText() == "9:12 AM", "one sample is the observation: ${app.observedMeasurementTimeText()}")
+    app.state.fcHistory = [[t: "not a number", fc: "5.1"]]
+    expect(app.observedMeasurementTimeText() == null, "an unreadable history is no observation")
 }
 
 // --------------------------------------------------------------------------- summary
