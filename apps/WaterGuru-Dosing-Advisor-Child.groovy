@@ -273,7 +273,7 @@ preferences {
 @Field static final int        STOP_MAX_ATTEMPTS       = 5
 @Field static final int        STOP_RETRY_SECONDS      = 20
 
-// Pump start confirmation (2.4.0). An ON command returning is not evidence the relay closed
+// Pump start confirmation. An ON command returning is not evidence the relay closed
 // or the pump is moving liquid, so a fresh reading must confirm it before the result is recorded
 // or announced as started. Power is required only for a device that reports it; a plain switch is accepted
 // with an explicit notice that power/flow are unverified. Liquid flow is never claimed.
@@ -285,7 +285,7 @@ preferences {
 @Field static final int        START_CHECK_SECONDS          = 2
 @Field static final int        START_REFRESH_THROTTLE_SECONDS = 10
 @Field static final int        RUN_POWER_CHECK_SECONDS      = 10
-// 2.4.5: the hub's Command Retry (enabled on the plug 2026-10-08) re-sends a command whose expected report
+// The hub's Command Retry (enabled on the plug 2026-10-08) re-sends a command whose expected report
 // does not arrive, up to five times. For a switch the first retry goes out 1.5 s after the command and each
 // later one waits (retry number x 1.5 s) more (Hubitat staff announcement, 2025-04-02), so the first three
 // retries land within 9 to 13.5 s of the first send. A lost ON is therefore not judged on the plug's first
@@ -293,27 +293,27 @@ preferences {
 // the ON and a second refresh answer still reads OFF (the 10 s refresh throttle puts that answer at about
 // 12.4 s). The window (startConfirmTimeoutSeconds) stays the outer bound; the app never re-sends an ON.
 @Field static final int        RETRY_SETTLE_SECONDS         = 10
-// 2.4.5: a second refresh of the WaterGuru device this long after the daily one (19:45 + 45 min = 20:30)
+// A second refresh of the WaterGuru device this long after the daily one (19:45 + 45 min = 20:30)
 // when that one brought no new sample, and how long after the second one its outcome is logged.
 @Field static final int        SOURCE_RETRY_DELAY_SECONDS   = 2700
 @Field static final int        SOURCE_RETRY_SETTLE_SECONDS  = 120
-// Stop notice and run booking (2.4.1). A real plug answers OFF asynchronously (about 450 ms on
-// Oct 2), so the "stop requested" notice waits this long for the OFF report before it speaks.
+// Stop notice and run booking. A real plug answers OFF asynchronously (about 450 ms, measured on
+// Oct 2, 2026), so the "stop requested" notice waits this long for the OFF report before it speaks.
 @Field static final int        STOP_CONFIRM_SECONDS         = 4
 // A run within this much of its plan (ON report to OFF report) is booked at the planned volume;
 // report timing jitter is not worth a correction.
 @Field static final long       RUN_MATCH_TOLERANCE_MS       = 3000L
 // An OFF confirmed later than this after the planned stop latches a stop-overrun review fault.
 @Field static final int        STOP_OVERRUN_FAULT_SECONDS   = 30
-// 2.4.2: an unchanged ON report during a stop that is already being enforced is logged at most this
+// An unchanged ON report during a stop that is already being enforced is logged at most this
 // often. The profiler's 3 s refresh produces one per poll while a stuck relay stays on.
 @Field static final int        REPEATED_ON_LOG_SECONDS      = 60
-// 2.4.2: the value a numeric tile attribute takes once the app no longer knows it (tank not
+// The value a numeric tile attribute takes once the app no longer knows it (tank not
 // initialised, FC or target missing, runway still learning), so nothing keeps showing a stale number.
 // It is below every floor of the Waterguru-Grafana-Chart collector, which drops it instead of
 // storing it (its tests pin -1 for tankPercent and freeChlorine).
 @Field static final BigDecimal UNKNOWN_TELEMETRY            = -1G
-// 2.4.2: how many recent dose-history entries the "void a recorded dose" control offers.
+// How many recent dose-history entries the "void a recorded dose" control offers.
 @Field static final int        VOID_CHOICES_MAX             = 10
 // The subscribe set initialize() installs, stamped into state.subscriptionSet when it runs. A Hubitat
 // Package Manager code update (or saving new code under Apps Code) replaces the code without running
@@ -411,7 +411,7 @@ def mainPage() {
                 defaultValue: 20, required: true
             paragraph tankStatusHtml()
 
-            // 2.4.2: corrections for any install. Each value is saved on change, the line under it says
+            // Corrections for any install. Each value is saved on change, the line under it says
             // what the button will do, and the button applies it once. Neither control can run the
             // pump or change today's dose total.
             paragraph "<b>Correct the estimate</b> (never runs the pump and never changes today's dose total)"
@@ -873,10 +873,10 @@ private String sampleTimestampText() {
 def installed() { initialize() }
 
 def updated() {
-    // 2.4.2: rebuild the subscriptions and the job queue FIRST, then stop. initialize() clears every
-    // job and restores protection only for the stops it knows about, so stopping before it threw away
-    // the retry and the cutoff of a run the app was not tracking (a manual run), and a lost OFF then
-    // left the pump on with nothing scheduled to stop it. The stop must happen even if initialize()
+    // Rebuild the subscriptions and the job queue FIRST, then stop. initialize() clears every job and
+    // restores protection only for the stops it knows about: stopping before it would throw away the
+    // retry and the cutoff of a run the app is not tracking (a manual run), and a lost OFF would then
+    // leave the pump on with nothing scheduled to stop it. The stop must happen even if initialize()
     // fails part way: its first step already cleared the queue.
     unsubscribe()
     try {
@@ -895,7 +895,7 @@ def uninstalled() {
 }
 
 /**
- * The one OFF a removal can send (2.4.2). Removal deletes every job and subscription with the app, so
+ * The one OFF a removal can send. Removal deletes every job and subscription with the app, so
  * no retry, cutoff or deferred check can follow, and the notice must not promise one (safeStopPump's
  * notices do). It speaks only when something was open or the switch last reported ON.
  */
@@ -970,8 +970,8 @@ def initialize() {
             log.warn "WaterGuru Dosing Advisor: selected source device has no refresh command"
         }
     }
-    // 2.4.4: a sample that arrived in the 20 s before this queue reset lost its processing job with it
-    // (and its FC reading), so a save right after a new sample dropped that sample. Schedule it again.
+    // A sample that arrived in the 20 s before this queue reset loses its processing job with it (and
+    // its FC reading), so a save right after a new sample would drop that sample. Schedule it again.
     String pendingSample = state.pendingSampleKey?.toString()
     if (pendingSample && sourceDevice) {
         runIn(20, "processNewSample", [data: [sampleKey: pendingSample], overwrite: true])
@@ -996,7 +996,7 @@ def initialize() {
             runIn(START_CHECK_SECONDS, "verifyStartConfirmation", [overwrite: true])
             log.warn "WaterGuru Dosing Advisor: recreated the start-confirmation check after the queue reset"
         }
-        // 2.4.2: not once an OFF has been requested: the watch would read the falling power of the
+        // Not once an OFF has been requested: the watch would read the falling power of the
         // stop itself and latch a false power loss.
         if (active != null && active.startConfirmed == true && active.offRequestedAt == null && powerConfirmationRequired()) {
             runIn(RUN_POWER_CHECK_SECONDS, "verifyRunPower", [overwrite: true])
@@ -1011,7 +1011,7 @@ def initialize() {
         armEmergencyPumpCutoff("initialize found a standalone fault recovery")
         runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
     } else if (state.idleStopAt != null) {
-        // 2.4.2: a stop with nothing open (STOP on an idle app, an earlier save) that is still
+        // A stop with nothing open (STOP on an idle app, an earlier save) that is still
         // unconfirmed keeps its retry and its cutoff too.
         log.warn "WaterGuru Dosing Advisor: initialize found an unconfirmed stop; re-arming stop protection"
         armEmergencyPumpCutoff("initialize found an unconfirmed stop")
@@ -1026,7 +1026,7 @@ def initialize() {
         else if (state.pendingStopNotice.announced != true) runIn(STOP_CONFIRM_SECONDS, "verifyStopRequest", [overwrite: true])
     }
     if (state.pendingEmergencyNotice != null) {
-        // 2.4.4: an EMERGENCY notice already sent only waits for the OFF too, like the stop notice.
+        // An EMERGENCY notice already sent only waits for the OFF too, like the stop notice.
         if (!stopOpen) state.remove("pendingEmergencyNotice")
         else if (state.pendingEmergencyNotice.announced != true) runIn(STOP_CONFIRM_SECONDS, "verifyEmergencyNotice", [overwrite: true])
     }
@@ -1044,9 +1044,9 @@ def refreshWaterGuruSource() {
         log.warn "WaterGuru Dosing Advisor: scheduled refresh skipped; ${sourceDevice.displayName} has no refresh command"
         return
     }
-    // 2.4.5: the pod's sample can be late for this refresh, and the integration's own poll is hours away (every
-    // 6 h on the live hub), so nothing fetched it again before the AUTO window closed and that day's dose was
-    // skipped. Ask once more later. The job carries what LastMeasurement reads now, so it can tell whether
+    // The pod's sample can be late for this refresh, and the integration's own poll is hours away (every 6 h
+    // on the live hub), so without a second try nothing would fetch it before the AUTO window closes and that
+    // day's dose would be skipped. Ask once more later. The job carries what LastMeasurement reads now, so it can tell whether
     // this refresh brought a new sample; scheduled first, so a refresh that throws still gets its second try.
     runIn(SOURCE_RETRY_DELAY_SECONDS, "retryWaterGuruRefresh",
           [data: [before: attrRaw("LastMeasurement") ?: ""], overwrite: true])
@@ -1055,7 +1055,7 @@ def refreshWaterGuruSource() {
 }
 
 /**
- * The second evening fetch (2.4.5), SOURCE_RETRY_DELAY_SECONDS after the daily refresh. When that refresh
+ * The second evening fetch, SOURCE_RETRY_DELAY_SECONDS after the daily refresh. When that refresh
  * brought no new LastMeasurement and the AUTO dosing window is still open, the source device is refreshed
  * once more, and the outcome is checked once, SOURCE_RETRY_SETTLE_SECONDS later (`again`). A sample it brings
  * in takes the usual path (onNewSample, processNewSample, every dosing guard); nothing is dosed from here,
@@ -1084,12 +1084,12 @@ def retryWaterGuruRefresh(Map data = [:]) {
 }
 
 def onNewSample(evt) {
-    // 2.4.3: this handler only schedules. The integration sends LastMeasurement BEFORE freeChlorine and
+    // This handler only schedules. The integration sends LastMeasurement BEFORE freeChlorine and
     // the rest of the sample, so a reading taken here is usually the previous sample's: it was for 7 of
     // the 8 samples from Sep 29 to Oct 5 on the live hub. processNewSample reads the sample once it is in.
     logDebug "New WaterGuru sample (${evt?.value}); waiting briefly for all attributes"
     String key = evt?.value?.toString() ?: attrRaw("LastMeasurement") ?: now().toString()
-    // 2.4.4: kept until processNewSample runs, so initialize() can schedule it again after a queue reset.
+    // Kept until processNewSample runs, so initialize() can schedule it again after a queue reset.
     state.pendingSampleKey = key
     runIn(20, "processNewSample", [data: [sampleKey: key], overwrite: true])
 }
@@ -1228,13 +1228,13 @@ private Map computeAdvice() {
         out << "Sampled: ${sampled}${exactSample ? ' · ' + exactSample : ''}"
     }
     def cassette = cassetteText()
-    // 2.4.4: without a type the text already leads with the word ("Cassette · 4 days left").
+    // Without a type the text already leads with the word ("Cassette · 4 days left").
     if (cassette) out << (cassetteBase() ? "Cassette: ${cassette}" : cassette)
 
     if (!volume || volume <= 0) {
         out << ""
         out << "⚠ Pool volume unknown. Set a volume override or point at a device that reports poolVolume."
-        // 2.4.2: the reading is still known; the target is not (the tile shows -1 for it).
+        // The reading is still known; the target is not (the tile shows -1 for it).
         return [text: out.join("\n"), anyAction: false, status: "YELLOW",
                 headline: "Set pool volume", fcSummary: null, fcVal: fc, fcTarget: null,
                 sampled: sampled, label: label]
@@ -1285,8 +1285,8 @@ private Map computeAdvice() {
         }
     }
 
-    // 2.4.4: WaterGuru's cassette status reaches the tile front again. Since 2.4.3 the replace-cassette
-    // step is not dose advice, and with it went the only way the status and the headline showed it. A
+    // WaterGuru's cassette status on the tile front. The replace-cassette step is not dose advice (the
+    // advice parser skips it), so this chip is the one way the status and the headline show it. A
     // cassette is upkeep, not a chemical, so it turns the tile YELLOW, never RED, and its chip comes last.
     String cassetteChip = cassetteReplaceChip()
     if (cassetteChip) {
@@ -1410,11 +1410,11 @@ private List filterWgAdvice(String doseAdvice) {
     if (!doseAdvice || doseAdvice.trim().equalsIgnoreCase("None")) return []
     def lines = doseAdvice.split("\n").collect { it.trim() }.findAll { it }
     // Drop WaterGuru's non-actionable placeholder lines (e.g. "Measure again to
-    // see the advice") — they carry no dose and just add noise to tile/message.
-    // 2.4.3: and its maintenance steps. doseAdvice is built from EVERY WaterGuru alert, so "Follow these
-    // steps to replace cassette" arrived beside the doses, became the tile's recommendation and turned
-    // the status RED. Cassette, battery and calibration steps are pod upkeep, not a chemical, and no dose
-    // line names them; the cassette line shows the cassette's own state.
+    // see the advice") — they carry no dose and just add noise to tile/message. And its maintenance
+    // steps: doseAdvice is built from EVERY WaterGuru alert, so "Follow these steps to replace cassette"
+    // arrives beside the doses and would become the tile's recommendation and turn the status RED.
+    // Cassette, battery and calibration steps are pod upkeep, not a chemical, and no dose line names
+    // them; the cassette line shows the cassette's own state.
     def skipPhrases = ["measure again", "see the advice",
                        "cassette", "battery", "batteries", "calibrat"]
     lines = lines.findAll { line -> def ll = line.toLowerCase(); !skipPhrases.any { ll.contains(it) } }
@@ -1623,7 +1623,7 @@ private void startDose(Map result, String trigger) {
 }
 
 // ---------------------------------------------------------------------------
-// Start confirmation and running power watch (2.4.0)
+// Start confirmation and running power watch
 // ---------------------------------------------------------------------------
 
 /**
@@ -1769,7 +1769,7 @@ private void confirmDoseStart(Map active, String evidence, Long powerAt, Long on
     current.confirmedAt = now()
     current.powerLowSince = null
     current.lastPowerReportAt = (powerAt != null && !futureDated(powerAt)) ? powerAt : now()
-    // The ON report starts the observed run that is booked when the OFF report ends it (2.4.1).
+    // The ON report starts the observed run that is booked when the OFF report ends it.
     noteRunOn(current, onAt ?: (current.requestedAt as Long), current.requestedAt as Long)
     state.activeDose = current
     unschedule("verifyStartConfirmation")
@@ -1778,7 +1778,7 @@ private void confirmDoseStart(Map active, String evidence, Long powerAt, Long on
 
     recordConfirmedDose(current)
     try {
-        // 2.4.2: forced dose events, so a dose of the same volume as the last one still reaches the historian.
+        // Forced dose events, so a dose of the same volume as the last one still reaches the historian.
         publishTileTelemetry([fcVal: toBD(current.fcVal), fcTarget: toBD(current.fcTarget)], null, true)
     } catch (e) {
         log.error "WaterGuru Dosing Advisor: start confirmed but dashboard telemetry failed — ${e.message}"
@@ -1819,7 +1819,7 @@ private boolean markStartUnconfirmed(Map active, String reason) {
 
 /**
  * Send the one start-fault alert, if this call is the one that latched the fault. `stopping` is false for
- * a caller that has just confirmed the switch OFF rather than requesting one (2.4.4): no OFF follows, and
+ * a caller that has just confirmed the switch OFF rather than requesting one: no OFF follows, and
  * the cutoff is disarmed straight after, so the alert must not say "Requesting OFF" or that it stays armed.
  */
 private void alertStartUnconfirmed(Map active, String reason, boolean stopping = true) {
@@ -1832,7 +1832,7 @@ private void alertStartUnconfirmed(Map active, String reason, boolean stopping =
 }
 
 /**
- * The ON never took effect (2.4.4): the attempt was never confirmed, nothing has latched a fault or
+ * The ON never took effect: the attempt was never confirmed, nothing has latched a fault or
  * requested an OFF, there is no ON report and no power, and the switch's stored state is OFF and has not
  * changed since before the ON request. That is the Oct 3 lost-ON pattern when the plug answers the start
  * check's refresh with an unchanged OFF: nothing ran, and nothing is left to stop.
@@ -1857,7 +1857,7 @@ private boolean switchOffUnchangedSince(Long t) {
 }
 
 /**
- * Count an unchanged OFF answer to a start whose ON never took effect (2.4.5), and say whether the hub's
+ * Count an unchanged OFF answer to a start whose ON never took effect, and say whether the hub's
  * retries have had their chance: RETRY_SETTLE_SECONDS since the ON request and at least two such answers.
  * Until then the attempt keeps waiting inside the start window with its stop, verification and cutoff jobs
  * in place; verifyStartConfirmation still ends it at the deadline. The count lives in the attempt and goes
@@ -1912,18 +1912,18 @@ private boolean startStopRequested(Map active) {
 private Long stopEvidenceAnchor(Map active) {
     if (active != null) return (active.offRequestedAt ?: active.requestedAt) as Long
     if (state.startFault != null && state.faultStopAt != null) return state.faultStopAt as Long
-    // 2.4.2: a stop requested with nothing open has its own anchor (safeStopPump).
+    // A stop requested with nothing open has its own anchor (safeStopPump).
     return state.idleStopAt instanceof Number ? (state.idleStopAt as Long) : null
 }
 
 /**
- * Remember the receipt time of an OFF report that passed the anchor checks (2.4.1).
+ * Remember the receipt time of an OFF report that passed the anchor checks.
  *
  * Hubitat stores a report whose value did not change as an event with a fresh date, but it does NOT
  * advance currentState('switch').date. Measured on the live hub on 2026-10-04: three "off" reports
  * answering OFF commands to an idle plug while the stored date stayed at 2026-10-04T02:48:31Z. A plug
- * that is already off therefore answers every OFF without ever producing a fresh state date, and the
- * fault acknowledgement waited for one forever. The recorded time is evidence only while the switch
+ * that is already off therefore answers every OFF without ever producing a fresh state date, and without
+ * this record the fault acknowledgement would wait for one forever. The recorded time is evidence only while the switch
  * still reads off: any ON in between changes the value and so re-dates the state past it.
  */
 private void noteOffEvidence(Long at) {
@@ -1986,17 +1986,17 @@ private void scheduleRunPowerWatch(Map active) {
 def verifyRunPower() {
     Map active = state.activeDose instanceof Map ? state.activeDose : null
     if (active == null || active.startConfirmed != true || active.fault != null) return
-    // 2.4.2: once an OFF has been requested (STOP, a save, a power-loss abort) the stop lifecycle owns
-    // the run. Power falling is then the expected result, and judging it here latched a false power loss.
+    // Once an OFF has been requested (STOP, a save, a power-loss abort) the stop lifecycle owns the
+    // run. Power falling is then the expected result, and judging it here would latch a false power loss.
     if (active.offRequestedAt != null) return
     if (!powerConfirmationRequired()) return
     Long stopAt = active.stopAt as Long
     if (stopAt != null && now() >= stopAt) return   // the stop lifecycle owns it now
 
     Long nowMs = now()
-    // 2.4.4: a check that runs long after the previous one has nothing current to judge. After a hub
-    // restart the jobs persist, the reports sent during the outage are lost and the overdue check fires at
-    // start-up, so it read the evidence from before the gap and latched a false power loss. Ask the plug to
+    // A check that runs long after the previous one has nothing current to judge. After a hub restart
+    // the jobs persist, the reports sent during the outage are lost and the overdue check fires at
+    // start-up, so it would read the evidence from before the gap and latch a false power loss. Ask the plug to
     // report and judge on the next tick. Only one tick in a row is put off, so a pump that really lost power
     // is still aborted one interval later.
     Long previousCheck = (active.powerCheckAt ?: active.confirmedAt) as Long
@@ -2014,7 +2014,7 @@ def verifyRunPower() {
     Map pw = readDeviceReading("power")
     BigDecimal watts = toBD(pw.value)
     boolean usable = pw.ok == true && pw.at != null && !futureDated(pw.at)
-    // 2.4.1: currentState('power').date only moves when the VALUE changes, so a steady pump reporting
+    // currentState('power').date only moves when the VALUE changes, so a steady pump reporting
     // the same 6.7 W keeps an old date while its reports keep arriving. The receipt time of the latest
     // power event (handlePumpPowerEvent) counts too; the value is still the stored one.
     Long seenAt = usable ? latestOf(pw.at as Long, active.lastPowerEventAt instanceof Number ? (active.lastPowerEventAt as Long) : null) : null
@@ -2118,10 +2118,10 @@ private String switchStatusPhrase() {
 }
 
 /**
- * Hold the "stop requested" notice back for STOP_CONFIRM_SECONDS (2.4.1).
+ * Hold the "stop requested" notice back for STOP_CONFIRM_SECONDS.
  *
  * off() returns before the plug answers: on Oct 2 the command went out at 19:48:38.297 and the OFF
- * report arrived at 38.745. Checking the switch straight after off() therefore announced every
+ * report arrived at 38.745. Checking the switch straight after off() would therefore announce every
  * healthy stop as "the switch reports ON. Retrying". The OFF report normally completes the stop
  * through pumpSwitchHandler well inside this window, and finishStop() discards the notice. Only the
  * notice moves: the retry job and the independent cutoff are armed by the caller exactly as before.
@@ -2149,9 +2149,9 @@ def verifyStopRequest() {
         String msg = "${pending.requested}, but ${switchStatusPhrase()}. Retrying; the independent cutoff stays armed."
         log.warn "WaterGuru Dosing Advisor: ${msg}"
         sendPumpNotice(msg)
-        // 2.4.2: keep a final word for the OFF that is still to come. Without it a stop that carries no
-        // message of its own (STOP on an idle app, a save, a fault recovery) ended in silence when its
-        // OFF landed after this notice, and "Retrying" was the last thing the user heard.
+        // Keep a final word for the OFF that is still to come. Without it a stop that carries no message
+        // of its own (STOP on an idle app, a save, a fault recovery) ends in silence when its OFF lands
+        // after this notice, and "Retrying" is the last thing the user hears.
         state.pendingStopNotice = [confirmed: pending.confirmed ?: "${pending.requested}: the switch has now confirmed OFF.".toString(),
                                    announced: true]
     } catch (e) {
@@ -2160,10 +2160,10 @@ def verifyStopRequest() {
 }
 
 /**
- * Hold an EMERGENCY notice back for STOP_CONFIRM_SECONDS (2.4.2), exactly like deferStopNotice().
+ * Hold an EMERGENCY notice back for STOP_CONFIRM_SECONDS, exactly like deferStopNotice().
  *
- * The final retry and the cutoff checked the switch straight after their off(), so the notice went out
- * although the plug's OFF answer landed 0.5 to 1.6 s later. Only the notice moves: every command and
+ * The plug's OFF answer lands 0.5 to 1.6 s after the final retry's or the cutoff's off(), so a check
+ * straight after it would send the notice against a plug about to confirm. Only the notice moves: every command and
  * re-arm has already happened. `head` + the switch's status (when `withSwitch`) + `tail` is the text;
  * `confirmed` is the final word if the check finds the switch off.
  */
@@ -2187,9 +2187,9 @@ def verifyEmergencyNotice() {
         String msg = "${pending.head}${status}. ${pending.tail}"
         log.error "WaterGuru Dosing Advisor: ${msg}"
         sendPumpNotice(msg)
-        // 2.4.4: keep the final word for the OFF still to come, as verifyStopRequest does. The cutoff
-        // stopping a run the app did not start opens no stop of its own, so when that OFF landed after
-        // this notice the EMERGENCY was the last thing the operator heard.
+        // Keep the final word for the OFF still to come, as verifyStopRequest does. The cutoff stopping
+        // a run the app did not start opens no stop of its own, so when that OFF lands after this notice
+        // the EMERGENCY would be the last thing the operator hears.
         state.pendingEmergencyNotice = [confirmed: pending.confirmed ?: "${pending.head}: the switch has now confirmed OFF.".toString(),
                                         announced: true]
     } catch (e) {
@@ -2218,7 +2218,7 @@ private void requestStopRefresh(Map active) {
  * The final stop notice for a scheduled dose. If the start was never confirmed, the notice must
  * NOT claim a completed dose: the relay may have run, but nothing here proved the pump moved the
  * planned volume, so the attempt is left reserved and marked for operator review. The tank line is
- * appended by finishStop(), after the observed run has been booked (2.4.1).
+ * appended by finishStop(), after the observed run has been booked.
  */
 private String scheduledStopMessage(Map active) {
     if (startUnconfirmed(active)) {
@@ -2261,10 +2261,11 @@ def verifyPumpOff() {
         }
 
         if (attempt >= STOP_MAX_ATTEMPTS) {
-            // 2.4.4: a stop with nothing behind it (a save or STOP on an idle app) against a switch that has
-            // read off throughout, which is a plug that is unpowered, out of reach, or only reports changes.
-            // Only a fresh report could close it, so it escalated into EMERGENCY notices and held every dose
-            // for good. With nothing running and nothing reporting ON, close it and say plainly what is known.
+            // A stop with nothing behind it (a save or STOP on an idle app) against a switch that has read
+            // off throughout, which is a plug that is unpowered, out of reach, or only reports changes. Only
+            // a fresh report could otherwise close it, so it would escalate into EMERGENCY notices and hold
+            // every dose for good. With nothing running and nothing reporting ON, close it and say plainly
+            // what is known.
             if (idleStopOffThroughout()) {
                 finishStop("Chlorine pump stop closed: OFF sent ${attempt + 1} times with no answer; the switch last reported off. " +
                            "If the pump switch is offline, check it before the next dose.")
@@ -2277,7 +2278,7 @@ def verifyPumpOff() {
                 ? "The independent cutoff is armed, but the pump may need to be stopped by hand."
                 : "The independent cutoff is DISABLED (watchdogAnyPumpRun is off), so nothing will retry automatically — stop the pump by hand."
             log.error "WaterGuru Dosing Advisor: chlorine pump OFF not freshly confirmed after ${attempt} OFF attempts; the EMERGENCY notice waits ${STOP_CONFIRM_SECONDS}s for the OFF answer"
-            // 2.4.2: the OFF sent just above is answered 0.5 to 1.6 s later on the live plug, so the
+            // The OFF sent just above is answered 0.5 to 1.6 s later on the live plug, so the
             // notice waits for that answer like the stop notice does.
             deferEmergencyNotice("EMERGENCY: chlorine pump OFF not freshly confirmed after ${attempt} OFF attempts", true, tail,
                                  "Chlorine pump stopped on retry ${attempt}.")
@@ -2298,7 +2299,7 @@ def verifyPumpOff() {
 
 /**
  * True when the only open stop is one with nothing behind it (idleStopAt) and the switch has read off
- * from before that request until now (2.4.4). A tracked dose, a fault or a fault-recovery run, an ON at any
+ * from before that request until now. A tracked dose, a fault or a fault-recovery run, an ON at any
  * point, and a missing or unreadable switch state all return false and keep the stop escalating.
  */
 private boolean idleStopOffThroughout() {
@@ -2337,7 +2338,7 @@ private boolean pumpIsOff(Long since = null) {
         if (futureDated(at)) return false   // future-dated OFF
         // When a fresh OFF was requested, a reading that is undated or predates the request has
         // not confirmed anything: a cached pre-attempt OFF must never disarm the new backstop.
-        // 2.4.1: an unchanged "off" report never re-dates the state, so the receipt time recorded by
+        // An unchanged "off" report never re-dates the state, so the receipt time recorded by
         // noteOffEvidence() counts too. It was accepted against its own anchor when it arrived, and
         // while the switch still reads off it can only be newer than the state's own date.
         Long seen = latestOf(at, offEvidenceAt())
@@ -2358,7 +2359,7 @@ private void finishStop(String msg) {
     Map active = state.activeDose instanceof Map ? state.activeDose : null
     // Every confirmed-OFF path comes here. Latch an unconfirmed attempt before discarding it,
     // including an OFF event arriving at the planned end before either timer has fired. The switch is
-    // already off here, so the alert requests nothing (2.4.4).
+    // already off here, so the alert requests nothing.
     alertStartUnconfirmed(active, "the pump reported OFF before the start was confirmed", false)
     if (active?.startConfirmed == true && active.fault != null) {
         String reason = active.fault == "emergency-stop" ? "the emergency cutoff" : active.fault.toString()
@@ -2368,12 +2369,12 @@ private void finishStop(String msg) {
     // when the path that confirmed the OFF brought none of its own (an idle or recovery OFF report).
     Map pending = state.pendingStopNotice instanceof Map ? state.pendingStopNotice : null
     if (!msg && pending?.confirmed) msg = pending.confirmed.toString()
-    // 2.4.4: so is a deferred EMERGENCY notice's. The cutoff stopping a run the app did not start opens no
-    // stop and no stop notice, so its OFF arrived here with nothing to say: the operator heard nothing
-    // (OFF inside the wait) or an EMERGENCY with no follow-up (OFF after it).
+    // So is a deferred EMERGENCY notice's. The cutoff stopping a run the app did not start opens no stop
+    // and no stop notice, so its OFF would otherwise arrive here with nothing to say: the operator would
+    // hear nothing (OFF inside the wait) or an EMERGENCY with no follow-up (OFF after it).
     Map emergency = state.pendingEmergencyNotice instanceof Map ? state.pendingEmergencyNotice : null
     if (!msg && emergency?.confirmed) msg = emergency.confirmed.toString()
-    // Book what actually ran while the run's ON/OFF evidence is still at hand (2.4.1). A booking
+    // Book what actually ran while the run's ON/OFF evidence is still at hand. A booking
     // failure must not be able to skip the cleanup below.
     String booked = null
     try { booked = bookObservedRun(active) }
@@ -2432,9 +2433,9 @@ private void safeStopPump(String reason, boolean notify = false) {
         // stale OFF dated before this moment must not be able to clear the new recovery jobs.
         if (state.faultStopAt == null) state.faultStopAt = offAt
     } else {
-        // 2.4.2: nothing is open (STOP on an idle app, a save, a run the app did not start). With no
-        // anchor any cached "off", even yesterday's, confirmed the stop at once, and the STOP button
-        // said "stopped" before the plug had answered. Anchor it to this request like every other stop.
+        // Nothing is open (STOP on an idle app, a save, a run the app did not start). With no anchor any
+        // cached "off", even yesterday's, would confirm the stop at once, and the STOP button would say
+        // "stopped" before the plug has answered. Anchor it to this request like every other stop.
         state.idleStopAt = offAt
     }
 
@@ -2497,7 +2498,7 @@ private void handlePumpPowerEvent(evt) {
     Long evtAt = eventDateMs(evt)
     BigDecimal watts = toBD(evt?.value)
     if (active == null) {
-        // A late ON during fault recovery is counted only if the pump drew power (2.4.1).
+        // A late ON during fault recovery is counted only if the pump drew power.
         Map run = state.faultRun instanceof Map ? state.faultRun : null
         if (run != null && notePowerSeen(run, evtAt ?: now(), watts, run.onReportAt as Long)) state.faultRun = run
         return
@@ -2511,9 +2512,9 @@ private void handlePumpPowerEvent(evt) {
     if (active.startConfirmed == false) {
         verifyStartConfirmation()
     } else if (active.startConfirmed == true && active.offRequestedAt == null && powerConfirmationRequired()) {
-        // 2.4.1: the receipt time of every power report counts as freshness. An unchanged reading
-        // arrives as an event with a fresh date but leaves currentState('power').date where it was,
-        // so a steady pump looked silent and a healthy run was aborted as "power LOST". Only a dated
+        // The receipt time of every power report counts as freshness. An unchanged reading arrives as
+        // an event with a fresh date but leaves currentState('power').date where it was, so by the state
+        // date alone a steady pump looks silent and a healthy run would be aborted as "power LOST". Only a dated
         // report from after confirmation that is not in the future counts.
         Long since = (active.confirmedAt ?: active.requestedAt) as Long
         if (evtAt != null && !futureDated(evtAt) && (since == null || evtAt >= since) &&
@@ -2534,20 +2535,20 @@ private void handlePumpPowerEvent(evt) {
  */
 private void handlePumpOnEvent(evt) {
     Map active = state.activeDose instanceof Map ? state.activeDose : null
-    // 2.4.2: Hubitat delivers a report whose value did not change with isStateChange false. A stuck
+    // Hubitat delivers a report whose value did not change with isStateChange false. A stuck
     // relay answers every refresh (the profiler polls every 3 s) with such an ON. A test event that
     // leaves the flag out is treated as a change, which is the conservative reading.
     boolean unchangedOn = evt?.isStateChange == false
     if (active != null) {
         if (active.startConfirmed == false) {
             // The first fresh ON report starts the observed run of an attempt that is still
-            // unconfirmed, including a late ON after it faulted (2.4.1).
+            // unconfirmed, including a late ON after it faulted.
             if (noteRunOn(active, eventDateMs(evt) ?: now(), active.requestedAt as Long)) state.activeDose = active
             if (active.fault != null || startStopRequested(active)) {
                 if (unchangedOn && active.offRequestedAt != null) {
-                    // 2.4.2: the stop is already being enforced. Restarting it here sent a fresh OFF,
-                    // reset the attempt count and pushed the verification back on every report: about
-                    // 95 OFFs in 5 minutes and no EMERGENCY escalation, ever. The running verify,
+                    // The stop is already being enforced. Restarting it here would send a fresh OFF, reset
+                    // the attempt count and push the verification back on every report (measured: about
+                    // 95 OFFs in 5 minutes and no EMERGENCY escalation, ever). The running verify,
                     // escalation and cutoff chain does the work.
                     noteRepeatedOnDuringStop("an aborted start")
                     return
@@ -2574,7 +2575,7 @@ private void handlePumpOnEvent(evt) {
         Map run = state.faultRun instanceof Map ? state.faultRun : [:]
         if (noteRunOn(run, evtAt ?: now(), null)) state.faultRun = run
         if (unchangedOn && anchor != null) {
-            // 2.4.2: the same loop for a standalone recovery: its stop is already being enforced.
+            // The same loop for a standalone recovery: its stop is already being enforced.
             noteRepeatedOnDuringStop("a fault recovery")
             return
         }
@@ -2587,10 +2588,10 @@ private void handlePumpOnEvent(evt) {
         return
     }
     if (watchdogAnyPumpRun == true) {
-        // 2.4.4: an unchanged ON (the profiler's 3 s refresh answering a run this app did not start)
-        // re-armed the cutoff on every report, and each re-arm logged a WARN: 301 lines in 15 minutes.
-        // With a cutoff pending and not yet due, arming would only leave it in place, so the report gets a
-        // throttled line instead. An overdue or missing cutoff is still armed as before.
+        // An unchanged ON (the profiler's 3 s refresh answering a run this app did not start) would
+        // re-arm the cutoff on every report, and each re-arm logs a WARN (measured: 301 lines in 15
+        // minutes). With a cutoff pending and not yet due, arming would only leave it in place, so the
+        // report gets a throttled line instead. An overdue or missing cutoff is still armed.
         if (unchangedOn && emergencyCutoffPendingNotDue()) {
             logRepeatedOn("the switch still reports ON during a run this app did not start; the cutoff stays armed")
             return
@@ -2599,7 +2600,7 @@ private void handlePumpOnEvent(evt) {
     }
 }
 
-/** A cutoff job is pending and its deadline has not passed (2.4.4). */
+/** A cutoff job is pending and its deadline has not passed. */
 private boolean emergencyCutoffPendingNotDue() {
     Long deadline = state.emergencyDeadline instanceof Number ? (state.emergencyDeadline as Long) : null
     return state.emergencyJobScheduled == true && deadline != null && deadline > now()
@@ -2618,7 +2619,7 @@ private void stopOnlyForPendingFault(String why) {
 }
 
 /**
- * An unchanged ON report during a stop that is already being enforced (2.4.2). Nothing is sent and no
+ * An unchanged ON report during a stop that is already being enforced. Nothing is sent and no
  * job is touched; the log line is throttled to one per REPEATED_ON_LOG_SECONDS. The user hears from the
  * stop chain itself: the deferred "stop requested" notice, the EMERGENCY escalation, the cutoff.
  */
@@ -2644,7 +2645,7 @@ private void logRepeatedOn(String text) {
 private void handlePumpOffEvent(evt) {
     Map active = state.activeDose instanceof Map ? state.activeDose : null
     boolean wasActive = active != null
-    // 2.4.2: a stop requested with nothing open (idleStopAt) is held to its anchor too.
+    // A stop requested with nothing open (idleStopAt) is held to its anchor too.
     boolean recovering = wasActive || (state.startFault != null && state.faultStopAt != null) || state.idleStopAt != null
     Long anchor = stopEvidenceAnchor(active)
     Long evtAt = eventDateMs(evt)
@@ -2666,15 +2667,15 @@ private void handlePumpOffEvent(evt) {
         }
     }
     // The report passed the anchor checks. Keep its receipt time: if the value did not change, this
-    // event is the ONLY trace of it, because the stored switch date does not move (2.4.1).
+    // event is the ONLY trace of it, because the stored switch date does not move.
     noteOffEvidence(evtAt)
 
-    // 2.4.4: the ON never took effect (the Oct 3 lost ON, with the plug answering the start check's
-    // refresh with an unchanged OFF). No OFF was requested and nothing ran, so this says so in one notice
-    // instead of "Requesting OFF; the independent cutoff stays armed" and "stopped before the planned dose
-    // completed". The fault is latched as for every unconfirmed start.
+    // The ON never took effect (the Oct 3 lost ON, with the plug answering the start check's refresh
+    // with an unchanged OFF). No OFF was requested and nothing ran, so this says so in one notice; the
+    // generic path would say "Requesting OFF; the independent cutoff stays armed" and "stopped before the
+    // planned dose completed". The fault is latched as for every unconfirmed start.
     if (wasActive && startNeverTookEffect(active)) {
-        // 2.4.5: not on the first answer. The hub re-sends a lost ON (Command Retry), so an unchanged OFF this
+        // Not on the first answer. The hub re-sends a lost ON (Command Retry), so an unchanged OFF this
         // early says only that the first send was lost: the start check keeps polling, and a retried ON that
         // lands inside the window confirms the start like a prompt one. The attempt is closed here only once
         // the retries have had their chance. Nothing is energised meanwhile.
@@ -2689,7 +2690,7 @@ private void handlePumpOffEvent(evt) {
     boolean early = wasActive && now() + 3000L < stopAt
     if (early) {
         // An early, unconfirmed stop terminates an unconfirmed attempt: latch and say so. The OFF is the
-        // switch's own report, so the alert requests nothing (2.4.4).
+        // switch's own report, so the alert requests nothing.
         String tail = ""
         if (startUnconfirmed(active)) {
             alertStartUnconfirmed(active, "the pump reported OFF before the start was confirmed", false)
@@ -2729,10 +2730,9 @@ private boolean armEmergencyPumpCutoff(String reason) {
     boolean jobPending = state.emergencyJobScheduled == true
 
     if (existing != null && existing <= nowMs) {
-        // 2.4.2: the deadline has passed and the cutoff has not run: its job is late (a busy hub's
-        // scheduler) or a queue reset dropped it. A fresh window here pushed a cutoff that was already
-        // due a whole window later (review probe: due at +120 s, moved to +245 s by the +125 s retry).
-        // Fire it now instead. The deadline becomes that moment, so a further arm within the second
+        // The deadline has passed and the cutoff has not run: its job is late (a busy hub's scheduler)
+        // or a queue reset dropped it. A fresh window here would push a cutoff that is already due a
+        // whole window later. Fire it now instead. The deadline becomes that moment, so a further arm within the second
         // leaves the job alone, and emergencyPumpOff() clears it when it runs, so this cannot loop.
         state.emergencyDeadline = nowMs + 1000L
         state.emergencyJobScheduled = true
@@ -2797,7 +2797,7 @@ def emergencyPumpOff() {
 
     Long offAt = now()
     if (active != null) { active.offRequestedAt = offAt; state.activeDose = active }
-    // 2.4.2: stopping an attempt that was never confirmed is a faulted termination here as on every
+    // Stopping an attempt that was never confirmed is a faulted termination here as on every
     // other stop path. Latched after offRequestedAt is set, so the fault's offFrom is this OFF request
     // and the plug's answer to it can acknowledge the fault.
     if (startUnconfirmed(active)) alertStartUnconfirmed(active, "the emergency cutoff fired before the start was confirmed")
@@ -2814,7 +2814,7 @@ def emergencyPumpOff() {
     }
 
     if (attempt <= 3 || attempt % 10 == 0) {
-        // 2.4.2: deferred like the stop notice: the plug's answer to the OFF above lands 0.5 to 1.6 s later.
+        // Deferred like the stop notice: the plug's answer to the OFF above lands 0.5 to 1.6 s later.
         deferEmergencyNotice("EMERGENCY: the cutoff has not been able to turn the chlorine pump off (attempt ${attempt})", false,
                              "Still trying, but the pump may need to be stopped by hand.", confirmed)
     }
@@ -2832,7 +2832,7 @@ private List doseSafetyBlocks(Map result) {
     // attempt may be reserved) while a fault or a standalone stop recovery is unreviewed.
     if (state.startFault != null) blocks << "an unacknowledged pump fault must be reviewed first"
     if (state.faultStopAt != null) blocks << "a pump stop is still being recovered"
-    // 2.4.2: an unconfirmed stop with nothing open still runs its retries, which would turn a new dose off.
+    // An unconfirmed stop with nothing open still runs its retries, which would turn a new dose off.
     if (state.idleStopAt != null) blocks << "a pump stop is still waiting for the switch to confirm OFF"
     if (state.activeDose) blocks << "a dose is already running"
     if (pumpSwitch?.currentValue("switch")?.toString() == "on") blocks << "pump switch is already on"
@@ -2973,12 +2973,10 @@ private Long observedOffAt(Long onAt) {
 }
 
 /**
- * Book what actually ran (2.4.1), once, as a confirmed OFF ends the run.
- *
- * Until now every confirmed run was booked at its planned volume, even when its OFF landed minutes
- * late (review probe: OFF 180 s late, about 1134 mL ran, 475 mL booked, and a same-day 3000 mL dose
- * then passed the 3500 mL cap). The run is measured from its ON report to its OFF report, so the
- * report latency at either end cancels out.
+ * Book what actually ran, once, as a confirmed OFF ends the run. The planned volume alone would
+ * understate a run whose OFF lands minutes late, and the day's cap would then be judged on the wrong
+ * total. The run is measured from its ON report to its OFF report, so the report latency at either end
+ * cancels out.
  *
  *   - A confirmed run within RUN_MATCH_TOLERANCE_MS of its plan keeps the planned booking.
  *   - Longer (a late OFF): the extra volume is debited from the tank and added to today's total, and
@@ -2994,13 +2992,13 @@ private Long observedOffAt(Long onAt) {
  * A correction rewrites lastDose under its ORIGINAL time and republishes it. The historian
  * (Waterguru-Grafana-Chart, dosing.py) keys a chlorine_dose point by the lastDoseEpochMs value and
  * writes it at that timestamp, so the corrected volume overwrites the same point rather than
- * counting a second dose. Since 2.4.2 the republish is forced (isStateChange), because the hub drops
- * an event whose value did not change, and the unchanged lastDoseEpochMs is what the historian pairs
- * the corrected volume with.
+ * counting a second dose. The republish is forced (isStateChange), because the hub drops an event
+ * whose value did not change, and the unchanged lastDoseEpochMs is what the historian pairs the
+ * corrected volume with.
  *
  * A booked run with no lastDose of its own (an unconfirmed attempt, a late ON during fault recovery) is
- * published as well since 2.4.4, as its own forced record under its dose-history time: before, it reached
- * the tank, today's total and the dose history but never the historian. lastDose is left alone.
+ * published as well, as its own forced record under its dose-history time, so it reaches the historian
+ * and not only the tank, today's total and the dose history. lastDose is left alone.
  *
  * Returns a sentence for the final notice, or null when nothing changed.
  */
@@ -3042,14 +3040,14 @@ private String bookObservedRun(Map active) {
                                                     planned: false, observed: true,
                                                     plannedMl: active.mlRaw ?: active.ml, plannedSeconds: plannedSec]
         try {
-            // 2.4.2: forced, so the unchanged lastDoseEpochMs is sent again beside the corrected volume
+            // Forced, so the unchanged lastDoseEpochMs is sent again beside the corrected volume
             // and the historian pairs the two (it drops a volume with no dose time beside it).
             publishTileTelemetry(null, null, true)
         } catch (e) {
             log.error "WaterGuru Dosing Advisor: the observed run was booked but dashboard telemetry failed: ${e.message}"
         }
     } else if (ranMl > 0G) {
-        // 2.4.4: under the history entry's time, the identity a void of that entry publishes 0 mL under.
+        // Under the history entry's time, the identity a void of that entry publishes 0 mL under.
         publishDoseRecord(historyTime, ranMl, ranSec, "the booked run")
         publishTankTelemetryNow()
     }
@@ -3183,7 +3181,7 @@ private void resetTankFull() {
 }
 
 // ---------------------------------------------------------------------------
-// Tank corrections (2.4.2). Generic for any install, and deliberately narrow: they move the tank
+// Tank corrections. Generic for any install, and deliberately narrow: they move the tank
 // estimate and the dose history only. Neither can energise the pump, and neither touches today's dose
 // total, the sample lock or the one-AUTO-dose guard, so a correction can never be a way to dose again.
 // ---------------------------------------------------------------------------
@@ -3348,7 +3346,7 @@ private void clearSetting(String name) {
 
 private void recordTankUse(BigDecimal ml) {
     if (ml == null || ml <= 0) return
-    // The dose history is kept whether or not the tank is tracked (2.4.1): the FC-loss estimate needs
+    // The dose history is kept whether or not the tank is tracked: the FC-loss estimate needs
     // every app dose to tell decay from chlorine the app added.
     setDoseHistoryVolume(state.lastDose?.time != null ? (state.lastDose.time as Long) : now(), ml)
     debitTank(ml)
@@ -3493,7 +3491,7 @@ private String tankRunwayLine(Map runway) {
         case "below":
             return "⏳ Tank runway: inventory is at/below the ${n0(runway.pct)}% low-tank threshold."
         case "learning":
-            // 2.4.4: with doses on record but under half a day of history, a completed dose is not what is missing.
+            // With doses on record but under half a day of history, a completed dose is not what is missing.
             if (((runway.n ?: 0) as Integer) > 0) {
                 String doses = runway.n == 1 ? "1 dose" : "${runway.n} doses"
                 return "⏳ Tank runway: learning, ${doses} recorded so far; days until ${n0(runway.pct)}% can be estimated once the dose history spans half a day."
@@ -3617,9 +3615,9 @@ private void publishTileTelemetry(Map r = null, def tile = null, boolean doseRec
 }
 
 /**
- * The last dose. `doseRecord` (2.4.2) forces the three events, for a confirmation and a correction: the
- * hub drops an event whose value did not change, so a dose of the same volume as the one before, or a
- * corrected volume under the unchanged lastDoseEpochMs, never reached the historian, which pairs each
+ * The last dose. `doseRecord` forces the three events, for a confirmation and a correction: the hub
+ * drops an event whose value did not change, so a dose of the same volume as the one before, or a
+ * corrected volume under the unchanged lastDoseEpochMs, would never reach the historian, which pairs each
  * lastDoseEpochMs event with a lastDoseMl event (Waterguru-Grafana-Chart, dosing.py). The routine
  * publish on every calculation stays unforced, so it creates no events of its own.
  */
@@ -3639,9 +3637,10 @@ private void publishDoseTelemetry(def dev, boolean doseRecord) {
 }
 
 /**
- * Tank inventory and runway. 2.4.2: a value the app no longer knows (no container size, inventory not
+ * Tank inventory and runway. A value the app no longer knows (no container size, inventory not
  * initialised or the container changed, runway still learning) is published as UNKNOWN_TELEMETRY
- * instead of being skipped, which left the last number on the tile and the historian kept storing it.
+ * instead of being skipped: skipping it would leave the last number on the tile, and the historian
+ * would keep storing it.
  */
 private void publishTankTelemetry(def dev) {
     BigDecimal cap = tankCapacityMl()
@@ -3662,7 +3661,7 @@ private void publishTankTelemetry(def dev) {
         dev.sendEvent(name: "tankRunwayDays", value: UNKNOWN_TELEMETRY, unit: "days")
 }
 
-/** The reading and the target of a calculation; 2.4.2: UNKNOWN_TELEMETRY when either is missing. */
+/** The reading and the target of a calculation; UNKNOWN_TELEMETRY when either is missing. */
 private void publishFcTelemetry(def dev, Map r) {
     if (r.fcVal != null)         dev.sendEvent(name: "freeChlorine", value: r.fcVal as BigDecimal, unit: "ppm")
     else                         dev.sendEvent(name: "freeChlorine", value: UNKNOWN_TELEMETRY, unit: "ppm")
@@ -3670,7 +3669,7 @@ private void publishFcTelemetry(def dev, Map r) {
     else                         dev.sendEvent(name: "targetFreeChlorine", value: UNKNOWN_TELEMETRY, unit: "ppm")
 }
 
-/** The tank values alone, after a correction (2.4.2). Never the dose record: see publishVoidedDose(). */
+/** The tank values alone, after a correction. Never the dose record: see publishVoidedDose(). */
 private void publishTankTelemetryNow() {
     if (createTile == false) return
     def dev = getTileDevice()
@@ -3680,15 +3679,15 @@ private void publishTankTelemetryNow() {
 }
 
 /**
- * A voided dose, as a correction to 0 mL under its own time (2.4.2): the same identity 2.4.1 corrections
- * use, so the historian overwrites its point with 0 mL instead of keeping a dose that never ran.
+ * A voided dose, as a correction to 0 mL under its own time: the same identity a run correction uses
+ * (bookObservedRun), so the historian overwrites its point with 0 mL instead of keeping a dose that never ran.
  */
 private boolean publishVoidedDose(Long t) {
     return publishDoseRecord(t, 0G, 0, "the voided dose")
 }
 
 /**
- * One dose record under its own time, forced and sent alone (2.4.2; shared since 2.4.4): a voided dose
+ * One dose record under its own time, forced and sent alone: a voided dose
  * as 0 mL, and a booked run with no lastDose (bookObservedRun) as its observed volume. The historian keys a
  * chlorine_dose point by lastDoseEpochMs and pairs each one with the lastDoseMl closest to it, so this
  * handler must not publish another dose record beside it. The next calculation puts the actual last dose
@@ -3835,11 +3834,11 @@ private String     attrRaw(String attr) { def v = sourceDevice?.currentValue(att
  *  falls back to the bare cassetteType, then adds days left, percent left and
  *  whether WaterGuru wants the cassette replaced. A missing attribute is left out.
  *
- *  2.4.3: no "N tests left". CassetteChecksLeft is a PAD count: a C5 uses 6 pads per sample day, so the
- *  live 24 meant "4 days left", not 24 more tests. And since the replace-cassette step is no longer dose
- *  advice, WaterGuru's cassette status (YELLOW: replace soon, RED: replace now) is shown here.
+ *  No "N tests left": CassetteChecksLeft is a PAD count (a C5 uses 6 pads per sample day, so 24 means
+ *  "4 days left", not 24 more tests). The replace-cassette step is not dose advice, so WaterGuru's
+ *  cassette status (YELLOW: replace soon, RED: replace now) is shown here instead.
  *
- *  2.4.4: without cassetteInfo or cassetteType (an older WaterGuru Integration) the rest is still shown,
+ *  Without cassetteInfo or cassetteType (an older WaterGuru Integration) the rest is still shown,
  *  under the plain word "Cassette"; with nothing known about the cassette at all there is no text. */
 private String cassetteText() {
     String base = cassetteBase()
@@ -3863,7 +3862,7 @@ private String cassetteBase() {
            ((type && type.trim() && !type.trim().equalsIgnoreCase("unknown")) ? type.trim() : null)
 }
 
-/** The headline chip for WaterGuru's cassette status (2.4.4): YELLOW "Replace cassette soon", RED
+/** The headline chip for WaterGuru's cassette status: YELLOW "Replace cassette soon", RED
  *  "Replace cassette now", anything else none. */
 private String cassetteReplaceChip() {
     String status = attrRaw("CassetteStatus")?.trim()?.toUpperCase()
@@ -3872,14 +3871,14 @@ private String cassetteReplaceChip() {
     return null
 }
 
-/** Days left on the cassette (2.4.3): the numeric cassetteDaysLeft when the driver publishes it (a later
+/** Days left on the cassette: the numeric cassetteDaysLeft when the driver publishes it (a later
  *  WaterGuru Integration change; bdwilson/hubitat#76 merged without it), else WaterGuru's own
  *  CassetteTimeLeft text, else null. The integration parses the number from that text and publishes
  *  nothing for a text it cannot read, so a number dated before the text belongs to an older text and the
  *  text is shown instead.
  *
- *  2.4.4: the number is shown only beside a current text. A text that went blank or "unknown" (a cassette
- *  swap) skipped the date check, and the old "1 day left" stood next to a new cassette at 100%. */
+ *  The number is shown only beside a current text: a text that went blank or "unknown" (a cassette swap)
+ *  would otherwise skip the date check and leave the old "1 day left" next to a new cassette at 100%. */
 private String cassetteDaysText() {
     String text = attrRaw("CassetteTimeLeft")?.trim()
     if (!text || text.equalsIgnoreCase("unknown")) text = null
@@ -3911,9 +3910,9 @@ private boolean sourceStateNewer(String a, String b) {
  *  measurement time so repeated polls of the same sample don't double-count;
  *  bounded to RUNWAY_HISTORY_MAX entries.
  *
- *  2.4.3: called from processNewSample, once the whole sample is in, and the entry is marked settled.
- *  An entry without the mark was read when LastMeasurement arrived, before the sample's freeChlorine, and
- *  mostly holds the previous sample's FC; measuredFcLoss leaves those out. */
+ *  Called from processNewSample, once the whole sample is in, and the entry is marked settled. An entry
+ *  without the mark (stored by versions before 2.4.3) was read when LastMeasurement arrived, before the
+ *  sample's freeChlorine, and mostly holds the previous sample's FC; measuredFcLoss leaves those out. */
 private void recordFcSample(String sampleKey) {
     BigDecimal fc = attrNum("freeChlorine")
     if (fc == null) return
@@ -3944,7 +3943,7 @@ private Map computeRunway(BigDecimal fc, BigDecimal cya) {
         def m = measuredFcLoss()
         if (m != null) {
             loss = m.rate; measured = true
-            // 2.4.4: m.n counts the decay intervals averaged, as the config page's status line does too.
+            // m.n counts the decay intervals averaged, as the config page's status line does too.
             basis = "measured ${n1(loss)} ppm/day ${intervalCountText(m.n as Integer)}"
         } else {
             loss  = hasCover() ? (FC_LOSS_MODELED_DEFAULT * FC_LOSS_COVER_FACTOR) : FC_LOSS_MODELED_DEFAULT
@@ -3961,17 +3960,15 @@ private Map computeRunway(BigDecimal fc, BigDecimal cya) {
 /** Average daily FC loss over recent decay intervals between consecutive samples at
  *  least ~6 h apart. Uses up to the last 5 such intervals. Returns [rate, n] or null.
  *
- *  2.4.1: the app's own doses between two samples are added back as ppm before the
- *  loss is measured. Counting only intervals where FC fell made daily dosing hide the
- *  loss (review probe: a true 0.64 ppm/day measured as 0.2, a runway about 3x too
- *  long). When the pool volume or the product strength is unknown, a dose cannot be
- *  converted, so an interval that contains one is skipped instead of guessed.
+ *  The app's own doses between two samples are added back as ppm before the loss is measured:
+ *  counting only the intervals where FC fell would let daily dosing hide the loss. When the pool
+ *  volume or the product strength is unknown, a dose cannot be converted, so an interval that
+ *  contains one is skipped instead of guessed.
  *
- *  2.4.3: only settled readings are measured. Each is filed under its sample's measurement time and the
- *  app doses after the sample, so a dose falls in the interval that starts at the sample it answered and
- *  ends at the next one, whose FC it raised. A reading stored before 2.4.3 was usually the previous
- *  sample's FC, which also paired each dose with the wrong interval (live hub, Sep 29 to Oct 5: about
- *  1.1 ppm/day measured where the samples give about 0.56). */
+ *  Only settled readings are measured. Each is filed under its sample's measurement time and the app
+ *  doses after the sample, so a dose falls in the interval that starts at the sample it answered and
+ *  ends at the next one, whose FC it raised. A reading stored by a version before 2.4.3 was usually the
+ *  previous sample's FC, which also paired each dose with the wrong interval. */
 private Map measuredFcLoss() {
     def hist = (state.fcHistory instanceof List) ? state.fcHistory : []
     if (hist.size() < 2) return null
@@ -4044,10 +4041,9 @@ private String runwayLine(Map r) {
 /** Config-page status: how much sample history the forecast has learned from. */
 private String runwayStatusLine() {
     def hist = (state.fcHistory instanceof List) ? state.fcHistory : []
-    int n = hist.count { it?.settled == true } as int   // 2.4.3: the readings measuredFcLoss can use
+    int n = hist.count { it?.settled == true } as int   // the readings measuredFcLoss can use
     def m = measuredFcLoss()
-    // 2.4.4: the same count as the runway line, the intervals averaged (it said "from 12 samples" while the
-    // runway line said "over 5 samples").
+    // The same count as the runway line, the intervals averaged.
     if (m != null) return "Currently using your measured loss (~${n1(m.rate)} ppm/day ${intervalCountText(m.n as Integer)})."
     return "Samples recorded so far: ${n} (a couple of days of declines are needed before a measured rate replaces the estimate)."
 }
