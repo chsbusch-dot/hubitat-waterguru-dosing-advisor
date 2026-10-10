@@ -333,10 +333,10 @@ mut("K2", "killed", "a rise of exactly one reading step counts as no loss: a han
 mut("K3", "killed", "nothing measured yet but an interval skipped: the line hides the skip",
     ("        if (none > 0) return", "        if (false) return"))
 mut("K4", "killed", "the skip label claims chlorine was added outside the app",
-    ("FC rose beyond this app's doses)\"\n        return \"FC loss: not measured yet (needs",
-     "chlorine added outside the app)\"\n        return \"FC loss: not measured yet (needs"))
+    ("FC rose beyond this app's doses)\"\n        // Settled history",
+     "chlorine added outside the app)\"\n        // Settled history"))
 mut("K5", "killed", "the config page still asks for a couple of days of declines",
-    ("(a measured rate replaces the estimate once it has ${FC_LOSS_RULE_TEXT}).",
+    ("(a measured rate replaces the estimate once there are ${FC_LOSS_RULE_TEXT}).",
      "(a couple of days of declines are needed before a measured rate replaces the estimate)."))
 
 # ---- 2.4.7 follow-up round (WOR-752): each change reverted (must be killed) ----
@@ -346,7 +346,7 @@ mut("J1", "killed", "the empty FC loss line goes back to the old rule (a day apa
 mut("J2", "killed", "the skipped count loses its noun: \"(1 skipped, ...)\"",
     ("(${none} interval${none == 1 ? '' : 's'} skipped,", "(${none} skipped,"))
 mut("J3", "killed", "the runway claims no sample history when intervals were skipped",
-    ("${skippedAny ? 'not measured yet' : 'no sample history yet'}", "no sample history yet"))
+    ("${hasHistory ? 'not measured yet' : 'no sample history yet'}", "no sample history yet"))
 mut("J4", "killed", "the summary's FC loss line is built unguarded",
     ("    String lossLine = safeFcLossText(\"summary line\") { fcLossLine() }\n", "    String lossLine = fcLossLine()\n"))
 mut("J5", "killed", "the daily notification's FC loss figure is built unguarded",
@@ -357,6 +357,17 @@ mut("J7", "killed", "the old cutoff default is back (21 min)",
     ("DEFAULT_FAILSAFE_PUMP_RUN_MINUTES = 15G", "DEFAULT_FAILSAFE_PUMP_RUN_MINUTES = 21G"))
 mut("J8", "killed", "the old maximum runtime default is back (20 min)",
     ("DEFAULT_MAX_PUMP_RUN_MINUTES = 14G", "DEFAULT_MAX_PUMP_RUN_MINUTES = 20G"))
+
+# ---- 2.4.7 text round (WOR-752): each change reverted (must be killed) ----
+mut("T1", "killed", "the config page's status line ignores your set rate",
+    ("    if (f?.source == \"setting\") {\n        String rest", "    if (false) {\n        String rest"))
+mut("T2", "killed", "the rule text goes back to \"without a rise beyond this app's doses\", FC unnamed",
+    ("\"two samples at least 6 hours apart, with no rise in FC beyond this app's doses\"",
+     "\"two samples at least 6 hours apart, without a rise beyond this app's doses\""))
+mut("T3", "killed", "settled history with no usable interval is described as needing samples",
+    ("        if (settledFcSampleCount() >= 2) return \"FC loss: not measured yet (no usable interval yet)\"\n", ""))
+mut("T4", "killed", "the runway claims no sample history unless an interval was skipped",
+    ("boolean hasHistory = settledFcSampleCount() >= 2", "boolean hasHistory = ((fcLossIntervals().skipped ?: 0) as int) > 0"))
 
 
 def build(name):

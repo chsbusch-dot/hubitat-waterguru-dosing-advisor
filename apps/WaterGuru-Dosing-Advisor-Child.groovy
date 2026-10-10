@@ -32,10 +32,14 @@
  *           right under "Current: ..." gives the measured or set figure the runway uses: "FC loss: 0.2 ppm/day
  *           (measured over 2 intervals; 1 skipped, FC rose beyond this app's doses)", "FC loss: X ppm/day (your
  *           setting)" with fcLossPerDay set, else "FC loss: not measured yet (1 interval skipped, FC rose
- *           beyond this app's doses)" or, with nothing skipped, "(needs two samples at least 6 hours apart,
- *           without a rise beyond this app's doses)", the rule the config page's status line states too
- *           (FC_LOSS_RULE_TEXT). The runway then keeps its estimate and says "not measured yet" instead of
- *           "no sample history yet" when intervals were skipped. The daily summary notification carries the
+ *           beyond this app's doses)", "(no usable interval yet)" when two settled samples are in but no
+ *           interval between them counts for another reason (an app dose with unknown pool volume or
+ *           chlorine strength, samples under 6 hours apart), or, with fewer than two settled samples, "(needs
+ *           two samples at least 6 hours apart, with no rise in FC beyond this app's doses)", the rule the
+ *           config page's status line states too (FC_LOSS_RULE_TEXT). The runway then keeps its estimate and
+ *           says "not measured yet", keeping "no sample history yet" for fewer than two settled samples. The
+ *           config page's status line leads with "Currently using your set rate X ppm/day." when
+ *           fcLossPerDay is set, as the summary and the runway do. The daily summary notification carries the
  *           same figure after the pH. Building the line, the notification's figure or the runway is guarded:
  *           a failure (a corrupt fcHistory entry) logs one warning and leaves that text out, never the advice
  *           or the dose decision. (2) The measured loss admits intervals differently. Each one
@@ -51,8 +55,10 @@
  *           The window (the last 5 measured intervals, a plain average) is unchanged. (3) New defaults, at the
  *           owner's request (2026-10-10): absolute maximum pump runtime 14 min (was 20) and independent
  *           emergency cutoff 15 min (was 21), the live pair since 2026-10-04; the cutoff is still later than
- *           the maximum. Existing installs keep their saved values. At the default 185 mL/min a 14 min run
- *           is about 2590 mL, below the 3000 mL single-dose limit, so a larger dose is now blocked by runtime.
+ *           the maximum. Both inputs are required, so existing installs keep their saved values and only a
+ *           new install takes 14/15. At the default 185 mL/min a 14 min run is about 2590 mL, below the 3000
+ *           mL single-dose limit, so the runtime limit, not the cap, bounds a single dose unless the pump is
+ *           faster.
  *   2.4.6 - Four items from the 2026-10-08 debt review (WOR-740); none of them pump logic. (1) A code update
  *           (Hubitat Package Manager, or new code saved under Apps Code) replaces the code without running
  *           updated(), so an install keeps the subscriptions of the code it was last saved with. initialize()
@@ -380,7 +386,7 @@ preferences {
 // The rule for a measured FC loss, in the words the summary's "not measured yet" line and the config page's
 // status line share: fcLossIntervals needs two settled samples at least 0.25 day (6 h) apart, and skips an
 // interval where FC rose beyond this app's doses. Change the text with the gap.
-@Field static final String FC_LOSS_RULE_TEXT = "two samples at least 6 hours apart, without a rise beyond this app's doses"
+@Field static final String FC_LOSS_RULE_TEXT = "two samples at least 6 hours apart, with no rise in FC beyond this app's doses"
 
 // ---------------------------------------------------------------------------
 // UI
@@ -4012,9 +4018,10 @@ private Map computeRunway(BigDecimal fc, BigDecimal cya) {
             basis = "measured ${n1(loss)} ppm/day ${intervalCountText(m.n as Integer)}"
         } else {
             loss  = hasCover() ? (FC_LOSS_MODELED_DEFAULT * FC_LOSS_COVER_FACTOR) : FC_LOSS_MODELED_DEFAULT
-            // With skipped intervals there is sample history, just nothing measured from it yet.
-            boolean skippedAny = ((fcLossIntervals().skipped ?: 0) as int) > 0
-            basis = "estimated ${n1(loss)} ppm/day${hasCover() ? ' (cover)' : ''}, ${skippedAny ? 'not measured yet' : 'no sample history yet'}"
+            // With two settled samples there is sample history, just no interval measured from it yet
+            // (skipped, a dose that cannot be converted, samples under 6 hours apart).
+            boolean hasHistory = settledFcSampleCount() >= 2
+            basis = "estimated ${n1(loss)} ppm/day${hasCover() ? ' (cover)' : ''}, ${hasHistory ? 'not measured yet' : 'no sample history yet'}"
         }
     }
 
@@ -4102,6 +4109,8 @@ private String fcLossLine() {
     if (f == null) {
         int none = (fcLossIntervals().skipped ?: 0) as int
         if (none > 0) return "FC loss: not measured yet (${none} interval${none == 1 ? '' : 's'} skipped, FC rose beyond this app's doses)"
+        // Settled history, but every interval was dropped for another reason: no claim that there is none.
+        if (settledFcSampleCount() >= 2) return "FC loss: not measured yet (no usable interval yet)"
         return "FC loss: not measured yet (needs ${FC_LOSS_RULE_TEXT})"
     }
     if (f.source == "setting") return "FC loss: ${n1(f.rate)} ppm/day (your setting)"
@@ -4170,12 +4179,24 @@ private String runwayLine(Map r) {
 
 /** Config-page status: how much sample history the forecast has learned from. */
 private String runwayStatusLine() {
-    def hist = (state.fcHistory instanceof List) ? state.fcHistory : []
-    int n = hist.count { it?.settled == true } as int   // the readings measuredFcLoss can use
+    int n = settledFcSampleCount()   // the readings measuredFcLoss can use
     def m = measuredFcLoss()
+    // Your setting wins, as in the summary's "FC loss:" line and the runway (fcLossFigure).
+    Map f = fcLossFigure()
+    if (f?.source == "setting") {
+        String rest = m != null ? "Measured from your samples: ~${n1(m.rate)} ppm/day ${intervalCountText(m.n as Integer)}."
+                                : "Samples recorded so far: ${n}."
+        return "Currently using your set rate ${n1(f.rate)} ppm/day. ${rest}"
+    }
     // The same count as the runway line, the intervals averaged.
     if (m != null) return "Currently using your measured loss (~${n1(m.rate)} ppm/day ${intervalCountText(m.n as Integer)})."
-    return "Samples recorded so far: ${n} (a measured rate replaces the estimate once it has ${FC_LOSS_RULE_TEXT})."
+    return "Samples recorded so far: ${n} (a measured rate replaces the estimate once there are ${FC_LOSS_RULE_TEXT})."
+}
+
+/** The settled readings in fcHistory, the ones measuredFcLoss can pair into intervals. */
+private int settledFcSampleCount() {
+    def hist = (state.fcHistory instanceof List) ? state.fcHistory : []
+    return hist.count { it?.settled == true } as int
 }
 
 /** "over 1 interval" / "over 5 intervals": how many decay intervals a measured loss averages. */
