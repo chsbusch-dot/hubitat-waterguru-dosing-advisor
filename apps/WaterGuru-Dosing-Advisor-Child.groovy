@@ -27,6 +27,19 @@
  * All doses are ESTIMATES. Always confirm with your own test kit before adding.
  *
  * Version history
+ *   2.4.7 - The daily FC loss in the summary (WOR-752); dosing is unchanged (the loss figure feeds only the
+ *           text, the algae runway and the tile footer, never a dose amount or a safety check). (1) A line
+ *           right under "Current: ..." gives the figure the runway uses: "FC loss: 0.1 ppm/day (measured over
+ *           3 intervals)", "...; 1 skipped, chlorine added outside the app" when one was skipped, "FC loss: X
+ *           ppm/day (your setting)" with fcLossPerDay set, else "FC loss: not measured yet (needs two samples a
+ *           day apart with known doses)". The daily summary notification carries the same figure after the pH.
+ *           (2) The measured loss admits intervals differently. Each one is a balance, FC before + the app's
+ *           doses in ppm - FC after, per day. A rise beyond the app's doses by more than
+ *           FC_OUTSIDE_ADD_TOLERANCE_PPM (0.3) is chlorine added outside the app (a hand dose, a shock) and is
+ *           skipped and counted; anything else counts, a negative balance as no loss. Up to 2.4.6 every
+ *           interval where FC held or rose was dropped, so only the falling ones were averaged: the live
+ *           Oct 6 to 9 samples measured 0.4 ppm/day over 1 interval, now 0.1 over 3. The window (the last 5
+ *           measured intervals, a plain average) is unchanged.
  *   2.4.6 - Four items from the 2026-10-08 debt review (WOR-740); none of them pump logic. (1) A code update
  *           (Hubitat Package Manager, or new code saved under Apps Code) replaces the code without running
  *           updated(), so an install keeps the subscriptions of the code it was last saved with. initialize()
@@ -224,7 +237,7 @@
 
 import groovy.transform.Field
 
-def appVersion() { "2.4.6" }
+def appVersion() { "2.4.7" }
 
 definition(
     name:        "WaterGuru Dosing Advisor Pool",
@@ -344,6 +357,12 @@ preferences {
 @Field static final int        SUBSCRIPTION_SET             = 2
 @Field static final BigDecimal FC_LOSS_MODELED_DEFAULT = 3.0G
 @Field static final BigDecimal FC_LOSS_COVER_FACTOR    = 0.6G
+// The measured FC loss reads each interval between two settled samples as a balance: FC before plus what the
+// app's own doses added, minus FC after. A rise beyond what those doses explain by more than this tolerance
+// is chlorine added outside the app (a hand dose, a shock), and that interval is left out and counted as
+// skipped. Within it a negative balance is reading noise and counts as no loss. WaterGuru reports FC in 0.1
+// ppm steps.
+@Field static final BigDecimal FC_OUTSIDE_ADD_TOLERANCE_PPM = 0.3G
 
 // ---------------------------------------------------------------------------
 // UI
@@ -1156,7 +1175,7 @@ private void sendDailyChlorineSummary(boolean force = false, String trigger = "d
 
 private String dailyChlorineSummary(Map result) {
     String sampled = result?.sampled ? " Sample: ${result.sampled}." : ""
-    String readings = "FC ${n1(result?.fcVal)} ppm; target ${n1(result?.fcTarget)} ppm; pH ${n2(result?.pH)}."
+    String readings = "FC ${n1(result?.fcVal)} ppm; target ${n1(result?.fcTarget)} ppm; pH ${n2(result?.pH)}.${fcLossDigestText()}"
     String tank = tankSummaryPlain()
     if (result?.doseMl != null && result?.runSeconds != null) {
         BigDecimal rate = firstNum(pumpRateMlPerMin, DEFAULT_PUMP_RATE_ML_MIN)
@@ -1240,6 +1259,7 @@ private Map computeAdvice() {
 
     out << "🌊 WaterGuru Dosing Advisor — ${label}"
     out << currentReadingsSummary(false)
+    out << fcLossLine()
     def sampled = attrRaw("LastMeasurementHuman") ?: attrRaw("LastMeasurement")
     if (sampled) {
         String exactSample = sampleTimestampText()
@@ -3954,11 +3974,13 @@ private Map computeRunway(BigDecimal fc, BigDecimal cya) {
     BigDecimal loss
     String basis
     boolean measured = false
-    if (numSet(fcLossPerDay) && (fcLossPerDay as BigDecimal) > 0) {
-        loss  = fcLossPerDay as BigDecimal
+    // The same figure as the summary's "FC loss:" line (fcLossFigure).
+    Map f = fcLossFigure()
+    if (f?.source == "setting") {
+        loss  = f.rate as BigDecimal
         basis = "your set rate ${n1(loss)} ppm/day"
     } else {
-        def m = measuredFcLoss()
+        def m = f
         if (m != null) {
             loss = m.rate; measured = true
             // m.n counts the decay intervals averaged, as the config page's status line does too.
@@ -3975,8 +3997,15 @@ private Map computeRunway(BigDecimal fc, BigDecimal cya) {
     return [state: "ok", floor: floor, loss: loss, basis: basis, measured: measured, days: days]
 }
 
-/** Average daily FC loss over recent decay intervals between consecutive samples at
- *  least ~6 h apart. Uses up to the last 5 such intervals. Returns [rate, n] or null.
+/** Average daily FC loss over recent intervals between consecutive samples at least ~6 h apart.
+ *  Uses up to the last 5 measured intervals. Returns [rate, n, skipped] or null when none is measured.
+ *
+ *  Each interval is a balance: FC before + the ppm the app dosed in between - FC after, per day. When FC after
+ *  is higher than FC before + the app's doses + FC_OUTSIDE_ADD_TOLERANCE_PPM, chlorine came from outside the
+ *  app (a hand dose, a shock) and the interval is skipped; otherwise it counts, with a negative balance
+ *  (reading noise) counted as no loss. Dropping every interval where FC held or rose would leave only the
+ *  falling ones and overstate the loss. `skipped` counts the skipped intervals in the stretch the average
+ *  covers: walking back from the newest interval until 5 have been measured.
  *
  *  The app's own doses between two samples are added back as ppm before the loss is measured:
  *  counting only the intervals where FC fell would let daily dosing hide the loss. When the pool
@@ -3992,7 +4021,7 @@ private Map measuredFcLoss() {
     if (hist.size() < 2) return null
     BigDecimal mlPerPpm = doseMlPerPpm()
     List doses = appDoseEvents()
-    def rates = []
+    List outcomes = []   // oldest first: an interval's loss in ppm/day, or null for one skipped
     for (int i = 1; i < hist.size(); i++) {
         if (hist[i-1]?.settled != true || hist[i]?.settled != true) continue
         BigDecimal fa = toBD(hist[i-1]?.fc), fb = toBD(hist[i]?.fc)
@@ -4006,14 +4035,47 @@ private Map measuredFcLoss() {
             if (mlPerPpm == null) continue   // a dose happened but cannot be converted to ppm
             added = (inside.collect { toBD(it.ml) }.sum(0G) as BigDecimal) / mlPerPpm
         }
-        BigDecimal lost = fa + added - fb
-        if (lost <= 0G) continue         // FC held or rose beyond what the app added: chlorine came from elsewhere
-        rates << lost.doubleValue() / dtDays
+        if (fb > fa + added + FC_OUTSIDE_ADD_TOLERANCE_PPM) {   // chlorine added outside the app
+            outcomes << null
+            continue
+        }
+        BigDecimal balance = fa + added - fb
+        outcomes << Math.max(0d, balance.doubleValue()) / dtDays
+    }
+    List rates = []
+    int skipped = 0
+    for (int j = outcomes.size() - 1; j >= 0 && rates.size() < 5; j--) {
+        if (outcomes[j] == null) skipped++
+        else rates << outcomes[j]
     }
     if (!rates) return null
-    def recent = rates.size() > 5 ? rates[-5..-1] : rates
-    double avg = recent.sum() / recent.size()
-    return [rate: avg as BigDecimal, n: recent.size()]
+    double avg = (rates.sum() as double) / rates.size()
+    return [rate: avg as BigDecimal, n: rates.size(), skipped: skipped]
+}
+
+/** The daily FC loss the summary and the runway use: your setting (fcLossPerDay) when it is set, else the
+ *  measured loss. [rate, source: "setting"] or measuredFcLoss's map plus source: "measured"; null when neither. */
+private Map fcLossFigure() {
+    if (numSet(fcLossPerDay) && (fcLossPerDay as BigDecimal) > 0) return [rate: fcLossPerDay as BigDecimal, source: "setting"]
+    Map m = measuredFcLoss()
+    return m != null ? m + [source: "measured"] : null
+}
+
+/** The summary's "FC loss:" line, right under the current readings. */
+private String fcLossLine() {
+    Map f = fcLossFigure()
+    if (f == null) return "FC loss: not measured yet (needs two samples a day apart with known doses)"
+    if (f.source == "setting") return "FC loss: ${n1(f.rate)} ppm/day (your setting)"
+    int skipped = (f.skipped ?: 0) as int
+    String skips = skipped > 0 ? "; ${skipped} skipped, chlorine added outside the app" : ""
+    return "FC loss: ${n1(f.rate)} ppm/day (measured ${intervalCountText(f.n as Integer)}${skips})"
+}
+
+/** The same figure for the daily summary notification, or "" when there is none yet. */
+private String fcLossDigestText() {
+    Map f = fcLossFigure()
+    if (f == null) return ""
+    return " FC loss ${n1(f.rate)} ppm/day (${f.source == 'setting' ? 'your setting' : 'measured'})."
 }
 
 /** mL of the configured liquid chlorine that raises this pool's FC by 1 ppm: computeFc's dose

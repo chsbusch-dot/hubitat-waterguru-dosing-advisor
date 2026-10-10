@@ -10,8 +10,8 @@ or the build aborts, so a mutation that silently failed to apply can never be re
 Origin: the M01-M21 / PC1-PC2 set from the independent review of 5f218c9 (2.4.0), re-anchored to
 the 2.4.1 code; F1-F6 revert one 2.4.1 fix each, R1-R9 one 2.4.2 fix each (WOR-718), W1-W3 one
 2.4.3 fix each (WOR-724), X1-X12 one 2.4.4 fix each and XP1-XP3 one Pump Power Profiler 1.1.1 fix
-each (WOR-731), Y1-Y2 one 2.4.5 change each (WOR-739), Z1-Z2 one 2.4.6 item each (WOR-740), and every one
-of those must be killed by the tests that guard it.
+each (WOR-731), Y1-Y2 one 2.4.5 change each (WOR-739), Z1-Z2 one 2.4.6 item each (WOR-740), L1-L8 one
+2.4.7 change each (WOR-752), and every one of those must be killed by the tests that guard it.
 
 A mutant edits the child app unless it is declared with mutp(), which edits the profiler. Each mutant
 runs the suite that covers its file (MUTATION.txt "suites:"); the base runs both.
@@ -302,6 +302,27 @@ mut("Z1", "killed", "item 1 reverted: a stale or missing subscription stamp no l
     ("    if (!subscriptionsCurrent()) blocks << \"the app's subscriptions are out of date after a code update; open the app and press Done\"\n", ""))
 mut("Z2", "killed", "item 2 reverted: a cutoff equal to or below the maximum runtime no longer blocks a start",
     ("    String cutoffProblem = cutoffSettingProblem()\n    if (cutoffProblem) blocks << cutoffProblem\n", ""))
+
+
+# ---- 2.4.7 (WOR-752): each change reverted (must be killed) ----
+mut("L1", "killed", "skip rule reverted: a rise beyond the app's doses and the tolerance counts as no loss",
+    ("        if (fb > fa + added + FC_OUTSIDE_ADD_TOLERANCE_PPM) {   // chlorine added outside the app\n",
+     "        if (false) {   // MUTANT\n"))
+mut("L2", "killed", "tolerance dropped: any rise beyond the app's doses (reading noise too) is skipped",
+    ("        if (fb > fa + added + FC_OUTSIDE_ADD_TOLERANCE_PPM) {", "        if (fb > fa + added) {"))
+mut("L3", "killed", "no-loss intervals dropped again: a balance at or below zero is left out instead of counted as 0",
+    ("        BigDecimal balance = fa + added - fb\n",
+     "        BigDecimal balance = fa + added - fb\n        if (balance <= 0G) continue\n"))
+mut("L4", "killed", "skipped intervals are not counted",
+    ("        if (outcomes[j] == null) skipped++\n", "        if (outcomes[j] == null) { }\n"))
+mut("L5", "killed", "the summary has no FC loss line under the current readings",
+    ("    out << currentReadingsSummary(false)\n    out << fcLossLine()\n", "    out << currentReadingsSummary(false)\n"))
+mut("L6", "killed", "the FC loss figure ignores your fcLossPerDay setting",
+    ("    if (numSet(fcLossPerDay) && (fcLossPerDay as BigDecimal) > 0) return [rate: fcLossPerDay as BigDecimal, source: \"setting\"]\n", ""))
+mut("L7", "killed", "the daily summary notification leaves the FC loss figure out",
+    ("pH ${n2(result?.pH)}.${fcLossDigestText()}\"", "pH ${n2(result?.pH)}.\""))
+mut("L8", "killed", "the FC loss line does not say an interval was skipped",
+    ("\"; ${skipped} skipped, chlorine added outside the app\"", "\"\""))
 
 
 def build(name):
