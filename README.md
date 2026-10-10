@@ -126,12 +126,12 @@ pump may run; the others shape the dose.
 | **Limit AUTO mode to one completed dose per calendar day** | on | A second AUTO dose on the same day is blocked, whatever the reading says. A failed attempt counts too. | yes |
 | **Maximum WaterGuru sample age (hours)** | 18 | No dose on a reading older than this. | yes |
 | **Minimum dose to run (mL)** | 50 | A smaller calculated dose is not run. | no |
-| **Maximum single dose (mL)** | 3000 | A larger calculated dose is blocked, not capped. | yes |
+| **Maximum single dose (mL)** | 3000 | A larger calculated dose is blocked, not capped. At the default 185 mL/min a 14 minute run is about 2590 mL, so the maximum runtime, not this 3000 mL cap, bounds a single dose unless the pump is faster. | yes |
 | **Maximum total dose per day (mL)** | 3500 | Blocks a dose that would take the day's total (including reserved failed attempts) over this. | yes |
-| **Absolute maximum pump runtime (minutes)** | 20 | A dose whose runtime would exceed this is blocked. | yes |
+| **Absolute maximum pump runtime (minutes)** | 14 | A dose whose runtime would exceed this is blocked. | yes |
 | **Block dosing below pH / above pH** | 6.8 / 8.2 | No dose outside this pH range. | yes |
 | **Arm an independent emergency cutoff for every pump run** | on | A second, independent OFF timer for every pump start, retried until the switch freshly reports off. The last backstop. | yes |
-| **Independent emergency cutoff after this many minutes** | 21 | When the cutoff fires. It must be later than the maximum runtime, or no dose can start and the page shows the problem in red. | yes |
+| **Independent emergency cutoff after this many minutes** | 15 | When the cutoff fires. It must be later than the maximum runtime, or no dose can start and the page shows the problem in red. | yes |
 | **Chlorine container capacity** and **low-tank warning percent** | 1 gal, 20 % | The tank estimate: a dose larger than what is estimated to remain is blocked, and a low tank sends a warning. | yes |
 
 Two checks run before every start and are reported like any other block:
@@ -257,20 +257,36 @@ days = (FC − floor) ÷ dailyLoss
 
 `dailyLoss` (ppm/day) is, in order of preference:
 
-1. **Your manual override**, if set.
-2. **Measured** — the average decline across your recent samples. The app keeps a
-   rolling history of each new FC reading and adds back, as ppm, the chlorine it
-   dosed itself between two samples, so daily dosing does not hide the loss. An
-   interval where FC still rose is chlorine from elsewhere and is skipped. Adding a
-   dose back needs the pool volume and the chlorine strength (an override, or the
-   device's own value); without them, intervals that contain a dose are skipped
-   rather than guessed. This needs a couple of days of samples to appear. Each
-   reading is taken when the app processes the sample, 20 seconds after it
-   arrives: WaterGuru sends the sample time before the chlorine reading, so
-   versions before 2.4.3 mostly stored the previous sample's FC, and those
+1. **Your manual override** (Daily FC loss rate), if set.
+2. **Measured:** the average daily loss over your recent samples. The app keeps a
+   rolling history of each new FC reading. Each interval between two samples at
+   least 6 hours apart is a balance: FC before, plus the chlorine this app dosed in
+   between (converted to ppm), minus FC after, per day. Since 2.4.7 every such
+   interval counts, including one where FC held (a loss of zero). An interval is
+   skipped only when FC rose by at least one WaterGuru reading step (0.1 ppm)
+   beyond this app's doses, which means chlorine came from somewhere else (a hand
+   dose, a shock). The measured loss is the plain average of up to the last 5
+   counted intervals. A hand dose smaller than that day's loss cannot be seen in
+   the readings and makes the loss read lower. Converting a dose to ppm needs the
+   pool volume and the chlorine strength (an override, or the device's own
+   value); without them, an interval that contains a dose is left out rather than
+   guessed. Each reading is taken when the app processes the sample, 20 seconds
+   after it arrives: WaterGuru sends the sample time before the chlorine reading,
+   so versions before 2.4.3 mostly stored the previous sample's FC, and those
    readings are not used.
-3. **Estimated** — a modeled default (3 ppm/day, scaled to 60% when the device
-   reports a cover) used until measured history exists.
+3. **Estimated:** a modeled default (3 ppm/day, scaled to 60% when the device
+   reports a cover), used until a loss is measured.
+
+The figure in use is also the first line under the current readings in the
+summary, for example `FC loss: 0.2 ppm/day (measured over 2 intervals; 1 skipped,
+FC rose beyond this app's doses)` or `FC loss: 0.8 ppm/day (your setting)`. Until
+a loss is measured it says `not measured yet`, with the number of skipped
+intervals, `no usable interval yet` when there are samples but no interval
+counts yet, or the rule it is waiting for (two samples at least 6 hours apart,
+with no rise in FC beyond this app's doses). The daily summary notification
+carries the same figure after the pH, for example `FC loss 0.2 ppm/day
+(measured).` The loss rate only feeds this text, the runway and the tile
+footer, never a dose amount.
 
 pH is not part of the clock — it modulates how *effective* a given FC is (high pH
 lowers the active-chlorine fraction) rather than how fast FC decays. The estimate
