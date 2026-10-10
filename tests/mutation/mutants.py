@@ -11,7 +11,8 @@ Origin: the M01-M21 / PC1-PC2 set from the independent review of 5f218c9 (2.4.0)
 the 2.4.1 code; F1-F6 revert one 2.4.1 fix each, R1-R9 one 2.4.2 fix each (WOR-718), W1-W3 one
 2.4.3 fix each (WOR-724), X1-X12 one 2.4.4 fix each and XP1-XP3 one Pump Power Profiler 1.1.1 fix
 each (WOR-731), Y1-Y2 one 2.4.5 change each (WOR-739), Z1-Z2 one 2.4.6 item each (WOR-740), L1-L8 one
-2.4.7 change each (WOR-752), and every one of those must be killed by the tests that guard it.
+2.4.7 change each and K1-K5 one fix each from the 2.4.7 verification round (WOR-752), and every one of those
+must be killed by the tests that guard it.
 
 A mutant edits the child app unless it is declared with mutp(), which edits the profiler. Each mutant
 runs the suite that covers its file (MUTATION.txt "suites:"); the base runs both.
@@ -305,11 +306,10 @@ mut("Z2", "killed", "item 2 reverted: a cutoff equal to or below the maximum run
 
 
 # ---- 2.4.7 (WOR-752): each change reverted (must be killed) ----
-mut("L1", "killed", "skip rule reverted: a rise beyond the app's doses and the tolerance counts as no loss",
-    ("        if (fb > fa + added + FC_OUTSIDE_ADD_TOLERANCE_PPM) {   // chlorine added outside the app\n",
-     "        if (false) {   // MUTANT\n"))
-mut("L2", "killed", "tolerance dropped: any rise beyond the app's doses (reading noise too) is skipped",
-    ("        if (fb > fa + added + FC_OUTSIDE_ADD_TOLERANCE_PPM) {", "        if (fb > fa + added) {"))
+mut("L1", "killed", "skip rule reverted: a rise beyond the app's doses counts as no loss",
+    ("        if (fb - (fa + added) >= FC_READING_STEP_PPM) {", "        if (false) {"))
+mut("L2", "killed", "reading step dropped: a rise under one step from dose rounding is skipped too",
+    ("        if (fb - (fa + added) >= FC_READING_STEP_PPM) {", "        if (fb > fa + added) {"))
 mut("L3", "killed", "no-loss intervals dropped again: a balance at or below zero is left out instead of counted as 0",
     ("        BigDecimal balance = fa + added - fb\n",
      "        BigDecimal balance = fa + added - fb\n        if (balance <= 0G) continue\n"))
@@ -322,7 +322,21 @@ mut("L6", "killed", "the FC loss figure ignores your fcLossPerDay setting",
 mut("L7", "killed", "the daily summary notification leaves the FC loss figure out",
     ("pH ${n2(result?.pH)}.${fcLossDigestText()}\"", "pH ${n2(result?.pH)}.\""))
 mut("L8", "killed", "the FC loss line does not say an interval was skipped",
-    ("\"; ${skipped} skipped, chlorine added outside the app\"", "\"\""))
+    ("\"; ${skipped} skipped, FC rose beyond this app's doses\"", "\"\""))
+
+# ---- 2.4.7 verification round (WOR-752): each fix reverted (must be killed) ----
+mut("K1", "killed", "the 0.3 ppm tolerance is back: the live hand run's day counts as no loss (0.1 ppm/day)",
+    ("        if (fb - (fa + added) >= FC_READING_STEP_PPM) {", "        if (fb - (fa + added) > 0.3G) {"))
+mut("K2", "killed", "a rise of exactly one reading step counts as no loss: a hand top-up at a shock reads as a day without loss",
+    ("        if (fb - (fa + added) >= FC_READING_STEP_PPM) {", "        if (fb - (fa + added) > FC_READING_STEP_PPM) {"))
+mut("K3", "killed", "nothing measured yet but an interval skipped: the line hides the skip",
+    ("        if (none > 0) return", "        if (false) return"))
+mut("K4", "killed", "the skip label claims chlorine was added outside the app",
+    ("FC rose beyond this app's doses)\"\n        return \"FC loss: not measured yet (needs",
+     "chlorine added outside the app)\"\n        return \"FC loss: not measured yet (needs"))
+mut("K5", "killed", "the config page still asks for a couple of days of declines",
+    ("(a measured rate replaces the estimate once two samples at least 6 hours apart are in, without a rise beyond this app's doses).",
+     "(a couple of days of declines are needed before a measured rate replaces the estimate)."))
 
 
 def build(name):

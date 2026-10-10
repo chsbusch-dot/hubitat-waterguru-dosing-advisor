@@ -3700,9 +3700,9 @@ check("2.4.4 fix 10: the runway line and the status line count the same interval
         app.advance(20_000L)
         if (i == 1 || i == 11) {
             String want = i == 1 ? "over 1 interval" : "over 5 intervals"
-            // Since 2.4.7 the 0.3 ppm rises (within FC_OUTSIDE_ADD_TOLERANCE_PPM) count as no loss instead of
-            // being dropped, so the last five intervals read 0.4, 0, 0.4, 0, 0.4: 0.24 ppm/day.
-            String rate = i == 1 ? "0.4" : "0.2"
+            // The 0.3 ppm rises with no app dose are skipped (since 2.4.7: a rise of one reading step or more
+            // beyond the app's doses), so the last five measured intervals are the 0.4 ppm falls.
+            String rate = "0.4"
             String line = app.runwayLine(app.computeRunway(fc, 39G))
             String status = app.runwayStatusLine()
             expect(line.contains("(measured ${rate} ppm/day ${want})"), "[${i + 1} samples] runway line: ${line}")
@@ -4064,7 +4064,7 @@ def lossPool = { app ->
     return wg
 }
 
-check("2.4.7: the live Oct 6 to 9 series measures every interval, the hand run's day counting as no loss") {
+check("2.4.7: the live Oct 6 to 9 series skips the hand run's day and measures the other two, 0.2 ppm/day") {
     def app = newApp()
     def wg = lossPool(app)
     // Live app 2200: Oct 6 19:31 FC 5.0, the app doses 791 mL; Oct 7 19:30 FC 5.6, the app's ON was lost and
@@ -4075,46 +4075,66 @@ check("2.4.7: the live Oct 6 to 9 series measures every interval, the hand run's
     expect(app.state.fcHistory*.fc == ["5.0", "5.6", "5.9", "6.0"], "four settled samples: ${app.state.fcHistory}")
     BigDecimal mlPerPpm = app.doseMlPerPpm()
     expect(Math.abs(mlPerPpm.doubleValue() - 791.09d) < 0.01d, "791 mL per ppm on this pool: ${mlPerPpm}")
-    // Oct 6 to 7: 5.0 + 1.0 - 5.6 = 0.4 over 0.9993 d. Oct 7 to 8: a 0.3 rise with no app dose, not MORE than
-    // the 0.3 tolerance, so it counts as no loss. Oct 8 to 9: 5.9 + 0.1 - 6.0 = -0.0001, no loss. 2.4.6
-    // dropped the last two and measured 0.4 ppm/day over 1 interval.
+    // Oct 6 to 7: 5.0 + 1.0 - 5.6 = 0.4 over 0.9993 d. Oct 7 to 8: a 0.3 rise with no app dose, the hand run
+    // (about 0.38 ppm), is skipped. Oct 8 to 9: 5.9 + 0.1 - 6.0 = -0.0001, under one reading step: no loss.
+    // 2.4.6 dropped the last two and measured 0.4 ppm/day over 1 interval; f95bee2 counted the hand run's
+    // day as no loss and measured 0.1 over 3.
     double first = (5.0d + 791d / mlPerPpm.doubleValue() - 5.6d) / ((epoch("2026-10-08T02:30:00Z") - epoch("2026-10-07T02:31:00Z")) / 86_400_000.0d)
     def m = app.measuredFcLoss()
-    expect(m != null && m.n == 3 && m.skipped == 0, "three intervals measured, none skipped: ${m}")
-    expect(Math.abs((m.rate as BigDecimal).doubleValue() - first / 3d) < 1e-9d, "(0.4002 + 0 + 0) / 3 = ${first / 3d}, got ${m?.rate}")
+    expect(m != null && m.n == 2 && m.skipped == 1, "two intervals measured, the hand run skipped: ${m}")
+    expect(Math.abs((m.rate as BigDecimal).doubleValue() - first / 2d) < 1e-9d, "(0.4002 + 0) / 2 = ${first / 2d}, got ${m?.rate}")
     List lines = app.computeAdvice().text.split("\n") as List
     expect(lines[1].startsWith("Current: FC 6.0 ppm"), "the readings line: ${lines[1]}")
-    expect(lines[2] == "FC loss: 0.1 ppm/day (measured over 3 intervals)", "the FC loss line right under it: ${lines[2]}")
+    expect(lines[2] == "FC loss: 0.2 ppm/day (measured over 2 intervals; 1 skipped, FC rose beyond this app's doses)",
+           "the FC loss line right under it: ${lines[2]}")
     String runway = app.runwayLine(app.computeRunway(6.0G, 39G))
-    expect(runway.contains("(measured 0.1 ppm/day over 3 intervals)"), "the runway uses the same figure: ${runway}")
+    expect(runway.contains("(measured 0.2 ppm/day over 2 intervals)"), "the runway uses the same figure: ${runway}")
 }
 
-check("2.4.7: a hand shock to 15 is skipped as chlorine added outside the app, and the decay after it is measured") {
+check("2.4.7: a hand shock to 15 is skipped, said so before anything is measured, and the decay after it is measured") {
     def app = newApp()
     def wg = lossPool(app)
     feedDailySamples(app, wg, [["2026-10-10T02:30:00Z", 6.0G, null], ["2026-10-11T02:30:00Z", 15.0G, null]])
     expect(app.measuredFcLoss() == null, "the shock day alone measures nothing: ${app.measuredFcLoss()}")
-    expect(app.fcLossLine() == "FC loss: not measured yet (needs two samples a day apart with known doses)", app.fcLossLine())
+    expect(app.fcLossLine() == "FC loss: not measured yet (1 skipped, FC rose beyond this app's doses)", app.fcLossLine())
+    expect(app.runwayStatusLine() == "Samples recorded so far: 2 (a measured rate replaces the estimate once two samples at least 6 hours apart are in, without a rise beyond this app's doses).",
+           app.runwayStatusLine())
     feedDailySamples(app, wg, [["2026-10-12T02:30:00Z", 13.5G, null], ["2026-10-13T02:30:00Z", 12.2G, null],
                                ["2026-10-14T02:30:00Z", 11.0G, null]])
     def m = app.measuredFcLoss()
     expect(m != null && m.n == 3 && m.skipped == 1, "three decay days measured, the shock day skipped: ${m}")
     expect(Math.abs((m.rate as BigDecimal).doubleValue() - 4.0d / 3d) < 1e-9d, "(1.5 + 1.3 + 1.2) / 3, got ${m?.rate}")
     List lines = app.computeAdvice().text.split("\n") as List
-    expect(lines[2] == "FC loss: 1.3 ppm/day (measured over 3 intervals; 1 skipped, chlorine added outside the app)",
+    expect(lines[2] == "FC loss: 1.3 ppm/day (measured over 3 intervals; 1 skipped, FC rose beyond this app's doses)",
            "the summary says what was skipped: ${lines[2]}")
 }
 
-check("2.4.7: a 0.1 ppm rise with no dose is reading noise and counts as no loss; a 0.4 rise is skipped") {
+check("2.4.7: hand top-ups that hold a shock at 15 are skipped down to one reading step, not read as days without loss") {
     def app = newApp()
     def wg = lossPool(app)
-    feedDailySamples(app, wg, [["2026-10-10T02:30:00Z", 6.0G, null], ["2026-10-11T02:30:00Z", 6.1G, null]])
+    // 6.0, a shock to 15.0, then top-ups by hand to 15.1 and 14.8 after about 2.5 ppm of loss a day, then a free
+    // decay. The 15.0 to 15.1 day rises exactly one reading step: skipped, not a 0 loss (f95bee2 read 0.98).
+    feedDailySamples(app, wg, [["2026-10-10T02:30:00Z", 6.0G, null], ["2026-10-11T02:30:00Z", 15.0G, null],
+                               ["2026-10-12T02:30:00Z", 15.1G, null], ["2026-10-13T02:30:00Z", 14.8G, null],
+                               ["2026-10-14T02:30:00Z", 13.0G, null], ["2026-10-15T02:30:00Z", 11.5G, null],
+                               ["2026-10-16T02:30:00Z", 10.2G, null]])
+    def m = app.measuredFcLoss()
+    expect(m != null && m.n == 4 && m.skipped == 2, "four intervals measured, the shock and the 0.1 top-up skipped: ${m}")
+    expect(Math.abs((m.rate as BigDecimal).doubleValue() - 4.9d / 4d) < 1e-9d, "(0.3 + 1.8 + 1.5 + 1.3) / 4, got ${m?.rate}")
+    expect(app.fcLossLine() == "FC loss: 1.2 ppm/day (measured over 4 intervals; 2 skipped, FC rose beyond this app's doses)", app.fcLossLine())
+}
+
+check("2.4.7: FC that holds with no dose counts as no loss; a rise of one reading step with no dose is skipped") {
+    def app = newApp()
+    def wg = lossPool(app)
+    feedDailySamples(app, wg, [["2026-10-10T02:30:00Z", 6.0G, null], ["2026-10-11T02:30:00Z", 6.0G, null]])
     def m = app.measuredFcLoss()
     expect(m != null && m.n == 1 && m.skipped == 0 && (m.rate as BigDecimal).doubleValue() == 0d, "one interval, no loss: ${m}")
     expect(app.fcLossLine() == "FC loss: 0.0 ppm/day (measured over 1 interval)", app.fcLossLine())
-    // control: beyond the tolerance the same pair is chlorine from outside the app
-    app.state.fcHistory = [[t: epoch("2026-10-10T02:30:00Z"), fc: "6.0", settled: true], [t: epoch("2026-10-11T02:30:00Z"), fc: "6.4", settled: true]]
-    expect(app.measuredFcLoss() == null, "a 0.4 rise with no app dose is skipped: ${app.measuredFcLoss()}")
+    // a 0.1 rise with no app dose is chlorine from somewhere else
+    app.state.fcHistory = [[t: epoch("2026-10-10T02:30:00Z"), fc: "6.0", settled: true], [t: epoch("2026-10-11T02:30:00Z"), fc: "6.1", settled: true]]
+    expect(app.measuredFcLoss() == null, "a 0.1 rise with no app dose is skipped: ${app.measuredFcLoss()}")
+    expect(app.fcLossLine() == "FC loss: not measured yet (1 skipped, FC rose beyond this app's doses)", app.fcLossLine())
 }
 
 check("2.4.7: the FC loss line sits right under the current readings, measured, set and not yet measured") {
