@@ -128,10 +128,10 @@ pump may run; the others shape the dose.
 | **Minimum dose to run (mL)** | 50 | A smaller calculated dose is not run. | no |
 | **Maximum single dose (mL)** | 3000 | A larger calculated dose is blocked, not capped. | yes |
 | **Maximum total dose per day (mL)** | 3500 | Blocks a dose that would take the day's total (including reserved failed attempts) over this. | yes |
-| **Absolute maximum pump runtime (minutes)** | 20 | A dose whose runtime would exceed this is blocked. | yes |
+| **Absolute maximum pump runtime (minutes)** | 14 | A dose whose runtime would exceed this is blocked. | yes |
 | **Block dosing below pH / above pH** | 6.8 / 8.2 | No dose outside this pH range. | yes |
 | **Arm an independent emergency cutoff for every pump run** | on | A second, independent OFF timer for every pump start, retried until the switch freshly reports off. The last backstop. | yes |
-| **Independent emergency cutoff after this many minutes** | 21 | When the cutoff fires. It must be later than the maximum runtime, or no dose can start and the page shows the problem in red. | yes |
+| **Independent emergency cutoff after this many minutes** | 15 | When the cutoff fires. It must be later than the maximum runtime, or no dose can start and the page shows the problem in red. | yes |
 | **Chlorine container capacity** and **low-tank warning percent** | 1 gal, 20 % | The tank estimate: a dose larger than what is estimated to remain is blocked, and a low tank sends a warning. | yes |
 
 Two checks run before every start and are reported like any other block:

@@ -3959,14 +3959,14 @@ check("2.4.6 item 1: the stamp is keyed to the subscribe set, so a save with no 
     expect(!app.subscriptionsCurrent(), "an unreadable stamp is not")
 }
 
-check("2.4.6 item 2: the cutoff must be later than the maximum runtime; 14/15 and the defaults pass, equal or lower blocks") {
+check("2.4.6 item 2: the cutoff must be later than the maximum runtime; 14/15 (the 2.4.7 defaults) passes, equal or lower blocks") {
     def app = newApp()
     def pump = hubPlug(app)                                    // the live pair: max 14 min, cutoff 15 min
     def dose = incidentDose(app)
     expect(app.maxPumpRunMinutes == 14 && app.failsafePumpRunMinutes == 15, "sanity: the live pair")
     expect(app.cutoffSettingProblem() == null && app.doseSafetyBlocks(dose).isEmpty(), "14/15 is valid: ${app.doseSafetyBlocks(dose)}")
     app.maxPumpRunMinutes = null; app.failsafePumpRunMinutes = null
-    expect(app.maxRunMinutes() == 20G && app.failsafeMinutes() == 21G, "the defaults: ${app.maxRunMinutes()} / ${app.failsafeMinutes()}")
+    expect(app.maxRunMinutes() == 14G && app.failsafeMinutes() == 15G, "the 2.4.7 defaults: ${app.maxRunMinutes()} / ${app.failsafeMinutes()}")
     expect(app.cutoffSettingProblem() == null && app.doseSafetyBlocks(dose).isEmpty(), "and they are valid: ${app.doseSafetyBlocks(dose)}")
     app.maxPumpRunMinutes = 15; app.failsafePumpRunMinutes = 15
     String msg = "the emergency cutoff (15.0 min) must be later than the maximum pump runtime (15.0 min)"
@@ -3983,14 +3983,14 @@ check("2.4.6 item 2: the cutoff must be later than the maximum runtime; 14/15 an
     expect(app.cutoffSettingProblem() == null && app.doseSafetyBlocks(dose).isEmpty(), "with the cutoff disabled there is nothing to compare")
 }
 
-check("2.4.6 item 2: the cutoff default of 21 min arms a 1260 s window, and the EMERGENCY final notice names it") {
+check("2.4.7: the cutoff default of 15 min arms a 900 s window, and the EMERGENCY final notice names it") {
     def app = newApp()
     def pump = bindClock(app, new FakeSwitch("off"))
     primeForStart(app, pump)
     app.maxPumpRunMinutes = null; app.failsafePumpRunMinutes = null
     app.startDose(sampleDose(app), "defaults")
-    expect(app.state.emergencyDeadline == app.clockMs + 1_260_000L && app.scheduled["emergencyPumpOff"] == 1260,
-           "armed for 21 minutes: ${app.state.emergencyDeadline} / ${app.scheduled}")
+    expect(app.state.emergencyDeadline == app.clockMs + 900_000L && app.scheduled["emergencyPumpOff"] == 900,
+           "armed for 15 minutes: ${app.state.emergencyDeadline} / ${app.scheduled}")
 }
 
 check("2.4.6 item 3: the page shows the observed measurement time (median of the last seven samples), never 19:20, and a neutral line without history") {
@@ -4096,8 +4096,8 @@ check("2.4.7: a hand shock to 15 is skipped, said so before anything is measured
     def wg = lossPool(app)
     feedDailySamples(app, wg, [["2026-10-10T02:30:00Z", 6.0G, null], ["2026-10-11T02:30:00Z", 15.0G, null]])
     expect(app.measuredFcLoss() == null, "the shock day alone measures nothing: ${app.measuredFcLoss()}")
-    expect(app.fcLossLine() == "FC loss: not measured yet (1 skipped, FC rose beyond this app's doses)", app.fcLossLine())
-    expect(app.runwayStatusLine() == "Samples recorded so far: 2 (a measured rate replaces the estimate once two samples at least 6 hours apart are in, without a rise beyond this app's doses).",
+    expect(app.fcLossLine() == "FC loss: not measured yet (1 interval skipped, FC rose beyond this app's doses)", app.fcLossLine())
+    expect(app.runwayStatusLine() == "Samples recorded so far: 2 (a measured rate replaces the estimate once it has two samples at least 6 hours apart, without a rise beyond this app's doses).",
            app.runwayStatusLine())
     feedDailySamples(app, wg, [["2026-10-12T02:30:00Z", 13.5G, null], ["2026-10-13T02:30:00Z", 12.2G, null],
                                ["2026-10-14T02:30:00Z", 11.0G, null]])
@@ -4134,7 +4134,7 @@ check("2.4.7: FC that holds with no dose counts as no loss; a rise of one readin
     // a 0.1 rise with no app dose is chlorine from somewhere else
     app.state.fcHistory = [[t: epoch("2026-10-10T02:30:00Z"), fc: "6.0", settled: true], [t: epoch("2026-10-11T02:30:00Z"), fc: "6.1", settled: true]]
     expect(app.measuredFcLoss() == null, "a 0.1 rise with no app dose is skipped: ${app.measuredFcLoss()}")
-    expect(app.fcLossLine() == "FC loss: not measured yet (1 skipped, FC rose beyond this app's doses)", app.fcLossLine())
+    expect(app.fcLossLine() == "FC loss: not measured yet (1 interval skipped, FC rose beyond this app's doses)", app.fcLossLine())
 }
 
 check("2.4.7: the FC loss line sits right under the current readings, measured, set and not yet measured") {
@@ -4143,7 +4143,11 @@ check("2.4.7: the FC loss line sits right under the current readings, measured, 
     Closure top = { (app.computeAdvice().text.split("\n") as List).take(4) }
     List none = top()
     expect(none[0].startsWith("🌊 WaterGuru Dosing Advisor") && none[1].startsWith("Current: FC 5.6 ppm"), "title and readings: ${none}")
-    expect(none[2] == "FC loss: not measured yet (needs two samples a day apart with known doses)", "no history: ${none}")
+    String rule = "two samples at least 6 hours apart, without a rise beyond this app's doses"
+    expect(none[2] == "FC loss: not measured yet (needs ${rule})".toString(), "no history: ${none}")
+    expect(app.runwayStatusLine().contains("once it has ${rule}).".toString()), "the config page states the same rule: ${app.runwayStatusLine()}")
+    expect(app.computeRunway(5.6G, 39G).basis ==~ /estimated \d+\.\d ppm\/day( \(cover\))?, no sample history yet/,
+           "the runway's estimate, no dash: ${app.computeRunway(5.6G, 39G).basis}")
     expect(none[3].startsWith("Sampled: "), "the sample line follows: ${none}")
     feedDailySamples(app, wg, [["2026-10-10T02:30:00Z", 6.0G, null], ["2026-10-11T02:30:00Z", 5.5G, null]])
     List measured = top()
@@ -4165,6 +4169,50 @@ check("2.4.7: the daily summary notification carries the same FC loss figure") {
     app.fcLossPerDay = 0.8G
     msg = app.dailyChlorineSummary(app.computeAdvice())
     expect(msg.contains("pH 7.50. FC loss 0.8 ppm/day (your setting)."), "set: ${msg}")
+}
+
+check("2.4.7: skipped intervals only: the summary counts them, the runway says not measured yet, not no history") {
+    def app = newApp()
+    def wg = lossPool(app)
+    feedDailySamples(app, wg, [["2026-10-10T02:30:00Z", 6.0G, null], ["2026-10-11T02:30:00Z", 15.0G, null]])
+    expect(app.measuredFcLoss() == null && app.fcLossIntervals().skipped == 1, "nothing measured, one skipped: ${app.fcLossIntervals()}")
+    List lines = app.computeAdvice().text.split("\n") as List
+    expect(lines[2] == "FC loss: not measured yet (1 interval skipped, FC rose beyond this app's doses)", "the summary line: ${lines[2]}")
+    String basis = app.computeRunway(15.0G, 39G).basis
+    expect(basis ==~ /estimated \d+\.\d ppm\/day( \(cover\))?, not measured yet/, "the runway basis: ${basis}")
+    String runway = lines.find { it.contains("Chlorine runway") }
+    expect(runway != null && runway.endsWith(", not measured yet).") && !runway.contains("no sample history"),
+           "the summary's runway line: ${runway}")
+    // a second skipped interval: the count turns plural
+    feedDailySamples(app, wg, [["2026-10-12T02:30:00Z", 15.2G, null]])
+    expect(app.measuredFcLoss() == null, "still nothing measured: ${app.measuredFcLoss()}")
+    expect(app.fcLossLine() == "FC loss: not measured yet (2 intervals skipped, FC rose beyond this app's doses)", app.fcLossLine())
+}
+
+check("2.4.7: a corrupt fcHistory leaves the FC loss line and the runway out with a warning; the advice and the dose decision stand") {
+    def app = newApp()
+    def wg = lossPool(app)
+    Map good = app.computeAdvice()
+    expect(good.doseMl != null && good.runSeconds != null && good.text.contains("FC loss:"), "control: a dose and a loss line: ${good}")
+    app.state.fcHistory = ["corrupt", 42]
+    boolean threw = false
+    try { app.fcLossLine() } catch (e) { threw = true }
+    expect(threw, "the corrupt history does make the FC loss text throw")
+    int warnsBefore = app.logLines.count { it.startsWith("WARN") } as int
+    Map bad = app.computeAdvice()
+    expect(bad != null && bad.doseMl == good.doseMl && bad.runSeconds == good.runSeconds &&
+           bad.doseRequired == good.doseRequired && bad.doseOptional == good.doseOptional,
+           "the dose decision is unchanged: ${bad?.doseMl} / ${bad?.runSeconds} vs ${good.doseMl} / ${good.runSeconds}")
+    List lines = bad.text.split("\n") as List
+    expect(!bad.text.contains("FC loss") && lines[2].startsWith("Sampled: "), "the loss line is left out: ${lines.take(4)}")
+    expect(bad.runway == null && !bad.text.contains("Chlorine runway"), "the runway is left out too: ${bad.runway}")
+    List warns = app.logLines.findAll { it.startsWith("WARN") }.drop(warnsBefore)
+    expect(warns.count { it.contains("FC loss summary line omitted") } == 1 && warns.count { it.contains("chlorine runway omitted") } == 1,
+           "one warning each: ${warns}")
+    String msg = app.dailyChlorineSummary(bad)
+    expect(msg.contains("pH 7.50. ") && !msg.contains("FC loss") && msg.contains("add ${app.n0(good.doseMl)} mL"),
+           "the daily summary still goes out, without the figure: ${msg}")
+    expect(app.logLines.count { it.startsWith("WARN") && it.contains("FC loss daily summary omitted") } == 1, "and warns once")
 }
 
 // --------------------------------------------------------------------------- summary
