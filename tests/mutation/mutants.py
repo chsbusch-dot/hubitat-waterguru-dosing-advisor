@@ -10,8 +10,10 @@ or the build aborts, so a mutation that silently failed to apply can never be re
 Origin: the M01-M21 / PC1-PC2 set from the independent review of 5f218c9 (2.4.0), re-anchored to
 the 2.4.1 code; F1-F6 revert one 2.4.1 fix each, R1-R9 one 2.4.2 fix each (WOR-718), W1-W3 one
 2.4.3 fix each (WOR-724), X1-X12 one 2.4.4 fix each and XP1-XP3 one Pump Power Profiler 1.1.1 fix
-each (WOR-731), Y1-Y2 one 2.4.5 change each (WOR-739), Z1-Z2 one 2.4.6 item each (WOR-740), and every one
-of those must be killed by the tests that guard it.
+each (WOR-731), Y1-Y2 one 2.4.5 change each (WOR-739), Z1-Z2 one 2.4.6 item each (WOR-740), L1-L8 one
+2.4.7 change each, K1-K5 one fix each from the 2.4.7 verification round and J1-J8 one follow-up change each
+(WOR-752), and every one of those
+must be killed by the tests that guard it.
 
 A mutant edits the child app unless it is declared with mutp(), which edits the profiler. Each mutant
 runs the suite that covers its file (MUTATION.txt "suites:"); the base runs both.
@@ -302,6 +304,70 @@ mut("Z1", "killed", "item 1 reverted: a stale or missing subscription stamp no l
     ("    if (!subscriptionsCurrent()) blocks << \"the app's subscriptions are out of date after a code update; open the app and press Done\"\n", ""))
 mut("Z2", "killed", "item 2 reverted: a cutoff equal to or below the maximum runtime no longer blocks a start",
     ("    String cutoffProblem = cutoffSettingProblem()\n    if (cutoffProblem) blocks << cutoffProblem\n", ""))
+
+
+# ---- 2.4.7 (WOR-752): each change reverted (must be killed) ----
+mut("L1", "killed", "skip rule reverted: a rise beyond the app's doses counts as no loss",
+    ("        if (fb - (fa + added) >= FC_READING_STEP_PPM) {", "        if (false) {"))
+mut("L2", "killed", "reading step dropped: a rise under one step from dose rounding is skipped too",
+    ("        if (fb - (fa + added) >= FC_READING_STEP_PPM) {", "        if (fb > fa + added) {"))
+mut("L3", "killed", "no-loss intervals dropped again: a balance at or below zero is left out instead of counted as 0",
+    ("        BigDecimal balance = fa + added - fb\n",
+     "        BigDecimal balance = fa + added - fb\n        if (balance <= 0G) continue\n"))
+mut("L4", "killed", "skipped intervals are not counted",
+    ("        if (outcomes[j] == null) skipped++\n", "        if (outcomes[j] == null) { }\n"))
+mut("L5", "killed", "the summary has no FC loss line under the current readings",
+    ("    if (lossLine) out << lossLine\n", ""))
+mut("L6", "killed", "the FC loss figure ignores your fcLossPerDay setting",
+    ("    if (numSet(fcLossPerDay) && (fcLossPerDay as BigDecimal) > 0) return [rate: fcLossPerDay as BigDecimal, source: \"setting\"]\n", ""))
+mut("L7", "killed", "the daily summary notification leaves the FC loss figure out",
+    ("pH ${n2(result?.pH)}.${loss}\"", "pH ${n2(result?.pH)}.\""))
+mut("L8", "killed", "the FC loss line does not say an interval was skipped",
+    ("\"; ${skipped} skipped, FC rose beyond this app's doses\"", "\"\""))
+
+# ---- 2.4.7 verification round (WOR-752): each fix reverted (must be killed) ----
+mut("K1", "killed", "the 0.3 ppm tolerance is back: the live hand run's day counts as no loss (0.1 ppm/day)",
+    ("        if (fb - (fa + added) >= FC_READING_STEP_PPM) {", "        if (fb - (fa + added) > 0.3G) {"))
+mut("K2", "killed", "a rise of exactly one reading step counts as no loss: a hand top-up at a shock reads as a day without loss",
+    ("        if (fb - (fa + added) >= FC_READING_STEP_PPM) {", "        if (fb - (fa + added) > FC_READING_STEP_PPM) {"))
+mut("K3", "killed", "nothing measured yet but an interval skipped: the line hides the skip",
+    ("        if (none > 0) return", "        if (false) return"))
+mut("K4", "killed", "the skip label claims chlorine was added outside the app",
+    ("FC rose beyond this app's doses)\"\n        // Settled history",
+     "chlorine added outside the app)\"\n        // Settled history"))
+mut("K5", "killed", "the config page still asks for a couple of days of declines",
+    ("(a measured rate replaces the estimate once there are ${FC_LOSS_RULE_TEXT}).",
+     "(a couple of days of declines are needed before a measured rate replaces the estimate)."))
+
+# ---- 2.4.7 follow-up round (WOR-752): each change reverted (must be killed) ----
+mut("J1", "killed", "the empty FC loss line goes back to the old rule (a day apart with known doses)",
+    ("        return \"FC loss: not measured yet (needs ${FC_LOSS_RULE_TEXT})\"",
+     "        return \"FC loss: not measured yet (needs two samples a day apart with known doses)\""))
+mut("J2", "killed", "the skipped count loses its noun: \"(1 skipped, ...)\"",
+    ("(${none} interval${none == 1 ? '' : 's'} skipped,", "(${none} skipped,"))
+mut("J3", "killed", "the runway claims no sample history when intervals were skipped",
+    ("${hasHistory ? 'not measured yet' : 'no sample history yet'}", "no sample history yet"))
+mut("J4", "killed", "the summary's FC loss line is built unguarded",
+    ("    String lossLine = safeFcLossText(\"summary line\") { fcLossLine() }\n", "    String lossLine = fcLossLine()\n"))
+mut("J5", "killed", "the daily notification's FC loss figure is built unguarded",
+    ("    String loss = safeFcLossText(\"daily summary\") { fcLossDigestText() } ?: \"\"\n", "    String loss = fcLossDigestText()\n"))
+mut("J6", "killed", "the runway is computed unguarded in computeAdvice",
+    ("        try { runway = computeRunway(fc, cya) }\n", "        runway = computeRunway(fc, cya); try { }\n"))
+mut("J7", "killed", "the old cutoff default is back (21 min)",
+    ("DEFAULT_FAILSAFE_PUMP_RUN_MINUTES = 15G", "DEFAULT_FAILSAFE_PUMP_RUN_MINUTES = 21G"))
+mut("J8", "killed", "the old maximum runtime default is back (20 min)",
+    ("DEFAULT_MAX_PUMP_RUN_MINUTES = 14G", "DEFAULT_MAX_PUMP_RUN_MINUTES = 20G"))
+
+# ---- 2.4.7 text round (WOR-752): each change reverted (must be killed) ----
+mut("T1", "killed", "the config page's status line ignores your set rate",
+    ("    if (f?.source == \"setting\") {\n        String rest", "    if (false) {\n        String rest"))
+mut("T2", "killed", "the rule text goes back to \"without a rise beyond this app's doses\", FC unnamed",
+    ("\"two samples at least 6 hours apart, with no rise in FC beyond this app's doses\"",
+     "\"two samples at least 6 hours apart, without a rise beyond this app's doses\""))
+mut("T3", "killed", "settled history with no usable interval is described as needing samples",
+    ("        if (settledFcSampleCount() >= 2) return \"FC loss: not measured yet (no usable interval yet)\"\n", ""))
+mut("T4", "killed", "the runway claims no sample history unless an interval was skipped",
+    ("boolean hasHistory = settledFcSampleCount() >= 2", "boolean hasHistory = ((fcLossIntervals().skipped ?: 0) as int) > 0"))
 
 
 def build(name):
