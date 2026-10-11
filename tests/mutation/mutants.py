@@ -12,7 +12,8 @@ the 2.4.1 code; F1-F6 revert one 2.4.1 fix each, R1-R9 one 2.4.2 fix each (WOR-7
 2.4.3 fix each (WOR-724), X1-X12 one 2.4.4 fix each and XP1-XP3 one Pump Power Profiler 1.1.1 fix
 each (WOR-731), Y1-Y2 one 2.4.5 change each (WOR-739), Z1-Z2 one 2.4.6 item each (WOR-740), L1-L8 one
 2.4.7 change each, K1-K5 one fix each from the 2.4.7 verification round and J1-J8 one follow-up change each
-(WOR-752), S1-S16 one 2.4.8 SLAM-cap behaviour each, and every one of those
+(WOR-752), S1-S16 one 2.4.8 SLAM-cap behaviour each, TG1-TG11 one SLAM plausibility-guard rule each
+(WOR-755; TG, since T1-T4 were taken), and every one of those
 must be killed by the tests that guard it.
 
 A mutant edits the child app unless it is declared with mutp(), which edits the profiler. Each mutant
@@ -406,6 +407,33 @@ mut("S15", "killed", "the pump plan does not show the capped volume",
     ("${cap != null ? ' for ' + n0(doseMl) + ' mL' : ''}.", "."))
 mut("S16", "killed", "a tank-bound cap does not say the rest waits for a refill",
     ("why.contains(\"chlorine left in the tank\") ?", "false ?"))
+
+
+# ---- 2.4.8: SLAM plausibility guard, a 0.0 reading or a drop of more than 4 ppm is not pumped (must be killed) ----
+mut("TG1", "killed", "the guard also applies outside SLAM",
+    ("        if (slam && pumpDosingMode()) suspect = slamReadingProblem(fc)\n",
+     "        if (pumpDosingMode()) suspect = slamReadingProblem(fc)\n"))
+mut("TG2", "killed", "the guard also applies in ADVISORY",
+    ("        if (slam && pumpDosingMode()) suspect = slamReadingProblem(fc)\n",
+     "        if (slam) suspect = slamReadingProblem(fc)\n"))
+mut("TG3", "killed", "a 0.0 reading is not implausible",
+    ("    if (fc < FC_READING_STEP_PPM) {\n", "    if (false) {\n"))
+mut("TG4", "killed", "a drop of exactly 4.0 ppm is already implausible",
+    ("    if (drop > SLAM_MAX_FC_DROP_PPM) {\n", "    if (drop >= SLAM_MAX_FC_DROP_PPM) {\n"))
+mut("TG5", "killed", "the drop rule is gone",
+    ("    if (drop > SLAM_MAX_FC_DROP_PPM) {\n", "    if (false) {\n"))
+mut("TG6", "killed", "the sample is compared with itself (processNewSample recorded it first)",
+    ("        if (t < current && (previousT == null || t > previousT))", "        if (t <= current && (previousT == null || t > previousT))"))
+mut("TG7", "killed", "the drop rule also compares with a sample more than 48 h old",
+    ("    if (current - previousT > SLAM_PREVIOUS_SAMPLE_MAX_HOURS * 3600000L) return null\n", ""))
+mut("TG8", "killed", "the oldest earlier sample is taken instead of the newest",
+    ("        if (t < current && (previousT == null || t > previousT))", "        if (t < current && (previousT == null || t < previousT))"))
+mut("TG9", "killed", "doseSafetyBlocks does not refuse an implausible reading (AUTO pumps it)",
+    ("    if (result?.doseSuspect) blocks << result.doseSuspect.toString()\n", ""))
+mut("TG10", "killed", "APPROVAL queues an implausible reading",
+    ("        if (result.doseSuspect) {\n", "        if (false) {\n"))
+mut("TG11", "killed", "the FREE CHLORINE block does not say why the dose is not pumped",
+    ("        if (suspect != null) lines << \"  ⚠ Not pumped: ${suspect}.\"\n", ""))
 
 
 def build(name):

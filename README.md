@@ -256,6 +256,18 @@ safety check still applies to the capped dose, and a cap under the minimum dose 
 as before. Outside SLAM a dose over a limit is still blocked, since it usually means a bad
 reading.
 
+Because a capped SLAM dose is no longer stopped by those limits, SLAM checks the reading
+itself. With the pump in APPROVAL or AUTO mode, a free chlorine reading of 0.0 ppm, or one more
+than 4 ppm below the previous sample, is not pumped: nothing runs, nothing is queued for
+approval, and the pump notice says to check the reading, for example "Chlorine dose BLOCKED: FC
+read 0.0 ppm, which in SLAM looks like a sensor or cassette fault; check the reading before
+dosing". The FREE CHLORINE block still shows the capped amount as advice, with a "Not pumped"
+line giving the same reason. The drop is measured against the newest earlier sample, and only
+when that sample is at most 48 hours older; without one, only the 0.0 check applies. A normal
+SLAM night, such as FC 6.0 one evening and 5.2 the next, still pumps the capped dose. SLAM mode
+is on by default, so an install in APPROVAL or AUTO mode that never changed it now pumps capped
+SLAM doses where large ones used to be blocked.
+
 ### Chlorine runway (algae forecast)
 
 Algae is held off by keeping FC above a CYA-linked floor — the [TFP](https://www.troublefreepool.com/)

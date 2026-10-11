@@ -4438,6 +4438,184 @@ check("2.4.8: ADVISORY keeps the whole SLAM amount (no pump, no cap); AUTO on th
     expect(bd(r.doseMl) == 3000G && r.doseCapped == true, "AUTO caps: ${r.doseMl}")
 }
 
+// ----------------------------------------------------------------------- 2.4.8: SLAM plausibility guard
+
+/** A previous sample delivered through the live path: the integration's batch, processNewSample 20 s later, which
+ *  records it in fcHistory. Delivered in ADVISORY so it doses nothing; the mode is put back after. */
+def slamPrevious = { app, wg, String iso, BigDecimal fc ->
+    String mode = app.dosingMode
+    app.dosingMode = "ADVISORY"
+    slamSample(app, wg, OCT10_SAMPLE + [LastMeasurement: iso, freeChlorine: fc])
+    app.dosingMode = mode
+    expect(app.state.fcHistory?.any { it.t == epoch(iso) && it.fc == fc.toString() && it.settled == true },
+           "the previous sample is in the history: ${app.state.fcHistory}")
+}
+
+/** Nothing ran, nothing was reserved, queued or booked (slamApp's tank holds 56544 mL). */
+def nothingBooked = { app, d ->
+    expect(d.pump.commands.isEmpty() && app.state.activeDose == null && app.state.pendingDose == null,
+           "nothing runs or is queued: ${d.pump.commands} / ${app.state.activeDose} / ${app.state.pendingDose}")
+    expect(app.state.doseMlToday == "0" && app.state.lastDosedSample == null && app.state.lastAttempt == null &&
+           app.state.lastDose == null && bd(app.state.tankRemainingMl) == 56544G,
+           "nothing reserved or booked: ${app.state.doseMlToday} / ${app.state.lastDosedSample} / ${app.state.lastAttempt} / ${app.state.tankRemainingMl}")
+}
+
+def SLAM_ZERO = "FC read 0.0 ppm, which in SLAM looks like a sensor or cassette fault; check the reading before dosing"
+/** What c8716b6 sends for a 0.0 reading outside SLAM (TFP 0.115 x CYA 33 = 3.8 ppm needs 3002 mL); the guard leaves it alone. */
+def NON_SLAM_ZERO_NOTICE = "WaterGuru dosing: Chlorine dose BLOCKED: 3002 mL exceeds the 3000 mL single-dose limit"
+def SLAM_CAP_NOTE = "SLAM: the pump dose is capped at 3000 mL of the 6329 mL needed (single-dose limit); the rest follows with the next samples."
+
+check("2.4.8 guard (a): SLAM AUTO, FC reads 0.0: BLOCKED with the reading named, nothing pumps or is booked, the advice stays") {
+    def app = newApp()
+    def d = slamApp(app)
+    slamSample(app, d.wg, OCT10_SAMPLE + [freeChlorine: 0.0G])
+    expect(app.noticesMatching("Chlorine dose BLOCKED: ") == ["WaterGuru dosing: Chlorine dose BLOCKED: ${SLAM_ZERO}".toString()],
+           "the block notice, this reason alone: ${app.noticesMatching('BLOCKED')}")
+    expect(app.noticesMatching("start requested").isEmpty(), "no start: ${app.noticesMatching('start requested')}")
+    nothingBooked(app, d)
+    Map r = app.computeAdvice()
+    List lines = r.text.split("\n") as List
+    int plan = lines.findIndexOf { it.startsWith("  ⏱ Pump plan: ") }
+    expect(plan > 0 && lines[plan - 1].startsWith("  SLAM: the pump dose is capped at 3000 mL of the ") &&
+           lines[plan + 1] == "  ⚠ Not pumped: ${SLAM_ZERO}.".toString(),
+           "the FREE CHLORINE block keeps the capped advice and says why it is not pumped: ${plan > 0 ? lines.subList(plan - 1, plan + 2) : lines}")
+    expect(bd(r.doseMl) == 3000G && r.runSeconds == 815 && r.doseSuspect == SLAM_ZERO, "the capped amount is still the advice: ${r.doseMl} / ${r.runSeconds}")
+    expect(app.noticesMatching("FREE CHLORINE").count { it.contains("⚠ Not pumped: ${SLAM_ZERO}.") } == 1,
+           "the summary sent with the sample carries it too")
+}
+
+check("2.4.8 guard (b): previous 12.6, now 8.5 (4.1 ppm down) is BLOCKED; 12.6 to 8.6 (exactly 4.0) runs capped") {
+    def app = newApp()
+    def d = slamApp(app)
+    slamPrevious(app, d.wg, "2026-10-10T14:30:00.000Z", 12.6G)       // Oct 10, 07:30 PDT
+    slamSample(app, d.wg, OCT10_SAMPLE + [freeChlorine: 8.5G])
+    // processNewSample recorded 8.5 itself before the dose ran; the comparison is with the sample before it
+    expect(app.state.fcHistory*.fc == ["12.6", "8.5"], "both samples are in the history: ${app.state.fcHistory}")
+    String why = "FC fell 4.1 ppm since the previous sample (12.6 to 8.5 ppm), which in SLAM looks like a bad reading; check it before dosing"
+    expect(app.noticesMatching("Chlorine dose BLOCKED: ") == ["WaterGuru dosing: Chlorine dose BLOCKED: ${why}".toString()],
+           "blocked by the drop alone: ${app.noticesMatching('BLOCKED')}")
+    nothingBooked(app, d)
+    expect(app.computeAdvice().text.contains("  ⚠ Not pumped: ${why}."), "the FREE CHLORINE block says so")
+
+    def ok = newApp()
+    def d2 = slamApp(ok)
+    slamPrevious(ok, d2.wg, "2026-10-10T14:30:00.000Z", 12.6G)
+    slamSample(ok, d2.wg, OCT10_SAMPLE + [freeChlorine: 8.6G])
+    expect(ok.noticesMatching("BLOCKED").isEmpty() && d2.pump.commands == ["on"] && bd(ok.state.activeDose?.mlRaw ?: 0) == 3000G,
+           "a 4.0 ppm drop is not more than 4.0: it runs, capped: ${ok.noticesMatching('BLOCKED')} / ${ok.state.activeDose}")
+    expect(!ok.computeAdvice().text.contains("Not pumped"), "and nothing says it is held back")
+}
+
+check("2.4.8 guard (c): a 6 ppm drop from a sample 72 h old runs (only the 0.0 rule applies); from one 24 h old it is BLOCKED") {
+    def app = newApp()
+    def d = slamApp(app)
+    slamPrevious(app, d.wg, "2026-10-08T02:30:36.000Z", 11.2G)       // 72 h before the Oct 10 sample
+    slamSample(app, d.wg)                                           // FC 5.2: 6.0 ppm down
+    expect(app.noticesMatching("BLOCKED").isEmpty() && d.pump.commands == ["on"] && bd(app.state.activeDose?.mlRaw ?: 0) == 3000G &&
+           app.state.activeDose.seconds == 815, "too old to compare: it runs capped: ${app.noticesMatching('BLOCKED')} / ${app.state.activeDose}")
+    // ...but the 0.0 rule still applies against that old sample
+    def zero = newApp()
+    def dz = slamApp(zero)
+    slamPrevious(zero, dz.wg, "2026-10-08T02:30:36.000Z", 11.2G)
+    slamSample(zero, dz.wg, OCT10_SAMPLE + [freeChlorine: 0.0G])
+    expect(zero.noticesMatching("Chlorine dose BLOCKED: ") == ["WaterGuru dosing: Chlorine dose BLOCKED: ${SLAM_ZERO}".toString()],
+           "0.0 is blocked whatever the history: ${zero.noticesMatching('BLOCKED')}")
+    nothingBooked(zero, dz)
+    // control: the same drop from a sample 24 h old is judged and blocked
+    def near = newApp()
+    def dn = slamApp(near)
+    slamPrevious(near, dn.wg, "2026-10-10T02:30:36.000Z", 11.2G)
+    slamSample(near, dn.wg)
+    expect(near.noticesMatching("Chlorine dose BLOCKED: ") ==
+           ["WaterGuru dosing: Chlorine dose BLOCKED: FC fell 6.0 ppm since the previous sample (11.2 to 5.2 ppm), which in SLAM looks like a bad reading; check it before dosing"],
+           "24 h is inside the window: ${near.noticesMatching('BLOCKED')}")
+    nothingBooked(near, dn)
+}
+
+check("2.4.8 guard (d): with no previous sample a SLAM reading runs capped; a 0.0 reading is still BLOCKED") {
+    def app = newApp()
+    def d = slamApp(app)
+    expect(!app.state.fcHistory, "no FC history before the sample: ${app.state.fcHistory}")
+    slamSample(app, d.wg)
+    expect(app.state.fcHistory*.fc == ["5.2"], "only this sample: ${app.state.fcHistory}")
+    expect(app.noticesMatching("BLOCKED").isEmpty() && d.pump.commands == ["on"] && bd(app.state.activeDose?.mlRaw ?: 0) == 3000G,
+           "runs capped: ${app.noticesMatching('BLOCKED')} / ${app.state.activeDose}")
+    def zero = newApp()
+    def dz = slamApp(zero)
+    slamSample(zero, dz.wg, OCT10_SAMPLE + [freeChlorine: 0.0G])
+    expect(zero.noticesMatching("Chlorine dose BLOCKED: ") == ["WaterGuru dosing: Chlorine dose BLOCKED: ${SLAM_ZERO}".toString()],
+           "0.0 with no history: ${zero.noticesMatching('BLOCKED')}")
+    nothingBooked(zero, dz)
+}
+
+check("2.4.8 guard (e): the Oct 10 sequence (previous 6.0, now 5.2) still runs 3000 mL for 815 s; a 0.0 that night would not") {
+    // The Oct 9 19:30 sample as processNewSample stored it that evening (the source device already holds its
+    // LastMeasurement, so it cannot be delivered again as a new sample).
+    def oct9 = { a -> a.state.fcHistory = [[t: epoch("2026-10-10T02:30:20.000Z"), fc: "6.0", settled: true]] }
+    def app = newApp()
+    def d = slamApp(app)
+    oct9(app)
+    slamSample(app, d.wg)
+    expect(app.state.fcHistory*.fc == ["6.0", "5.2"], "processNewSample recorded 5.2 before the dose: ${app.state.fcHistory}")
+    def active = app.state.activeDose
+    expect(app.noticesMatching("BLOCKED").isEmpty() && d.pump.commands == ["on"] && active != null && bd(active.mlRaw) == 3000G && active.seconds == 815,
+           "3000 mL, 815 s: ${app.noticesMatching('BLOCKED')} / ${active}")
+    expect(app.noticesMatching("Chlorine pump start requested: 3000 mL for 13m 35s at 221.0 mL/min (new WaterGuru sample). ${SLAM_CAP_NOTE} Waiting").size() == 1,
+           "the start notice is the 2.4.8 one: ${app.noticesMatching('start requested')}")
+    // The comparison is with the NEWEST earlier sample: an older 12.0 (Oct 9 07:30) before the Oct 9 6.0 changes nothing.
+    def two = newApp()
+    def dt = slamApp(two)
+    two.state.fcHistory = [[t: epoch("2026-10-09T14:30:00.000Z"), fc: "12.0", settled: true],
+                           [t: epoch("2026-10-10T02:30:20.000Z"), fc: "6.0", settled: true]]
+    slamSample(two, dt.wg)
+    expect(two.noticesMatching("BLOCKED").isEmpty() && dt.pump.commands == ["on"] && bd(two.state.activeDose?.mlRaw ?: 0) == 3000G,
+           "judged against 6.0, not 12.0: ${two.noticesMatching('BLOCKED')}")
+    def zero = newApp()
+    def dz = slamApp(zero)
+    oct9(zero)
+    slamSample(zero, dz.wg, OCT10_SAMPLE + [freeChlorine: 0.0G])
+    expect(zero.noticesMatching("Chlorine dose BLOCKED: ") == ["WaterGuru dosing: Chlorine dose BLOCKED: ${SLAM_ZERO}".toString()],
+           "0.0 that night: ${zero.noticesMatching('BLOCKED')}")
+    nothingBooked(zero, dz)
+}
+
+check("2.4.8 guard (f): outside SLAM a 0.0 reading is handled exactly as on 2.4.8 before the guard; ADVISORY shows no guard line; SLAM AUTO blocks it") {
+    def app = newApp()
+    def d = slamApp(app)
+    app.slamMode = false
+    slamSample(app, d.wg, OCT10_SAMPLE + [freeChlorine: 0.0G])
+    expect(app.noticesMatching("Chlorine dose BLOCKED: ") == [NON_SLAM_ZERO_NOTICE],
+           "the notice c8716b6 sends: ${app.noticesMatching('BLOCKED')}")
+    expect(!app.computeAdvice().text.contains("Not pumped") && app.computeAdvice().doseSuspect == null, "and no guard line")
+    def adv = newApp()
+    def da = slamApp(adv, "ADVISORY")
+    slamSample(adv, da.wg, OCT10_SAMPLE + [freeChlorine: 0.0G])
+    Map r = adv.computeAdvice()
+    expect(r.doseSuspect == null && !r.text.contains("Not pumped") && adv.n0(r.doseMl) == "10442", "ADVISORY: the whole amount, no guard: ${r.doseMl}")
+    def on = newApp()
+    def don = slamApp(on)
+    slamSample(on, don.wg, OCT10_SAMPLE + [freeChlorine: 0.0G])
+    expect(on.noticesMatching("Chlorine dose BLOCKED: ") == ["WaterGuru dosing: Chlorine dose BLOCKED: ${SLAM_ZERO}".toString()],
+           "SLAM AUTO: the guard: ${on.noticesMatching('BLOCKED')}")
+}
+
+check("2.4.8 guard (g): APPROVAL with a 0.0 SLAM reading queues nothing and says why; a plausible one is queued") {
+    def app = newApp()
+    def d = slamApp(app, "APPROVAL")
+    slamSample(app, d.wg, OCT10_SAMPLE + [freeChlorine: 0.0G])
+    expect(app.state.pendingDose == null && app.noticesMatching("queued").isEmpty(), "nothing queued: ${app.state.pendingDose} / ${app.noticesMatching('queued')}")
+    expect(app.noticesMatching("Chlorine dose BLOCKED: ") == ["WaterGuru dosing: Chlorine dose BLOCKED: ${SLAM_ZERO}".toString()],
+           "the block notice: ${app.noticesMatching('BLOCKED')}")
+    app.advance(60_000L)
+    app.appButtonHandler("btnRunPending")
+    expect(app.noticesMatching("No pending chlorine dose is available.").size() == 1, "approve finds nothing to run")
+    nothingBooked(app, d)
+    def ok = newApp()
+    def d2 = slamApp(ok, "APPROVAL")
+    slamSample(ok, d2.wg)
+    expect(ok.state.pendingDose?.ml == "3000" && ok.noticesMatching("BLOCKED").isEmpty(), "5.2 is queued, capped: ${ok.state.pendingDose}")
+}
+
 // --------------------------------------------------------------------------- summary
 
 println ""
