@@ -126,13 +126,13 @@ pump may run; the others shape the dose.
 | **Limit AUTO mode to one completed dose per calendar day** | on | A second AUTO dose on the same day is blocked, whatever the reading says. A failed attempt counts too. | yes |
 | **Maximum WaterGuru sample age (hours)** | 18 | No dose on a reading older than this. | yes |
 | **Minimum dose to run (mL)** | 50 | A smaller calculated dose is not run. | no |
-| **Maximum single dose (mL)** | 3000 | A larger calculated dose is blocked, not capped. At the default 185 mL/min a 14 minute run is about 2590 mL, so the maximum runtime, not this 3000 mL cap, bounds a single dose unless the pump is faster. | yes |
-| **Maximum total dose per day (mL)** | 3500 | Blocks a dose that would take the day's total (including reserved failed attempts) over this. | yes |
-| **Absolute maximum pump runtime (minutes)** | 14 | A dose whose runtime would exceed this is blocked. | yes |
+| **Maximum single dose (mL)** | 3000 | A larger calculated dose is blocked, not capped (in SLAM mode it is capped to this; see the dosing model). At the default 185 mL/min a 14 minute run is about 2590 mL, so the maximum runtime, not this 3000 mL cap, bounds a single dose unless the pump is faster. | yes |
+| **Maximum total dose per day (mL)** | 3500 | Blocks a dose that would take the day's total (including reserved failed attempts) over this; in SLAM mode the dose is capped to what is left. | yes |
+| **Absolute maximum pump runtime (minutes)** | 14 | A dose whose runtime would exceed this is blocked; in SLAM mode it is capped to this runtime. | yes |
 | **Block dosing below pH / above pH** | 6.8 / 8.2 | No dose outside this pH range. | yes |
 | **Arm an independent emergency cutoff for every pump run** | on | A second, independent OFF timer for every pump start, retried until the switch freshly reports off. The last backstop. | yes |
 | **Independent emergency cutoff after this many minutes** | 15 | When the cutoff fires. It must be later than the maximum runtime, or no dose can start and the page shows the problem in red. | yes |
-| **Chlorine container capacity** and **low-tank warning percent** | 1 gal, 20 % | The tank estimate: a dose larger than what is estimated to remain is blocked, and a low tank sends a warning. | yes |
+| **Chlorine container capacity** and **low-tank warning percent** | 1 gal, 20 % | The tank estimate: a dose larger than what is estimated to remain is blocked (in SLAM mode capped to it), and a low tank sends a warning. | yes |
 
 Two checks run before every start and are reported like any other block:
 
@@ -245,6 +245,30 @@ fl oz = (targetFC − FC) × (volume ÷ 10000) × 10.7 × (12.5 ÷ chlorine%)
 result is reported in fl oz, cups (÷8) and gallons (÷128). When FC is at or above
 target the app advises holding (in SLAM mode, maintaining the SLAM level and
 retesting) rather than dosing.
+
+In SLAM mode with the pump in APPROVAL or AUTO mode, a dose larger than the pump limits is
+capped instead of blocked: the pump runs the smallest of the dose needed, the maximum single
+dose, what the maximum daily total leaves for today, what the maximum runtime pumps at your
+pump rate, and what is left in the tank, and the rest follows with the next samples. The
+summary and the notices say so, for example "SLAM: the pump dose is capped at 3000 mL of the
+6329 mL needed (single-dose limit); the rest follows with the next samples." Every other
+safety check still applies to the capped dose, and a cap under the minimum dose is blocked
+as before. Outside SLAM a dose over a limit is still blocked, since it usually means a bad
+reading.
+
+Because a capped SLAM dose is no longer stopped by those limits, SLAM checks the reading
+itself. With the pump in APPROVAL or AUTO mode, a free chlorine reading of 0.0 ppm, or one more
+than 4 ppm below the previous sample, is not pumped: nothing runs, nothing is queued for
+approval, and the pump notice says to check the reading, for example "Chlorine dose BLOCKED: FC
+read 0.0 ppm, which in SLAM looks like a sensor or cassette fault; check the reading before
+dosing". The FREE CHLORINE block still shows the capped amount as advice, with a "Not pumped"
+line giving the same reason. The daily summary, the only text sent when "Notify automatically
+on each new WaterGuru sample" is off, reads "Daily pool chlorine: not pumped." followed by the
+reason, and leaves out the cap note. The drop is measured against the newest earlier sample, and only
+when that sample is at most 48 hours older; without one, only the 0.0 check applies. A normal
+SLAM night, such as FC 6.0 one evening and 5.2 the next, still pumps the capped dose. SLAM mode
+is on by default, so an install in APPROVAL or AUTO mode that never changed it now pumps capped
+SLAM doses where large ones used to be blocked.
 
 ### Chlorine runway (algae forecast)
 

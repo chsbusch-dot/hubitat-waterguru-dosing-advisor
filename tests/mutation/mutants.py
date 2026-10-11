@@ -12,7 +12,8 @@ the 2.4.1 code; F1-F6 revert one 2.4.1 fix each, R1-R9 one 2.4.2 fix each (WOR-7
 2.4.3 fix each (WOR-724), X1-X12 one 2.4.4 fix each and XP1-XP3 one Pump Power Profiler 1.1.1 fix
 each (WOR-731), Y1-Y2 one 2.4.5 change each (WOR-739), Z1-Z2 one 2.4.6 item each (WOR-740), L1-L8 one
 2.4.7 change each, K1-K5 one fix each from the 2.4.7 verification round and J1-J8 one follow-up change each
-(WOR-752), and every one of those
+(WOR-752), S1-S16 one 2.4.8 SLAM-cap behaviour each, TG1-TG12 one SLAM plausibility-guard rule each
+(WOR-755; TG, since T1-T4 were taken), and every one of those
 must be killed by the tests that guard it.
 
 A mutant edits the child app unless it is declared with mutp(), which edits the profiler. Each mutant
@@ -368,6 +369,73 @@ mut("T3", "killed", "settled history with no usable interval is described as nee
     ("        if (settledFcSampleCount() >= 2) return \"FC loss: not measured yet (no usable interval yet)\"\n", ""))
 mut("T4", "killed", "the runway claims no sample history unless an interval was skipped",
     ("boolean hasHistory = settledFcSampleCount() >= 2", "boolean hasHistory = ((fcLossIntervals().skipped ?: 0) as int) > 0"))
+
+
+# ---- 2.4.8: SLAM doses capped to the limits instead of blocked (must be killed) ----
+mut("S1", "killed", "SLAM is never capped: a deficit over a limit is blocked whole again (the Oct 10 incident)",
+    ("            if (slam && pumpDosingMode()) cap = slamDoseCap(doseMl, pumpRate)\n",
+     "            if (false && slam && pumpDosingMode()) cap = slamDoseCap(doseMl, pumpRate)\n"))
+mut("S2", "killed", "the cap also applies outside SLAM",
+    ("            if (slam && pumpDosingMode()) cap = slamDoseCap(doseMl, pumpRate)\n",
+     "            if (pumpDosingMode()) cap = slamDoseCap(doseMl, pumpRate)\n"))
+mut("S3", "killed", "the cap also shrinks the ADVISORY advice",
+    ("            if (slam && pumpDosingMode()) cap = slamDoseCap(doseMl, pumpRate)\n",
+     "            if (slam) cap = slamDoseCap(doseMl, pumpRate)\n"))
+mut("S4", "killed", "the single-dose limit is left out of the cap",
+    ("    if (maxSingle != null) limits << [maxSingle, \"single-dose limit\"]\n", ""))
+mut("S5", "killed", "the daily limit ignores what was dosed today",
+    ("        limits << [maxDaily - today, ", "        limits << [maxDaily, "))
+mut("S6", "killed", "the runtime limit is left out of the cap",
+    ("    if (maxMinutes != null) limits << [maxMinutes * rate, \"runtime limit\"]\n", ""))
+mut("S7", "killed", "the tank is left out of the cap",
+    ("    if (tank != null) limits << [tank, \"chlorine left in the tank\"]\n", ""))
+mut("S8", "killed", "the capped runtime is rounded up past a runtime limit that is not a whole second",
+    ("    if (maxMinutes != null && seconds > maxMinutes * 60G) {", "    if (false && maxMinutes != null && seconds > maxMinutes * 60G) {"))
+mut("S9", "killed", "a capped dose under the minimum is still capped (blocked as below the minimum instead)",
+    ("(minMl != null && ml < minMl)) return null", "false) return null"))
+mut("S10", "killed", "the runtime is not recomputed from the capped volume",
+    ("            runSeconds = cap.seconds as Integer\n", ""))
+mut("S11", "killed", "the FREE CHLORINE block does not say the dose is capped",
+    ("            lines << \"  ${cap.note}\"\n", ""))
+mut("S12", "killed", "the start notice does not say the dose is capped",
+    ("(${trigger}). ${capNoteText(result)}Waiting", "(${trigger}). Waiting"))
+mut("S13", "killed", "the APPROVAL queue notice does not say the dose is capped",
+    ("${capNoteText(result)}Open the dosing app", "Open the dosing app"))
+mut("S14", "killed", "the daily summary line does not say the dose is capped",
+    ("(${kind}). ${capNoteText(result)}${readings}", "(${kind}). ${readings}"))
+mut("S15", "killed", "the pump plan does not show the capped volume",
+    ("${cap != null ? ' for ' + n0(doseMl) + ' mL' : ''}.", "."))
+mut("S16", "killed", "a tank-bound cap does not say the rest waits for a refill",
+    ("why.contains(\"chlorine left in the tank\") ?", "false ?"))
+
+
+# ---- 2.4.8: SLAM plausibility guard, a 0.0 reading or a drop of more than 4 ppm is not pumped (must be killed) ----
+mut("TG1", "killed", "the guard also applies outside SLAM",
+    ("        if (slam && pumpDosingMode()) suspect = slamReadingProblem(fc)\n",
+     "        if (pumpDosingMode()) suspect = slamReadingProblem(fc)\n"))
+mut("TG2", "killed", "the guard also applies in ADVISORY",
+    ("        if (slam && pumpDosingMode()) suspect = slamReadingProblem(fc)\n",
+     "        if (slam) suspect = slamReadingProblem(fc)\n"))
+mut("TG3", "killed", "a 0.0 reading is not implausible",
+    ("    if (fc < FC_READING_STEP_PPM) {\n", "    if (false) {\n"))
+mut("TG4", "killed", "a drop of exactly 4.0 ppm is already implausible",
+    ("    if (drop > SLAM_MAX_FC_DROP_PPM) {\n", "    if (drop >= SLAM_MAX_FC_DROP_PPM) {\n"))
+mut("TG5", "killed", "the drop rule is gone",
+    ("    if (drop > SLAM_MAX_FC_DROP_PPM) {\n", "    if (false) {\n"))
+mut("TG6", "killed", "the sample is compared with itself (processNewSample recorded it first)",
+    ("        if (t < current && (previousT == null || t > previousT))", "        if (t <= current && (previousT == null || t > previousT))"))
+mut("TG7", "killed", "the drop rule also compares with a sample more than 48 h old",
+    ("    if (current - previousT > SLAM_PREVIOUS_SAMPLE_MAX_HOURS * 3600000L) return null\n", ""))
+mut("TG8", "killed", "the oldest earlier sample is taken instead of the newest",
+    ("        if (t < current && (previousT == null || t > previousT))", "        if (t < current && (previousT == null || t < previousT))"))
+mut("TG9", "killed", "doseSafetyBlocks does not refuse an implausible reading (AUTO pumps it)",
+    ("    if (result?.doseSuspect) blocks << result.doseSuspect.toString()\n", ""))
+mut("TG10", "killed", "APPROVAL queues an implausible reading",
+    ("        if (result.doseSuspect) {\n", "        if (false) {\n"))
+mut("TG11", "killed", "the FREE CHLORINE block does not say why the dose is not pumped",
+    ("        if (suspect != null) lines << \"  ⚠ Not pumped: ${suspect}.\"\n", ""))
+mut("TG12", "killed", "the daily summary of an implausible reading reads as a capped dose (live: autoRun off, digest on)",
+    ("    if (result?.doseSuspect) return \"Daily pool chlorine: not pumped.", "    if (false) return \"Daily pool chlorine: not pumped."))
 
 
 def build(name):
