@@ -27,6 +27,22 @@
  * All doses are ESTIMATES. Always confirm with your own test kit before adding.
  *
  * Version history
+ *   2.4.8 - SLAM doses are capped to the pump limits instead of blocked. On 2026-10-10 at 19:45 SLAM
+ *           (0.40 x CYA 33 = 13.2 ppm) asked 6329 mL for FC 5.2, 28m 39s at 221 mL/min, and doseSafetyBlocks
+ *           refused it whole: over the 3000 mL single-dose limit, the 14 minute runtime limit and the 3500 mL
+ *           daily limit. Blocking a dose far over a limit is right outside SLAM, where it usually means a bad
+ *           FC reading, but under SLAM a large deficit is the owner's intent, so SLAM could never dose. Now,
+ *           with SLAM's target in effect and the pump in APPROVAL or AUTO, computeFc sizes the pump dose to the
+ *           smallest of the deficit, the single-dose limit, what the daily limit leaves today, what the
+ *           runtime limit pumps at the set rate and what the tank holds, recomputes the runtime from it
+ *           (never over the runtime limit) and records the cap and the whole deficit on the result. The Oct 10
+ *           case becomes 3000 mL in 13m 35s. A cap that would fall under the minimum dose is not applied, so
+ *           that dose is blocked whole with the existing reasons. Every other guard (pH window, sample age,
+ *           sample already dosed, one AUTO dose a day, AUTO window, faults, subscriptions, cutoff setting,
+ *           pump already on, tank) still judges the capped dose. The FREE CHLORINE block, the pump plan, the
+ *           start and APPROVAL notices and the daily summary say "SLAM: the pump dose is capped at 3000 mL of
+ *           the 6329 mL needed (single-dose limit); the rest follows with the next samples." Outside SLAM,
+ *           and in ADVISORY mode, nothing changes.
  *   2.4.7 - The daily FC loss in the summary (WOR-752), and new pump runtime defaults. The loss figure feeds
  *           only the text, the algae runway and the tile footer, never a dose amount or a safety check. (1) A line
  *           right under "Current: ..." gives the measured or set figure the runway uses: "FC loss: 0.2 ppm/day
@@ -256,7 +272,7 @@
 
 import groovy.transform.Field
 
-def appVersion() { "2.4.7" }
+def appVersion() { "2.4.8" }
 
 definition(
     name:        "WaterGuru Dosing Advisor Pool",
@@ -1197,6 +1213,11 @@ private void sendDailyChlorineSummary(boolean force = false, String trigger = "d
     state.lastDailySummaryDate = today
 }
 
+/** A capped SLAM dose's note followed by a space, for a notice; "" for any other dose. */
+private String capNoteText(Map result) {
+    return (result?.doseCapped == true && result?.doseCapNote) ? "${result.doseCapNote} ".toString() : ""
+}
+
 private String dailyChlorineSummary(Map result) {
     String sampled = result?.sampled ? " Sample: ${result.sampled}." : ""
     String loss = safeFcLossText("daily summary") { fcLossDigestText() } ?: ""
@@ -1205,7 +1226,7 @@ private String dailyChlorineSummary(Map result) {
     if (result?.doseMl != null && result?.runSeconds != null) {
         BigDecimal rate = firstNum(pumpRateMlPerMin, DEFAULT_PUMP_RATE_ML_MIN)
         String kind = result.doseOptional == true ? "optional top-up" : "dose"
-        return "Daily pool chlorine: add ${n0(result.doseMl)} mL of ${n1(firstNum(chlorinePctOverride, attrNum('chlorineProductPct'), 12.5G))}% liquid chlorine; run ${pumpSwitch?.displayName ?: 'the pump'} for ${formatDuration(result.runSeconds as Integer)} at ${n1(rate)} mL/min (${kind}). ${readings} ${tank}${sampled}"
+        return "Daily pool chlorine: add ${n0(result.doseMl)} mL of ${n1(firstNum(chlorinePctOverride, attrNum('chlorineProductPct'), 12.5G))}% liquid chlorine; run ${pumpSwitch?.displayName ?: 'the pump'} for ${formatDuration(result.runSeconds as Integer)} at ${n1(rate)} mL/min (${kind}). ${capNoteText(result)}${readings} ${tank}${sampled}"
     }
     return "Daily pool chlorine: add 0 mL; pump runtime 0 seconds. ${readings} ${tank}${sampled}"
 }
@@ -1386,6 +1407,7 @@ private Map computeAdvice() {
             headline: headline, fcSummary: fcResult.fcSummary,
             fcVal: fcResult.fcVal, fcTarget: fcResult.target,
             doseMl: fcResult.doseMl, runSeconds: fcResult.runSeconds,
+            doseCapped: fcResult.capped == true, doseDeficitMl: fcResult.deficitMl, doseCapNote: fcResult.capNote,
             doseRequired: fcResult.required, doseOptional: fcResult.optional,
             pH: ph, sampleKey: attrRaw("LastMeasurement"),
             runway: runway, sampled: sampled, label: label]
@@ -1402,6 +1424,7 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
     String banner = null
     BigDecimal doseMl = null
     Integer runSeconds = null
+    Map cap = null             // SLAM: the dose the limits allow, when they are smaller than the deficit
 
     // Determine the FC target.
     BigDecimal target
@@ -1453,9 +1476,18 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
         BigDecimal pumpRate = firstNum(pumpRateMlPerMin, DEFAULT_PUMP_RATE_ML_MIN)
         if (pumpRate != null && pumpRate > 0) {
             runSeconds = Math.max(1, Math.ceil((doseMl / pumpRate * 60G).doubleValue()) as Integer)
+            // SLAM holds FC far above the everyday target on purpose, so a deficit over the pump limits is the
+            // owner's intent, not a suspect reading: the pump doses what the limits allow and the rest follows
+            // with the next samples. Outside SLAM a dose over a limit is still blocked whole.
+            if (slam && pumpDosingMode()) cap = slamDoseCap(doseMl, pumpRate)
         }
         lines << "  ➕ ${verb}: ${flozUnits(floz)} / ${n0(doseMl)} mL of liquid chlorine (${n1(chlorinePct)}%) to raise FC ${n1(ppmGap)} ppm to target."
-        if (runSeconds != null) lines << "  ⏱ Pump plan: ${formatDuration(runSeconds)} at ${n0(pumpRate)} mL/min."
+        if (cap != null) {
+            lines << "  ${cap.note}"
+            doseMl = cap.ml as BigDecimal
+            runSeconds = cap.seconds as Integer
+        }
+        if (runSeconds != null) lines << "  ⏱ Pump plan: ${formatDuration(runSeconds)} at ${n0(pumpRate)} mL/min${cap != null ? ' for ' + n0(doseMl) + ' mL' : ''}."
         chip = "${optional ? 'Top up' : 'Add'} ${shortVol(floz)} chlorine"
         action = true
         if (ppmGap > 8G) warnings << "Large chlorine addition (+${n1(ppmGap)} ppm) — add in stages and retest between doses."
@@ -1470,7 +1502,58 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
     return [lines: lines, action: action, slam: slam, banner: banner,
             required: required, optional: optional, chip: chip, fcVal: fc, target: target,
             doseMl: doseMl, runSeconds: runSeconds,
+            capped: cap != null, deficitMl: cap?.deficit, capNote: cap?.note,
             fcSummary: "FC ${n1(fc)} → ${n1(target)} ppm"]
+}
+
+/** APPROVAL and AUTO run the pump; ADVISORY only advises, so its advice keeps the whole amount. */
+private boolean pumpDosingMode() {
+    String mode = (dosingMode ?: "ADVISORY").toString()
+    return mode == "APPROVAL" || mode == "AUTO"
+}
+
+/**
+ * SLAM: the largest pump dose the limits allow now, or null when no limit is below the deficit.
+ *
+ * The dose is the smallest of the deficit, the single-dose limit, what the daily limit leaves today, what the
+ * runtime limit pumps at this rate and what the tank holds. The runtime is recomputed from that volume and
+ * never exceeds the runtime limit (rounded down to a whole second, the volume with it). Null as well when the
+ * capped dose would fall under the minimum dose: the full deficit then goes to doseSafetyBlocks and is
+ * blocked with its own reasons, as outside SLAM. Every other guard in doseSafetyBlocks still judges the
+ * capped dose; this only sizes it.
+ */
+private Map slamDoseCap(BigDecimal deficit, BigDecimal rate) {
+    if (deficit == null || deficit <= 0G || rate == null || rate <= 0G) return null
+    List limits = []
+    BigDecimal maxSingle = firstNum(maxSingleDoseMl, 3000G)
+    if (maxSingle != null) limits << [maxSingle, "single-dose limit"]
+    BigDecimal maxDaily = firstNum(maxDailyDoseMl, 3500G)
+    if (maxDaily != null) {
+        BigDecimal today = doseMlToday()
+        limits << [maxDaily - today, today > 0G ? "daily limit, ${n0(today)} mL already dosed today".toString() : "daily limit"]
+    }
+    BigDecimal maxMinutes = maxRunMinutes()
+    if (maxMinutes != null) limits << [maxMinutes * rate, "runtime limit"]
+    BigDecimal tank = tankRemainingMl()
+    if (tank != null) limits << [tank, "chlorine left in the tank"]
+
+    BigDecimal ml = deficit
+    limits.each { if ((it[0] as BigDecimal) < ml) ml = it[0] as BigDecimal }
+    if (ml >= deficit) return null
+    List why = limits.findAll { (it[0] as BigDecimal).compareTo(ml) == 0 }.collect { it[1] }
+
+    Integer seconds = Math.ceil((ml / rate * 60G).doubleValue()) as Integer
+    if (maxMinutes != null && seconds > maxMinutes * 60G) {
+        seconds = Math.floor((maxMinutes * 60G).doubleValue()) as Integer
+        ml = seconds * rate / 60G
+    }
+    BigDecimal minMl = firstNum(minDoseMl, 50G)
+    if (seconds < 1 || ml <= 0G || (minMl != null && ml < minMl)) return null
+
+    String rest = why.contains("chlorine left in the tank") ? "the rest follows with the next samples once the tank is refilled" :
+                                                              "the rest follows with the next samples"
+    String note = "SLAM: the pump dose is capped at ${n0(ml)} mL of the ${n0(deficit)} mL needed (${why.join(' and ')}); ${rest}."
+    return [ml: ml, seconds: seconds, deficit: deficit, why: why, note: note]
 }
 
 /** Keep WaterGuru's dose advice lines; drop its maintenance steps, and its chlorine lines unless the
@@ -1596,7 +1679,7 @@ private void handleDoseDecision(Map result, String trigger) {
     }
     if (mode == "APPROVAL") {
         state.pendingDose = doseState(result)
-        sendPumpNotice("WaterGuru queued ${n0(result.doseMl)} mL chlorine (${formatDuration(result.runSeconds as Integer)}). Open the dosing app to approve it.")
+        sendPumpNotice("WaterGuru queued ${n0(result.doseMl)} mL chlorine (${formatDuration(result.runSeconds as Integer)}). ${capNoteText(result)}Open the dosing app to approve it.")
         return
     }
     if (mode == "AUTO") startDose(result, trigger)
@@ -1686,7 +1769,7 @@ private void startDose(Map result, String trigger) {
     }
 
     state.remove("pendingDose")
-    String msg = "Chlorine pump start requested: ${n0(ml)} mL for ${formatDuration(seconds)} at ${n1(firstNum(pumpRateMlPerMin, DEFAULT_PUMP_RATE_ML_MIN))} mL/min (${trigger}). Waiting for a fresh reading to confirm the pump is actually running before reporting success."
+    String msg = "Chlorine pump start requested: ${n0(ml)} mL for ${formatDuration(seconds)} at ${n1(firstNum(pumpRateMlPerMin, DEFAULT_PUMP_RATE_ML_MIN))} mL/min (${trigger}). ${capNoteText(result)}Waiting for a fresh reading to confirm the pump is actually running before reporting success."
     log.warn "WaterGuru Dosing Advisor: ${msg}"
     sendPumpNotice(msg)
 }
