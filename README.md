@@ -262,7 +262,9 @@ than 4 ppm below the previous sample, is not pumped: nothing runs, nothing is qu
 approval, and the pump notice says to check the reading, for example "Chlorine dose BLOCKED: FC
 read 0.0 ppm, which in SLAM looks like a sensor or cassette fault; check the reading before
 dosing". The FREE CHLORINE block still shows the capped amount as advice, with a "Not pumped"
-line giving the same reason. The drop is measured against the newest earlier sample, and only
+line giving the same reason. The daily summary, the only text sent when "Notify automatically
+on each new WaterGuru sample" is off, reads "Daily pool chlorine: not pumped." followed by the
+reason, and leaves out the cap note. The drop is measured against the newest earlier sample, and only
 when that sample is at most 48 hours older; without one, only the 0.0 check applies. A normal
 SLAM night, such as FC 6.0 one evening and 5.2 the next, still pumps the capped dose. SLAM mode
 is on by default, so an install in APPROVAL or AUTO mode that never changed it now pumps capped

@@ -12,7 +12,7 @@ the 2.4.1 code; F1-F6 revert one 2.4.1 fix each, R1-R9 one 2.4.2 fix each (WOR-7
 2.4.3 fix each (WOR-724), X1-X12 one 2.4.4 fix each and XP1-XP3 one Pump Power Profiler 1.1.1 fix
 each (WOR-731), Y1-Y2 one 2.4.5 change each (WOR-739), Z1-Z2 one 2.4.6 item each (WOR-740), L1-L8 one
 2.4.7 change each, K1-K5 one fix each from the 2.4.7 verification round and J1-J8 one follow-up change each
-(WOR-752), S1-S16 one 2.4.8 SLAM-cap behaviour each, TG1-TG11 one SLAM plausibility-guard rule each
+(WOR-752), S1-S16 one 2.4.8 SLAM-cap behaviour each, TG1-TG12 one SLAM plausibility-guard rule each
 (WOR-755; TG, since T1-T4 were taken), and every one of those
 must be killed by the tests that guard it.
 
@@ -434,6 +434,8 @@ mut("TG10", "killed", "APPROVAL queues an implausible reading",
     ("        if (result.doseSuspect) {\n", "        if (false) {\n"))
 mut("TG11", "killed", "the FREE CHLORINE block does not say why the dose is not pumped",
     ("        if (suspect != null) lines << \"  ⚠ Not pumped: ${suspect}.\"\n", ""))
+mut("TG12", "killed", "the daily summary of an implausible reading reads as a capped dose (live: autoRun off, digest on)",
+    ("    if (result?.doseSuspect) return \"Daily pool chlorine: not pumped.", "    if (false) return \"Daily pool chlorine: not pumped."))
 
 
 def build(name):

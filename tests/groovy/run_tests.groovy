@@ -4616,6 +4616,46 @@ check("2.4.8 guard (g): APPROVAL with a 0.0 SLAM reading queues nothing and says
     expect(ok.state.pendingDose?.ml == "3000" && ok.noticesMatching("BLOCKED").isEmpty(), "5.2 is queued, capped: ${ok.state.pendingDose}")
 }
 
+check("2.4.8 guard (h): live notice settings (autoRun off, daily digest on): the one summary says not pumped and why, no cap promise") {
+    // App 2200 runs autoRun=false, dailyDigest=true: the FREE CHLORINE text never goes out, so the daily summary,
+    // sent before the BLOCKED notice, is the only place that can say why nothing was pumped.
+    def live = { a -> a.autoRun = false; a.dailyDigest = true; a.digestTime = "2026-10-10T20:00:00.000-0700" }
+    def app = newApp()
+    def d = slamApp(app)
+    live(app)
+    slamSample(app, d.wg, OCT10_SAMPLE + [freeChlorine: 0.0G])
+    List daily = app.noticesMatching("Daily pool chlorine")
+    expect(daily.size() == 1 && daily[0].contains("Daily pool chlorine: not pumped. ${SLAM_ZERO}. FC 0.0 ppm; target 13.2 ppm; pH 6.90.") &&
+           !daily[0].contains("add 3000 mL") && !daily[0].contains(SLAM_REST) && !daily[0].contains("SLAM: the pump dose is capped"),
+           "the summary says not pumped and why: ${daily}")
+    expect(app.noticesMatching("FREE CHLORINE").isEmpty(), "no full text with autoRun off: ${app.noticesMatching('FREE CHLORINE')}")
+    expect(app.noticesMatching("Chlorine dose BLOCKED: ") == ["WaterGuru dosing: Chlorine dose BLOCKED: ${SLAM_ZERO}".toString()],
+           "the block notice follows: ${app.noticesMatching('BLOCKED')}")
+    nothingBooked(app, d)
+    // a drop of more than 4 ppm reads the same way
+    def drop = newApp()
+    def dd = slamApp(drop)
+    live(drop)
+    slamPrevious(drop, dd.wg, "2026-10-10T14:30:00.000Z", 12.6G)
+    drop.state.remove("lastDailySummaryDate")
+    drop.notices.clear()
+    slamSample(drop, dd.wg, OCT10_SAMPLE + [freeChlorine: 8.5G])
+    String why = "FC fell 4.1 ppm since the previous sample (12.6 to 8.5 ppm), which in SLAM looks like a bad reading; check it before dosing"
+    List dropDaily = drop.noticesMatching("Daily pool chlorine")
+    expect(dropDaily.size() == 1 && dropDaily[0].contains("Daily pool chlorine: not pumped. ${why}. FC 8.5 ppm;") && !dropDaily[0].contains(SLAM_REST),
+           "the drop summary: ${dropDaily}")
+    nothingBooked(drop, dd)
+    // control: a normal SLAM night under the same settings still reads as the capped dose and pumps it
+    def ok = newApp()
+    def d2 = slamApp(ok)
+    live(ok)
+    slamSample(ok, d2.wg)
+    List okDaily = ok.noticesMatching("Daily pool chlorine")
+    expect(okDaily.size() == 1 && okDaily[0].contains("add 3000 mL of 12.5% liquid chlorine") && okDaily[0].contains(SLAM_REST) &&
+           !okDaily[0].contains("not pumped") && d2.pump.commands == ["on"] && ok.noticesMatching("BLOCKED").isEmpty(),
+           "the capped dose: ${okDaily} / ${d2.pump.commands}")
+}
+
 // --------------------------------------------------------------------------- summary
 
 println ""

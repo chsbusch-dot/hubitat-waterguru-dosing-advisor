@@ -54,7 +54,9 @@
  *           fault; check the reading before dosing" (or "FC fell 6.1 ppm since the previous sample (12.6 to 6.5
  *           ppm), which in SLAM looks like a bad reading; check it before dosing") and reserves nothing; APPROVAL
  *           queues nothing and sends the same notice. The FREE CHLORINE block keeps the capped advice and adds
- *           "Not pumped: <reason>." Normal SLAM nights (Oct 10: 6.0 then 5.2) still pump the capped 3000 mL.
+ *           "Not pumped: <reason>.", and the daily summary (the only text when autoRun is off, as on 2200) reads
+ *           "Daily pool chlorine: not pumped. <reason>." with no cap note. Normal SLAM nights (Oct 10: 6.0
+ *           then 5.2) still pump the capped 3000 mL.
  *   2.4.7 - The daily FC loss in the summary (WOR-752), and new pump runtime defaults. The loss figure feeds
  *           only the text, the algae runway and the tile footer, never a dose amount or a safety check. (1) A line
  *           right under "Current: ..." gives the measured or set figure the runway uses: "FC loss: 0.2 ppm/day
@@ -1243,6 +1245,9 @@ private String dailyChlorineSummary(Map result) {
     String loss = safeFcLossText("daily summary") { fcLossDigestText() } ?: ""
     String readings = "FC ${n1(result?.fcVal)} ppm; target ${n1(result?.fcTarget)} ppm; pH ${n2(result?.pH)}.${loss}"
     String tank = tankSummaryPlain()
+    // A SLAM reading the guard refused pumps nothing, so the summary (sent before the BLOCKED notice) must not
+    // read as a dose or promise the rest of a capped one.
+    if (result?.doseSuspect) return "Daily pool chlorine: not pumped. ${result.doseSuspect}. ${readings} ${tank}${sampled}"
     if (result?.doseMl != null && result?.runSeconds != null) {
         BigDecimal rate = firstNum(pumpRateMlPerMin, DEFAULT_PUMP_RATE_ML_MIN)
         String kind = result.doseOptional == true ? "optional top-up" : "dose"
