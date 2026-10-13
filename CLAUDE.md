@@ -25,7 +25,7 @@ into a real pool: treat every pump-related change as safety critical.
 | Child app instance | 2200 (app code 1242). 2199 was an orphaned clone and was deleted |
 | Tile device | 4658 (driver code 3046) |
 | Pump Power Profiler | instance 2214 (app code 1250), labelled "WaterGuru Pump Power Profiler", sampleSecs 5 since 2026-10-07 |
-| Pump plug | device 4674, Zooz ZEN05, Z-Wave node 259 |
+| Pump plug | device 4680, Zooz ZEN05, Z-Wave node 72, plain mesh without security, Command Retry on. Re-joined 2026-10-12: the old long-range S2 device 4674 (node 259) stopped decoding after a hub reboot on 2026-10-11 and was removed |
 | Notifier for 2200 and 2195 | device 4679 "Pool Chlorine (Pushover)", its own Pushover app (token in BWS as `PUSHOVER_POOL_DOSING_APP_TOKEN`), since 2026-10-07. Device 1955 "PushOver" stays the hub's shared notifier for other apps |
 | RM rule "POOL 60 seconds" | rule 2207, triggered by virtual button 4609 |
 | Maker API | app 2142 |
@@ -45,7 +45,7 @@ driver) and compare the `source` field byte for byte with the file at `origin/ma
 
 ## Safety rules (hard)
 
-- **Never switch the pump plug 4674 without Chris's explicit yes.** It doses real chlorine.
+- **Never switch the pump plug 4680 without Chris's explicit yes.** It doses real chlorine.
 - **`hub_create_backup` before ANY write** to devices, drivers, apps or the radio. From Claude Code
   the tool refuses its own key (the key is dropped on the client path, upstream issue
   kingpanther13/Hubitat-local-MCP-server#518). Chris approved (2026-10-07) taking the backup by a
@@ -57,7 +57,7 @@ driver) and compare the `source` field byte for byte with the file at `origin/ma
 - **Never use `hub_set_native_app` to WRITE settings on the custom apps 2198/2200.** It
   clones the child and orphans the original (that is how 2199 happened). Button presses are
   fine, but on MCP Rule Server 4.5.5 a press (e.g. `btnPreview`) also fires `updated()` on 2200:
-  the routine OFF + refresh goes to plug 4674, and when the plug answers after the 4 s wait Chris
+  the routine OFF + refresh goes to plug 4680, and when the plug answers after the 4 s wait Chris
   gets two notices. For a lifecycle refresh use `hub_update_app` with `triggerUpdated`.
 - The write-gate key (`bestPracticeKey`) comes from the guide section the refusal names (on
   4.5.5 for example `backup`, `update_device`, `hub_admin_write_devices`); it rotates hourly.
