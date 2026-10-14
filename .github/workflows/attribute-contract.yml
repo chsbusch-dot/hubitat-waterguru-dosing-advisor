@@ -12,7 +12,8 @@ name: attribute contract
 #                   because execution's groovy:4 accepts code the hub refuses: Pump Power Profiler
 #                   1.1.0 passed every test on 2026-10-05 and the hub would not save it.
 #
-# None of them touches a hub or a pump.
+# None of them touches a hub or a pump. The contract job also runs the Z-Wave capture tool's two log
+# parsers (tools/zwave_capture.py) against sanitized cuts of real captures.
 
 on:
   push:
@@ -30,6 +31,9 @@ jobs:
       # No dependencies: the check is regex over two Groovy files.
       - name: Enforce the tile attribute contract
         run: python tests/test_attribute_contract.py
+      # No dependencies either: fixtures in tests/fixtures/zwave/, json (to 2026-10-09) and plaintext.
+      - name: Parse both Z-Wave capture log formats
+        run: python tests/test_zwave_capture.py
 
   execution:
     runs-on: ubuntu-latest
