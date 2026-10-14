@@ -13,8 +13,9 @@ into a real pool: treat every pump-related change as safety critical.
 | `apps/WaterGuru-Dosing-Advisor-Child.groovy` | Child app "WaterGuru Dosing Advisor Pool": dosing model, pump control, stop lifecycle | yes |
 | `drivers/WaterGuru-Dosing-Tile.groovy` | Dashboard tile driver; attribute names are a contract with an external historian | yes |
 | `apps/PumpPowerProfiler.groovy` | Pump Power Profiler: samples the pump plug's meters during each run, saves CSVs to File Manager. Read-only toward the device | **no** (not in the manifest; add only if Chris asks) |
+| `tools/zwave_capture.py` | Passive Z-Wave log capture and `--analyze` of a raw log (WOR-714, WOR-771). Reads both zwaveLogsocket formats: per-frame JSON (to 2026-10-09) and the plaintext dump (hub 2.5.2.135 on). The nightly LaunchAgent was removed 2026-10-14 | no |
 | `docs/handoff-2026-10-03.md` | Hub and Z-Wave context as of 2026-10-03 (ZEN05 pump plug, profiler, the missed 19:45 dose) | n/a |
-| `tests/` | Attribute contract check and Groovy execution tests against a stubbed hub | n/a |
+| `tests/` | Attribute contract check, Groovy execution tests against a stubbed hub, Z-Wave capture parser tests | n/a |
 
 ## Live hub
 
@@ -67,10 +68,11 @@ driver) and compare the `source` field byte for byte with the file at `origin/ma
 
 ## Tests
 
-Both must pass before a PR; CI (`.github/workflows/attribute-contract.yml`) runs the same two.
+All three must pass before a PR; CI (`.github/workflows/attribute-contract.yml`) runs the same three.
 
 ```bash
 python3 tests/test_attribute_contract.py   # tile attribute contract, no dependencies
+python3 tests/test_zwave_capture.py        # tools/zwave_capture.py on sanitized fixtures, no dependencies
 bash tests/groovy/run.sh                    # child app + Pump Power Profiler vs a stubbed hub (needs docker)
                                             # (first runs tests/check_hubitat_fields.py: the hub rejects an
                                             #  @Field initializer that names another @Field; groovy:4 does not)
@@ -78,7 +80,7 @@ bash tests/groovy/run.sh                    # child app + Pump Power Profiler vs
                                             #  hub's compiler; CI job hub-compile. HUB_COMPILE=skip leaves it to CI)
 ```
 
-Neither touches a hub or a pump.
+None touches a hub or a pump.
 
 The stub models what was measured on the live hub (2026-10-04): a report whose value did not change
 reaches `filterEvents:false` subscribers as an event with a fresh date but never re-dates
