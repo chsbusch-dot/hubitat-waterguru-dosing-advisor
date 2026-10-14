@@ -13,7 +13,8 @@ the 2.4.1 code; F1-F6 revert one 2.4.1 fix each, R1-R9 one 2.4.2 fix each (WOR-7
 each (WOR-731), Y1-Y2 one 2.4.5 change each (WOR-739), Z1-Z2 one 2.4.6 item each (WOR-740), L1-L8 one
 2.4.7 change each, K1-K5 one fix each from the 2.4.7 verification round and J1-J8 one follow-up change each
 (WOR-752), S1-S16 one 2.4.8 SLAM-cap behaviour each, TG1-TG12 one SLAM plausibility-guard rule each
-(WOR-755; TG, since T1-T4 were taken), and every one of those
+(WOR-755; TG, since T1-T4 were taken), and for WOR-716 PI1 (the dosing app's own refresh), E1-E16 one
+Pump Power Profiler 1.2.0 sampling behaviour each and WM1-WM17 one wear-monitor rule each; every one of those
 must be killed by the tests that guard it.
 
 A mutant edits the child app unless it is declared with mutp(), which edits the profiler. Each mutant
@@ -436,6 +437,93 @@ mut("TG11", "killed", "the FREE CHLORINE block does not say why the dose is not 
     ("        if (suspect != null) lines << \"  ⚠ Not pumped: ${suspect}.\"\n", ""))
 mut("TG12", "killed", "the daily summary of an implausible reading reads as a capped dose (live: autoRun off, digest on)",
     ("    if (result?.doseSuspect) return \"Daily pool chlorine: not pumped.", "    if (false) return \"Daily pool chlorine: not pumped."))
+
+
+# ---- Pump Power Profiler 1.2.0 (WOR-716): the dosing app's evidence is its own (must be killed) ----
+mut("PI1", "killed", "the dosing app never sends its own refresh, so its run watch would need another app's (the profiler's 1.1.x poll)",
+    ("        if (supported) pumpSwitch.refresh()\n    } catch (e) {\n"
+     "        // A refresh that throws must not abort start verification or strand stop protection.\n",
+     "        // MUTANT: no refresh\n    } catch (e) {\n"
+     "        // A refresh that throws must not abort start verification or strand stop protection.\n"))
+
+
+# ---- Pump Power Profiler 1.2.0 (WOR-716): event-first sampling, each behaviour reverted (must be killed) ----
+mutp("E1", "killed", "a capture does not subscribe to power reports (1.1.x: the switch only)",
+     ("    subscribePower()\n    try { recordRow(reason == \"manual\" ? \"manual\" : \"on\", null) }",
+      "    try { recordRow(reason == \"manual\" ? \"manual\" : \"on\", null) }"))
+mutp("E2", "killed", "the power subscription filters out unchanged reports",
+     ("subscribe(meterDev, \"power\", \"powerHandler\", [filterEvents: false])", "subscribe(meterDev, \"power\", \"powerHandler\")"))
+mutp("E3", "killed", "no refresh after the ON",
+     ("    state.refreshDue = true\n    state.refreshes = 0\n", "    state.refreshDue = false\n    state.refreshes = 0\n"))
+mutp("E4", "killed", "no refresh after the OFF",
+     ("        state.refreshDue = true\n        runIn(REFRESH_AFTER_OFF_SECS", "        state.refreshDue = false\n        runIn(REFRESH_AFTER_OFF_SECS"))
+mutp("E5", "killed", "the refresh after the ON goes out 1 s after it, inside the plug's own report delay",
+     ("REFRESH_AFTER_ON_SECS = 5\n", "REFRESH_AFTER_ON_SECS = 1\n"))
+mutp("E6", "killed", "a power report does not restart the quiet clock: the fallback polls every fallbackSecs regardless",
+     ("    state.quietFromMs = nowMs\n    state.lastPollMs = nowMs\n    try { recordRow(\"power\"",
+      "    state.lastPollMs = nowMs\n    try { recordRow(\"power\""))
+mutp("E7", "killed", "the fallback never polls a quiet device",
+     ("    boolean fallback = !due && offAt == null && nowMs - quietFrom() >= fallbackMs()\n", "    boolean fallback = false\n"))
+mutp("E8", "killed", "the fallbackSecs setting is ignored",
+     ("    int s = fallbackSecs != null ? (fallbackSecs as Integer) : DEFAULT_FALLBACK_SECS\n", "    int s = DEFAULT_FALLBACK_SECS\n"))
+mutp("E9", "killed", "the default fallback is 30 s, shorter than the plug's 1 minute report",
+     ("DEFAULT_FALLBACK_SECS = 90\n", "DEFAULT_FALLBACK_SECS = 30\n"))
+mutp("E10", "killed", "the tailSecs setting is ignored",
+     ("    int s = tailSecs != null ? (tailSecs as Integer) : DEFAULT_TAIL_SECS\n", "    int s = DEFAULT_TAIL_SECS\n"))
+mutp("E11", "killed", "a capture never ends at 60 minutes",
+     ("    if (startMs != null && nowMs - startMs >= MAX_CAPTURE_MINUTES * 60_000L) {\n", "    if (false) {\n"))
+mutp("E12", "killed", "the power subscription outlives the capture",
+     ("    state.capturing = false\n    dropPowerSubscription()\n", "    state.capturing = false\n"))
+mutp("E13", "killed", "a Done during a capture drops its power subscription",
+     ("    if (state.capturing) subscribePower()\n", ""))
+mutp("E14", "killed", "amps from before the ON count again",
+     ("    List amps  = counted.findAll { it.a != null && (onAt == null || (it.aAt != null && (it.aAt as Long) >= onAt)) }",
+      "    List amps  = counted.findAll { it.a != null }"))
+mutp("E15", "killed", "a 1.1.x summary header is not extended",
+     ("OLDER_SUMMARY_KEY_COUNTS = [17, 19]\n", "OLDER_SUMMARY_KEY_COUNTS = [17]\n"))
+mutp("E16", "killed", "the run CSV rows lose their source and event date",
+     (",${nz(r.src)},${nz(r.evAt)}\\n\"", "\\n\""))
+
+# ---- Pump Power Profiler 1.2.0 (WOR-716): wear monitor, each rule reverted (must be killed) ----
+mutp("WM1", "killed", "the steady phase keeps the start transient",
+     ("    long from = onAt + STEADY_SKIP_START_SECS * 1000L\n", "    long from = onAt\n"))
+mutp("WM2", "killed", "the steady phase keeps the stop",
+     ("    long to = offAt - STEADY_SKIP_END_SECS * 1000L\n", "    long to = offAt\n"))
+mutp("WM3", "killed", "a run with under 60 s of steady phase is judged",
+     ("    if (to - from < WEAR_MIN_STEADY_SECS * 1000L) return null\n", ""))
+mutp("WM4", "killed", "a run without its OFF is judged",
+     ("    if (onAt == null || offAt == null) return null\n    long from", "    if (onAt == null) return null\n    long from"))
+mutp("WM5", "killed", "the median is taken over the whole history, not the last 10 runs",
+     ("    List recent = runs.size() > WEAR_MEDIAN_RUNS ? runs.drop(runs.size() - WEAR_MEDIAN_RUNS) : runs\n",
+      "    List recent = runs\n"))
+mutp("WM6", "killed", "the run is part of its own median",
+     ("    List recent = runs.size() > WEAR_MEDIAN_RUNS ? runs.drop(runs.size() - WEAR_MEDIAN_RUNS) : runs\n",
+      "    List withRun = runs + [[w: steady.w]]\n"
+      "    List recent = withRun.size() > WEAR_MEDIAN_RUNS ? withRun.drop(withRun.size() - WEAR_MEDIAN_RUNS) : withRun\n"))
+mutp("WM7", "killed", "runs are judged from the first one, with no baseline",
+     ("WEAR_MIN_REFERENCE_RUNS = 3\n", "WEAR_MIN_REFERENCE_RUNS = 1\n"))
+mutp("WM8", "killed", "a single run off the median alerts",
+     ("        if (streak == 2) {\n", "        if (streak >= 1) {\n"))
+mutp("WM9", "killed", "every run of a streak alerts",
+     ("        if (streak == 2) {\n", "        if (streak >= 2) {\n"))
+mutp("WM10", "killed", "a run within the threshold does not end the streak",
+     ("        int streak = deviates ? ((state.wearStreak ?: 0) as Integer) + 1 : 0\n",
+      "        int streak = deviates ? ((state.wearStreak ?: 0) as Integer) + 1 : ((state.wearStreak ?: 0) as Integer)\n"))
+mutp("WM11", "killed", "the wearThresholdPct setting is ignored",
+     ("    BigDecimal v = wearThresholdPct != null ? (wearThresholdPct as BigDecimal) : DEFAULT_WEAR_THRESHOLD_PCT\n",
+      "    BigDecimal v = DEFAULT_WEAR_THRESHOLD_PCT\n"))
+mutp("WM12", "killed", "only runs below the median count",
+     ("    boolean deviates = pct != null && pct.abs() > wearThreshold()\n", "    boolean deviates = pct != null && pct.negate() > wearThreshold()\n"))
+mutp("WM13", "killed", "a deviation of exactly the threshold counts",
+     ("    boolean deviates = pct != null && pct.abs() > wearThreshold()\n", "    boolean deviates = pct != null && pct.abs() >= wearThreshold()\n"))
+mutp("WM14", "killed", "the alert reaches no notification device",
+     ("        try { d.deviceNotification(msg) }\n", "        try { }\n"))
+mutp("WM15", "killed", "the wear history is not capped",
+     ("    if (runs.size() > WEAR_HISTORY_MAX) runs = runs.drop(runs.size() - WEAR_HISTORY_MAX)\n", ""))
+mutp("WM16", "killed", "Clear leaves the wear history",
+     ("        state.remove(\"wearRuns\")\n", ""))
+mutp("WM17", "killed", "the alert is not logged or kept for the page",
+     ("    state.lastWearAlert = [at: now(), msg: msg]\n    log.warn \"Pump Power Profiler: ${msg}\"\n", ""))
 
 
 def build(name):

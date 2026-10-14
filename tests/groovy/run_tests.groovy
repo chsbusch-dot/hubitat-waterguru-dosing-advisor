@@ -4656,6 +4656,64 @@ check("2.4.8 guard (h): live notice settings (autoRun off, daily digest on): the
            "the capped dose: ${okDaily} / ${d2.pump.commands}")
 }
 
+// =========================================================================== WOR-716 (Pump Power Profiler 1.2.0)
+//
+// Profiler 1.2.0 stops polling the pump plug: it listens to the plug's reports and refreshes only after the
+// ON and the OFF. These checks show that this app's start and run power evidence never needed the profiler's
+// refreshes. The plug is 4680 as configured on 2026-10-14: it reports a change of 5 W or more on its own,
+// reports power once a minute (parameter 10) and answers a refresh. No other app is subscribed or polling.
+
+/**
+ * A 13.5 minute dose (Oct 12 and 13: 814.6 s). The start gets only the plug's own change reports (no refresh
+ * is answered); during the run the plug sends its once-a-minute report and, when `answerOwnRefresh`, answers
+ * this app's own refreshes. Returns the app, the plug and how many of this app's refreshes were answered.
+ */
+def ownEvidenceDose = { boolean answerOwnRefresh ->
+    def app = newApp()
+    def pump = hubPlug(app)
+    def dose = incidentDose(app)
+    dose.doseMl = 3000G
+    dose.runSeconds = 814
+    def active = confirmedHubStart(app, pump, dose)          // ON at +0.5 s, 6.7 W at +1.5 s: change reports
+    if (active?.startConfirmed != true) throw new AssertionError("the start is confirmed on the plug's change reports, no refresh answered: ${active}")
+    long stopAt = active.stopAt as Long
+    long nextReport = app.clockMs + 60_000L
+    int seen = pump.refreshCalls
+    int answered = 0
+    while (app.clockMs < stopAt - 1_000L && app.state.activeDose?.fault == null) {
+        app.runUntil(Math.min(stopAt - 1_000L, app.clockMs + 1_000L))
+        boolean report = false
+        if (pump.refreshCalls > seen) {
+            seen = pump.refreshCalls
+            if (answerOwnRefresh) { report = true; answered++ }
+        }
+        if (app.clockMs >= nextReport) { nextReport += 60_000L; report = true }
+        if (report) app.deliverDeviceReport(pump, "power", 6.8G)
+    }
+    return [app, pump, answered]
+}
+
+check("WOR-716: a 13.5 minute dose is confirmed and watched on the plug's reports and this app's own refreshes, no profiler") {
+    def (app, pump, int answered) = ownEvidenceDose(true)
+    expect(app.state.startFault == null && app.noticesMatching("power LOST").isEmpty(), "no fault to the planned stop: ${app.state.startFault}")
+    expect(answered >= 80 && answered == pump.refreshCalls - 1, "every report but the minute ones answered this app's own refresh, about every 10 s: ${answered} of ${pump.refreshCalls}")
+    long stopAt = app.state.activeDose.stopAt as Long
+    app.runUntil(stopAt)
+    expect(pump.commands.count("off") == 1, "OFF at the planned stop: ${pump.commands.findAll { it != 'refresh' }}")
+    app.advance(450L)
+    app.deliverDeviceReport(pump, "switch", "off")
+    app.deliverDeviceReport(pump, "power", 0G)
+    expect(app.state.activeDose == null && app.state.startFault == null && app.state.lastDose?.ml == "3000", "the dose completes and is booked: ${app.state.lastDose}")
+}
+
+check("WOR-716 control: with this app's own refreshes unanswered, the 1 minute report alone aborts the run") {
+    // The positive control for the check above: the run watch needs a report at least every 30 s, so the one
+    // that carried that dose was the answer to this app's own refresh, not a profiler's or the plug's own.
+    def (app, pump, int answered) = ownEvidenceDose(false)
+    expect(answered == 0 && app.state.startFault?.kind == "power-loss", "the run is aborted as a power loss: ${app.state.startFault}")
+    expect(app.noticesMatching("no fresh power reading").size() == 1, "for missing reports: ${app.noticesMatching('power LOST')}")
+}
+
 // --------------------------------------------------------------------------- summary
 
 println ""
