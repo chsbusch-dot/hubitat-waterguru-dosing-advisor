@@ -184,6 +184,21 @@ abstract class HubitatStub extends Script {
     /** runUntil() relative to now. */
     void advance(long ms) { runUntil(clockMs + ms) }
 
+    /**
+     * A hub restart, or a scheduler that stalled: the clock moves `ms` with nothing running and no device
+     * report arriving, then every job that fell due in the gap runs at start-up, oldest first (jobs persist
+     * across a restart). The one sanctioned way to move the clock past a pending job without firing it on
+     * time; a bare `clockMs += ms` followed by fire() is refused (see fire()). `gap` runs at the end of the
+     * gap, before the catch-up: what the devices did meanwhile (a plug that now reads differently).
+     */
+    void restartAfter(long ms, Closure gap = null) {
+        clockMs += ms
+        gap?.call()
+        restarting = true
+        try { runUntil(clockMs) } finally { restarting = false }
+    }
+    private boolean restarting = false
+
     // --- logging & notifications ----------------------------------------------------
     def getLog() {
         def self = this
@@ -285,6 +300,15 @@ abstract class HubitatStub extends Script {
      * which is exactly how the old cutoff could re-arm itself and quietly postpone a deadline.
      */
     Object fire(String handler) {
+        // Another job that fell due before now would already have run on the hub. Firing this one anyway is
+        // a clock jump that silently skipped it: a test written that way can pass while a due safety job (a
+        // stop, a cutoff, a power check) never ran. Drive the clock with advance()/runUntil(), or model the
+        // gap with restartAfter(), whose catch-up is the one place several overdue jobs may run in a row.
+        def skipped = restarting ? [:] : dueAt.findAll { it.key != handler && it.value < clockMs }
+        if (skipped) {
+            throw new IllegalStateException("fire(${handler}) at ${clockMs}: ${skipped.keySet()} fell due earlier and never ran " +
+                                            "(due ${skipped.values()}); use advance()/runUntil(), or restartAfter() for a restart")
+        }
         scheduled.remove(handler)
         dueAt.remove(handler)
         Map data = jobData.remove(handler)

@@ -83,7 +83,9 @@ Neither touches a hub or a pump.
 The stub models what was measured on the live hub (2026-10-04): a report whose value did not change
 reaches `filterEvents:false` subscribers as an event with a fresh date but never re-dates
 `currentState()`, and `FakeSwitch.async` makes a command take effect only when the test delivers the
-plug's report. Write new pump tests against that (`hubPlug` in `run_tests.groovy`). The tile fake
+plug's report. Write new pump tests against that (`hubPlug` in `run_tests.groovy`). Move the clock with
+`advance()`/`runUntil()`: since 2.5.0 `fire()` throws when another job is already overdue (a bare `clockMs += N`
+used to skip due safety jobs silently), and `restartAfter(ms)` is the one way to model a hub restart. The tile fake
 also keeps `hubEvents`, the events the hub would store (a changed value, or `isStateChange: true`),
 and `collectorDoses` replays the Grafana collector's pairing on them. The profiler's tests
 (`profiler_tests.groovy`) use `FakeMeter` and the stub's File Manager (`fileStore`, `hubFilesMode`;

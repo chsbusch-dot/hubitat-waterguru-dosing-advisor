@@ -8,7 +8,7 @@ or the build aborts, so a mutation that silently failed to apply can never be re
 "surviving" mutant. A mutant is KILLED when the suite fails against it.
 
 Origin: the M01-M21 / PC1-PC2 set from the independent review of 5f218c9 (2.4.0), re-anchored to
-the 2.4.1 code; F1-F6 revert one 2.4.1 fix each, R1-R9 one 2.4.2 fix each (WOR-718), W1-W3 one
+the 2.4.1 code and asserted (killed) since 2.5.0, M21 retired as equivalent; F1-F6 revert one 2.4.1 fix each, R1-R9 one 2.4.2 fix each (WOR-718), W1-W3 one
 2.4.3 fix each (WOR-724), X1-X12 one 2.4.4 fix each and XP1-XP3 one Pump Power Profiler 1.1.1 fix
 each (WOR-731), Y1-Y2 one 2.4.5 change each (WOR-739), Z1-Z2 one 2.4.6 item each (WOR-740), L1-L8 one
 2.4.7 change each, K1-K5 one fix each from the 2.4.7 verification round and J1-J8 one follow-up change each
@@ -58,79 +58,78 @@ mut("PC2", "killed", "armEmergencyPumpCutoff always opens a fresh window (postpo
      "    if (false && existing != null && existing > nowMs) {\n        if (jobPending) {"))
 
 # ---- stop-evidence anchors on the timer paths ----
-mut("M01", "?", "verifyPumpOff accepts a cached pre-request OFF (anchor dropped)",
+mut("M01", "killed", "verifyPumpOff accepts a cached pre-request OFF (anchor dropped)",
     ("    Long since = stopEvidenceAnchor(active)\n    try {\n        if (pumpIsOff(since)) {\n"
      "            finishStop(\"Chlorine pump confirmed OFF.\")",
      "    Long since = null   // MUTANT\n    try {\n        if (pumpIsOff(since)) {\n"
      "            finishStop(\"Chlorine pump confirmed OFF.\")"))
-mut("M02", "?", "stopDose accepts a cached pre-request OFF (anchor dropped)",
+mut("M02", "killed", "stopDose accepts a cached pre-request OFF (anchor dropped)",
     ("        Long since = stopEvidenceAnchor(active)\n        if (pumpIsOff(since)) {\n"
      "            finishStop(active ? scheduledStopMessage(active) : null)",
      "        Long since = null   // MUTANT\n        if (pumpIsOff(since)) {\n"
      "            finishStop(active ? scheduledStopMessage(active) : null)"))
-mut("M03", "?", "emergencyPumpOff accepts a cached pre-request OFF (both anchors dropped)",
+mut("M03", "killed", "emergencyPumpOff accepts a cached pre-request OFF (both anchors dropped)",
     ("    Long anchor = stopEvidenceAnchor(active)\n    if (pumpIsOff(anchor)) {",
      "    Long anchor = null   // MUTANT\n    if (pumpIsOff(anchor)) {"),
     ("    if (pumpIsOff(stopEvidenceAnchor(active))) {\n        finishStop(confirmed)\n",
      "    if (pumpIsOff(null)) {\n        finishStop(confirmed)\n"))
 
 # ---- doseSafetyBlocks interlocks ----
-mut("M04", "?", "no 'a dose is already running' interlock",
+mut("M04", "killed", "no 'a dose is already running' interlock",
     ("    if (state.activeDose) blocks << \"a dose is already running\"\n", ""))
-mut("M05", "?", "no 'pump switch is already on' interlock",
+mut("M05", "killed", "no 'pump switch is already on' interlock",
     ("    if (pumpSwitch?.currentValue(\"switch\")?.toString() == \"on\") blocks << \"pump switch is already on\"\n", ""))
-mut("M06", "?", "no 'stop is still being recovered' (faultStopAt) gate",
+mut("M06", "killed", "no 'stop is still being recovered' (faultStopAt) gate",
     ("    if (state.faultStopAt != null) blocks << \"a pump stop is still being recovered\"\n", ""))
-mut("M07", "?", "no AUTO dosing-window block",
+mut("M07", "killed", "no AUTO dosing-window block",
     ("    if ((dosingMode ?: \"ADVISORY\").toString() == \"AUTO\" && !autoDoseWindowOpen()) {\n"
      "        blocks << \"outside the configured AUTO dosing window\"\n    }\n", ""))
-mut("M08", "?", "no pH safety block",
+mut("M08", "killed", "no pH safety block",
     ("    if (ph == null) blocks << \"pH reading is unavailable\"\n"
      "    else if ((loPh != null && ph < loPh) || (hiPh != null && ph > hiPh)) blocks << \"pH ${n2(ph)} is outside ${n2(loPh)}\u2013${n2(hiPh)}\"\n",
      "    // MUTANT: pH guard removed\n"))
-mut("M09", "?", "no sample-age block",
+mut("M09", "killed", "no sample-age block",
     ("    else if (maxAge != null && (now() - measured) > (maxAge * 3600000G)) blocks << \"WaterGuru sample is older than ${n1(maxAge)} hours\"\n", ""))
-mut("M10", "?", "no insufficient-tank block",
+mut("M10", "killed", "no insufficient-tank block",
     ("    } else if (ml != null && tankRemaining != null && ml > tankRemaining) {\n"
      "        blocks << \"chlorine tank has only ${n0(tankRemaining)} mL remaining; dose needs ${n0(ml)} mL\"\n    }\n",
      "    }\n"))
-mut("M11", "?", "no circulation interlock (switch or 24/7 confirmation)",
+mut("M11", "killed", "no circulation interlock (switch or 24/7 confirmation)",
     ("    if (circulationSwitch && requireCirculationOn != false && circulationSwitch.currentValue(\"switch\")?.toString() != \"on\") {\n"
      "        blocks << \"circulation/filter switch is not on\"\n    }\n"
      "    if (!circulationSwitch && circulationAlwaysOn != true) {\n"
      "        blocks << \"no circulation interlock or 24/7 circulation confirmation\"\n    }\n", ""))
-mut("M12", "?", "no single-dose volume limit and no runtime limit",
+mut("M12", "killed", "no single-dose volume limit and no runtime limit",
     ("    if (ml != null && maxSingle != null && ml > maxSingle) blocks << \"${n0(ml)} mL exceeds the ${n0(maxSingle)} mL single-dose limit\"\n", ""),
     ("    if (seconds != null && maxMinutes != null && seconds > (maxMinutes * 60G)) blocks << \"${formatDuration(seconds)} exceeds the ${n1(maxMinutes)} minute runtime limit\"\n", ""))
 
 # ---- start / run / fault lifecycle ----
-mut("M13", "?", "power-capable start confirmed WITHOUT a fresh ON (power alone)",
+mut("M13", "killed", "power-capable start confirmed WITHOUT a fresh ON (power alone)",
     ("        if (switchOnFresh && powerFresh && watts != null && watts > 0G && watts >= startPowerMinWatts()) {",
      "        if (powerFresh && watts != null && watts > 0G && watts >= startPowerMinWatts()) {"))
-mut("M14", "?", "power loss latches a fault but never requests OFF",
+mut("M14", "killed", "power loss latches a fault but never requests OFF",
     ("    safeStopPump(\"the confirmed run lost power\", false)\n", "    // MUTANT: no stop on power loss\n"))
-mut("M15", "?", "acknowledgement ignores an active (unfinished) stop",
+mut("M15", "killed", "acknowledgement ignores an active (unfinished) stop",
     ("    if (state.activeDose != null) {\n"
      "        sendPumpNotice(\"Cannot acknowledge the pump fault yet: a stop is still being recovered. Wait until the switch freshly reports OFF.\")\n"
      "        return\n    }\n", ""))
-mut("M16", "?", "acknowledgement accepts an OFF of any age (anchor dropped)",
+mut("M16", "killed", "acknowledgement accepts an OFF of any age (anchor dropped)",
     ("    if (!pumpIsOff(requireAfter)) {", "    if (!pumpIsOff(null)) {"))
-mut("M17", "?", "late ON during an aborted (active) attempt no longer requests OFF",
+mut("M17", "killed", "late ON during an aborted (active) attempt no longer requests OFF",
     ("                stopOnlyForPendingFault(\"an aborted start is still unconfirmed\")",
      "                // MUTANT: no immediate OFF"))
-mut("M18", "?", "pumpIsOff accepts a future-dated OFF",
+mut("M18", "killed", "pumpIsOff accepts a future-dated OFF",
     ("        if (futureDated(at)) return false   // future-dated OFF\n", ""))
-mut("M19", "?", "initialize does not recreate the running power watch",
+mut("M19", "killed", "initialize does not recreate the running power watch",
     ("        if (active != null && active.startConfirmed == true && active.offRequestedAt == null && powerConfirmationRequired()) {\n"
      "            runIn(RUN_POWER_CHECK_SECONDS, \"verifyRunPower\", [overwrite: true])\n"
      "            log.warn \"WaterGuru Dosing Advisor: recreated the running power watch after the queue reset\"\n"
      "        }\n", ""))
-mut("M20", "?", "verifyStartConfirmation ignores an OFF request (startStopRequested guard removed)",
+mut("M20", "killed", "verifyStartConfirmation ignores an OFF request (startStopRequested guard removed)",
     ("    if (startStopRequested(active)) return   // an OFF was requested; a late report must not confirm\n", ""))
-# Re-anchored: 2.4.1 split handlePumpPowerEvent's guard so evidence is noted before it.
-mut("M21", "?", "power event ignores an OFF request (startStopRequested guard removed)",
-    ("    if (active.fault != null || startStopRequested(active)) return\n",
-     "    if (active.fault != null) return\n"))
+# M21 (power event ignores an OFF request) is retired in 2.5.0 as an equivalent mutant: every path that requests
+# OFF for an unconfirmed attempt latches its fault first, and verifyStartConfirmation, where the event would go
+# next, repeats the startStopRequested guard. No test can tell it from the base.
 
 # ---- 2.4.1: each fix reverted (must be killed) ----
 mut("F1", "killed", "fix 1 reverted: pumpIsOff ignores the recorded OFF receipt time",
@@ -190,7 +189,7 @@ mut("R6", "killed", "fix 6 reverted: the power watch keeps judging a run after i
      "    } else if (active.startConfirmed == true && powerConfirmationRequired()) {\n"),
     ("        if (active != null && active.startConfirmed == true && active.offRequestedAt == null && powerConfirmationRequired()) {\n",
      "        if (active != null && active.startConfirmed == true && powerConfirmationRequired()) {\n"))
-mut("R6a", "?", "fix 6, one guard only: verifyRunPower ignores offRequestedAt (the event and initialize guards remain)",
+mut("R6a", "killed", "fix 6, one guard only: verifyRunPower ignores offRequestedAt (a check queued behind the STOP latches a false power loss)",
     ("    if (active.offRequestedAt != null) return\n    if (!powerConfirmationRequired()) return\n",
      "    if (!powerConfirmationRequired()) return\n"))
 mut("R7", "killed", "fix 7 reverted: the cutoff latches nothing for an attempt that was never confirmed",

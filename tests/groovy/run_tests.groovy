@@ -585,12 +585,11 @@ check("after a queue reset, exhausting the retries must leave a REAL armed job")
 
     app.updated()
 
-    // Fire the verification retries the way the hub would: advance the clock by the scheduled
-    // delay, remove the job, then run the handler.
+    // Let the verification retries run the way the hub would: each one at its own time, with the
+    // deferred notice between them.
     int fired = 0
     while (fired < 12 && app.scheduled["verifyPumpOff"] != null) {
-        app.clockMs = app.clockMs + (((app.scheduled["verifyPumpOff"] ?: 20) as Integer) * 1000L)
-        app.fire("verifyPumpOff")
+        app.advance(((app.scheduled["verifyPumpOff"] ?: 20) as Integer) * 1000L)
         fired++
     }
 
@@ -886,8 +885,7 @@ check("start: a short dose's start deadline is bounded by its planned stop") {
 
     expect(app.state.activeDose.startDeadline == app.state.activeDose.stopAt,
            "the start deadline must never exceed the planned stop")
-    app.clockMs += 6_000L
-    app.fire("verifyStartConfirmation")
+    app.advance(6_000L)                                        // the checks at +2 and +4 s, then the stop at +5 s
     expect(app.state.startFault != null, "an unconfirmed short dose must fault at its planned stop")
 }
 
@@ -1249,9 +1247,9 @@ check("start: evidence first seen after the planned stop cannot book (short dose
     expect(app.state.activeDose.startDeadline == app.state.activeDose.stopAt,
            "the deadline is bounded by the planned stop")
 
-    app.clockMs += 6_000L
-    pump.setPower(7.2G)
-    app.fire("verifyStartConfirmation")
+    // A stalled scheduler: the power report lands in the gap, then the overdue start check runs first,
+    // after its deadline (the planned stop).
+    app.restartAfter(6_000L) { pump.setPower(7.2G) }
     expect(app.noticesMatching("pump started").isEmpty(), "post-stop evidence must not confirm")
     expect(app.state.startFault != null, "it faults instead")
 }
@@ -1337,8 +1335,7 @@ check("start: the scheduled stop before confirmation latches a fault and claims 
     def dose = sampleDose(app)
     dose.runSeconds = 5
     app.startDose(dose, "test")
-    app.clockMs += 5_000L
-    app.fire("stopDose")
+    app.advance(5_000L)                                        // the checks at +2 and +4 s, then the stop
 
     expect(app.state.startFault?.kind == "start-unconfirmed", "the unconfirmed termination must latch")
     expect(app.noticesMatching("start NOT confirmed").size() == 1, "alert exactly once")
@@ -1370,8 +1367,7 @@ check("start: stop-then-timeout (either order) never duplicates the start alert"
     def dose = sampleDose(app)
     dose.runSeconds = 5
     app.startDose(dose, "test")
-    app.clockMs += 5_000L
-    app.fire("stopDose")
+    app.advance(5_000L)                                        // the checks at +2 and +4 s, then the stop
     def before = app.noticesMatching("start NOT confirmed").size()
     app.verifyStartConfirmation()   // a late timeout job must no-op
     expect(before == 1, "exactly one alert")
@@ -1854,9 +1850,20 @@ check("run: an OFF contradicted by an equal-timestamp ON cannot stop the pump") 
         app.fire("verifyStartConfirmation")
         def remaining = app.state.tankRemainingMl
         def reserved = app.state.doseMlToday
-        app.clockMs += 1200000L
-        if (completion != "synchronous") pump.mode = "ignoresOff"
-        app.fire("emergencyPumpOff")
+        // The relay sticks once the run is confirmed: the planned stop and its five retries cannot turn it
+        // off, so the independent cutoff is what ends the run. (Up to 2.4.8 this jumped the clock 20 minutes
+        // and fired the cutoff, skipping the stop, the retries and the power watch, which no hub does.)
+        pump.mode = "ignoresOff"
+        long stopAt = app.state.activeDose.stopAt as Long
+        long deadline = app.state.emergencyDeadline as Long
+        while (app.clockMs < stopAt) {                         // power reports keep the power watch content
+            app.advance(10_000L)
+            app.pumpSwitchHandler([name: "power", value: "7", date: new Date(app.clockMs)])
+        }
+        app.runUntil(deadline - 1_000L)
+        expect(app.state.stopAttempts == 5 && app.state.startFault == null, "sanity: the retries ran out, no fault yet")
+        if (completion == "synchronous") pump.mode = "healthy"    // the relay answers the cutoff's OFF
+        app.runUntil(deadline)
         expect(app.state.startFault?.kind == "emergency-stop", "fault must be recorded before async OFF")
 
         if (completion != "synchronous") {
@@ -2616,8 +2623,7 @@ check("anchor (stopDose): a short lost-ON dose is not stopped by its cached OFF;
     dose.doseMl = 55G
     dose.runSeconds = 15                                       // start deadline == planned stop
     app.startDose(dose, "AUTO")
-    app.clockMs += 15_000L
-    app.fire("stopDose")                                       // the planned stop fires first
+    app.advance(15_000L)                                       // the planned stop fires before the +16 s check
     expect(app.state.activeDose != null, "a cached OFF from yesterday must not complete the stop")
     expect(app.dueAt["verifyStopRequest"] == app.clockMs + 4_000L, "next: the deferred notice: ${app.dueAt}")
     expect(app.dueAt["verifyPumpOff"] == app.clockMs + 20_000L, "then the retry")
@@ -2893,8 +2899,8 @@ check("2.4.2 fix 4: a cutoff that is due but has not run is fired now, never pus
     pump.mode = "ignoresOff"                                   // the relay sticks from here
     app.runUntil(t0 + 119_000L)
     expect(app.state.emergencyDeadline == t0 + 120_000L, "sanity: due at +120 s")
-    app.clockMs = t0 + 125_000L                                // scheduler lag: the +125 s retry runs first
-    app.fire("verifyPumpOff")
+    app.dueAt["emergencyPumpOff"] = t0 + 130_000L             // scheduler lag: the cutoff's job runs late,
+    app.runUntil(t0 + 125_000L)                                // so the +125 s retry runs while it is overdue
     expect(app.dueAt["emergencyPumpOff"] <= app.clockMs + 1_000L, "the overdue cutoff runs now, not at +245 s: ${app.dueAt}")
     long due = app.dueAt["emergencyPumpOff"]
     app.clockMs += 500L
@@ -2978,6 +2984,24 @@ check("2.4.2 fix 6: Done during a confirmed run does not bring the power watch b
     app.updated()
     expect(app.dueAt["verifyRunPower"] == null, "the stop owns the run now: ${app.dueAt}")
     expect(app.dueAt["verifyPumpOff"] != null && app.dueAt["emergencyPumpOff"] != null, "with its protection")
+}
+
+check("2.4.2 fix 6: a power check already queued behind the STOP judges nothing (verifyRunPower's own guard)") {
+    // unschedule() cannot recall a check the hub has already queued: with singleThreaded it waits for the
+    // STOP's handler and runs right after it. Only verifyRunPower's offRequestedAt guard stops it from
+    // re-arming the power watch, which would then read the stop's falling power as a power loss (mutant R6a).
+    def app = newApp()
+    def pump = hubPlug(app)
+    confirmedHubStart(app, pump, incidentDose(app) + [doseMl: 2210G, runSeconds: 600])
+    healthyUntil(app, pump, app.clockMs + 10_000L)
+    app.appButtonHandler("btnStopPump")
+    app.verifyRunPower()                                       // the check that was queued behind the STOP
+    app.advance(500L)
+    app.deliverDeviceReport(pump, "power", 0G)                 // the pump stops; the switch report is lost
+    runPlug(app, pump, app.clockMs + 45_000L) { app.deliverDeviceReport(pump, "power", 0G) }
+    expect(app.state.startFault == null && app.noticesMatching("power LOST").isEmpty(),
+           "the queued check must leave the run to the stop: ${app.state.startFault}")
+    expect(app.dueAt["verifyRunPower"] == null, "and must not bring the power watch back: ${app.dueAt}")
 }
 
 // ----------------------------------------------------------------------- 2.4.2 fix 7: cutoff on an unconfirmed attempt
