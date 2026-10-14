@@ -2236,46 +2236,54 @@ private void failRunPower(Map active, String reason) {
 
 def stopDose() {
     Map active = state.activeDose instanceof Map ? state.activeDose : null
-    Long offAt = now()
-    if (active != null) { active.offRequestedAt = offAt; state.activeDose = active }
-    unschedule("verifyRunPower")
-    unschedule("verifyStartConfirmation")
-
+    if (active != null) { active.offRequestedAt = now(); state.activeDose = active }
     // A scheduled stop firing before the start was confirmed terminates an UNCONFIRMED attempt.
     // It must latch the start fault and use the unverified accounting notice, not quietly clear
     // the dose and cancel the timeout job with no trace.
     if (startUnconfirmed(active)) {
         alertStartUnconfirmed(active, "the planned stop time arrived before the start was confirmed")
     }
+    String requested = active ? "Chlorine pump stop requested after its scheduled ${formatDuration((active.seconds ?: 0) as Integer)} dose (${active.ml} mL planned)" : null
+    stopPump(active, requested, active ? scheduledStopMessage(active) : null, "scheduled stop")
+}
 
+/**
+ * The stop that the planned stop, STOP, a save and a fault all go through. The run's own jobs go, OFF is
+ * sent, and until the switch FRESHLY reports off nothing is disarmed and no dose is forgotten: the notice
+ * waits STOP_CONFIRM_SECONDS for the OFF answer, the retries start over and the cutoff stays armed (never
+ * postponed). A relay that ignores OFF is exactly the case the independent cutoff exists for.
+ */
+private void stopPump(Map active, String requested, String confirmed, String why) {
+    unschedule("stopDose")
+    unschedule("verifyRunPower")
+    unschedule("verifyStartConfirmation")
     try {
-        try { if (pumpSwitch) pumpSwitch.off() }
-        catch (e) { log.error "WaterGuru Dosing Advisor: pump OFF command failed — ${e.message}" }
-
-        // The switch has been ASKED to stop, which is not the same as stopped. Nothing is
-        // disarmed and no dose is forgotten until it FRESHLY reports off: a relay that ignores
-        // OFF is exactly the case the independent cutoff exists for, so cancelling it here on the
-        // failure path would remove the last backstop at the moment it is most needed.
-        Long since = stopEvidenceAnchor(active)
-        if (pumpIsOff(since)) {
-            finishStop(active ? scheduledStopMessage(active) : null)
-            return
-        }
-
-        if (active) {
-            requestStopRefresh(active)
-            deferStopNotice("Chlorine pump stop requested after its scheduled ${formatDuration((active.seconds ?: 0) as Integer)} dose (${active.ml} mL planned)",
-                            scheduledStopMessage(active))
-        }
+        if (sendOffAndConfirm(active, why, confirmed)) return
+        if (requested) deferStopNotice(requested, confirmed)
     } catch (e) {
         // Anything unexpected -- a device read throwing, a notification device failing -- must not
         // end this with nothing scheduled while the pump may still be running.
-        log.error "WaterGuru Dosing Advisor: scheduled stop hit an unexpected error — ${e.message}; retrying"
+        log.error "WaterGuru Dosing Advisor: the stop (${why}) hit an unexpected error: ${e.message}; retrying"
     }
-
     state.stopAttempts = 0
     runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
-    armEmergencyPumpCutoff("scheduled stop not confirmed")
+    armEmergencyPumpCutoff("stop unconfirmed (${why})")
+}
+
+/**
+ * Send OFF and finish the stop when the switch confirms it at once; otherwise ask the plug to report (a
+ * request, never evidence). Every stop path sends its OFF here. A command that throws is logged and never
+ * trusted. Returns true when the stop finished.
+ */
+private boolean sendOffAndConfirm(Map active, String why, String confirmed) {
+    try { if (pumpSwitch) pumpSwitch.off() }
+    catch (e) { log.error "WaterGuru Dosing Advisor: the OFF command (${why}) failed: ${e.message}" }
+    if (pumpIsOff(stopEvidenceAnchor(active))) {
+        finishStop(confirmed)
+        return true
+    }
+    requestStopRefresh(active)
+    return false
 }
 
 /**
@@ -2422,14 +2430,7 @@ def verifyPumpOff() {
 
         Integer attempt = ((state.stopAttempts ?: 0) as Integer) + 1
         state.stopAttempts = attempt
-        try { pumpSwitch.off() }
-        catch (e) { log.error "WaterGuru Dosing Advisor: retry ${attempt} OFF command failed — ${e.message}" }
-        requestStopRefresh(active)
-
-        if (pumpIsOff(since)) {
-            finishStop("Chlorine pump stopped on retry ${attempt}.")
-            return
-        }
+        if (sendOffAndConfirm(active, "retry ${attempt}", "Chlorine pump stopped on retry ${attempt}.")) return
 
         if (attempt >= STOP_MAX_ATTEMPTS) {
             // A stop with nothing behind it (a save or STOP on an idle app) against a switch that has read
@@ -2462,9 +2463,9 @@ def verifyPumpOff() {
     log.warn "WaterGuru Dosing Advisor: chlorine pump OFF not freshly confirmed; retrying in ${STOP_RETRY_SECONDS}s"
     runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
     // Re-assert the backstop on EVERY unconfirmed outcome, not only at exhaustion. The cutoff can
-    // be missing for reasons this method did not cause -- it was never armed, a queue reset dropped
-    // it, the watchdog was switched on after the dose started -- and protection should not depend
-    // on which path arrived here. armEmergencyPumpCutoff never postpones an earlier deadline.
+    // be missing for reasons this method did not cause -- it was never armed, the watchdog was
+    // switched on after the dose started -- and protection should not depend on which path arrived
+    // here. armEmergencyPumpCutoff never postpones an earlier deadline.
     armEmergencyPumpCutoff("stop still unconfirmed (attempt ${state.stopAttempts})")
 }
 
@@ -2610,22 +2611,10 @@ private void safeStopPump(String reason, boolean notify = false) {
         state.idleStopAt = offAt
     }
 
-    // The planned end of the dose is no longer wanted ...
-    unschedule("stopDose")
-    unschedule("verifyRunPower")
-    unschedule("verifyStartConfirmation")
-    // ... but the cutoff is deliberately NOT cancelled here: it is the backstop for this moment.
-
     // If the attempt was never confirmed, stopping it is itself a faulted termination: latch and
     // alert once, and keep the unverified accounting semantics, whatever the reason for the stop.
     if (startUnconfirmed(active)) {
         alertStartUnconfirmed(active, "the pump was stopped (${reason}) before the start was confirmed")
-    }
-
-    try {
-        if (pumpSwitch) pumpSwitch.off()
-    } catch (e) {
-        log.error "WaterGuru Dosing Advisor: unable to send the stop command — ${e.message}"
     }
 
     String stopMsg
@@ -2636,16 +2625,9 @@ private void safeStopPump(String reason, boolean notify = false) {
     } else {
         stopMsg = null
     }
-    if (pumpIsOff(stopEvidenceAnchor(active))) {
-        finishStop(stopMsg)
-        return
-    }
-
-    requestStopRefresh(active)
-    deferStopNotice("Chlorine pump stop requested (${reason})", stopMsg)
-    state.stopAttempts = 0
-    runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
-    armEmergencyPumpCutoff("stop unconfirmed (${reason})")
+    // The planned end of the dose is no longer wanted, but the cutoff is deliberately NOT cancelled:
+    // it is the backstop for this moment.
+    stopPump(active, "Chlorine pump stop requested (${reason})", stopMsg, reason)
 }
 
 /**
@@ -2974,15 +2956,8 @@ def emergencyPumpOff() {
     if (startUnconfirmed(active)) alertStartUnconfirmed(active, "the emergency cutoff fired before the start was confirmed")
     Integer attempt = ((state.emergencyAttempts ?: 0) as Integer) + 1
     state.emergencyAttempts = attempt
-    try { pumpSwitch.off() }
-    catch (e) { log.error "WaterGuru Dosing Advisor: cutoff OFF command failed — ${e.message}" }
-    requestStopRefresh(active)
-
     String confirmed = "EMERGENCY cutoff confirmed the chlorine pump OFF after ${n1(failsafeMinutes())} minutes."
-    if (pumpIsOff(stopEvidenceAnchor(active))) {
-        finishStop(confirmed)
-        return
-    }
+    if (sendOffAndConfirm(active, "cutoff attempt ${attempt}", confirmed)) return
 
     if (attempt <= 3 || attempt % 10 == 0) {
         // Deferred like the stop notice: the plug's answer to the OFF above lands 0.5 to 1.6 s later.

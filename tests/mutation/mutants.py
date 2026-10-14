@@ -63,16 +63,13 @@ mut("M01", "killed", "verifyPumpOff accepts a cached pre-request OFF (anchor dro
      "            finishStop(\"Chlorine pump confirmed OFF.\")",
      "    Long since = null   // MUTANT\n    try {\n        if (pumpIsOff(since)) {\n"
      "            finishStop(\"Chlorine pump confirmed OFF.\")"))
-mut("M02", "killed", "stopDose accepts a cached pre-request OFF (anchor dropped)",
-    ("        Long since = stopEvidenceAnchor(active)\n        if (pumpIsOff(since)) {\n"
-     "            finishStop(active ? scheduledStopMessage(active) : null)",
-     "        Long since = null   // MUTANT\n        if (pumpIsOff(since)) {\n"
-     "            finishStop(active ? scheduledStopMessage(active) : null)"))
-mut("M03", "killed", "emergencyPumpOff accepts a cached pre-request OFF (both anchors dropped)",
+# Re-anchored in 2.5.0: the planned stop, STOP, a save, the retries and the cutoff send their OFF through one tail.
+mut("M02", "killed", "the shared stop tail accepts a cached pre-request OFF (anchor dropped after every OFF)",
+    ("    if (pumpIsOff(stopEvidenceAnchor(active))) {\n        finishStop(confirmed)\n        return true\n",
+     "    if (pumpIsOff(null)) {\n        finishStop(confirmed)\n        return true\n"))
+mut("M03", "killed", "emergencyPumpOff's check before its OFF accepts a cached pre-request OFF (anchor dropped)",
     ("    Long anchor = stopEvidenceAnchor(active)\n    if (pumpIsOff(anchor)) {",
-     "    Long anchor = null   // MUTANT\n    if (pumpIsOff(anchor)) {"),
-    ("    if (pumpIsOff(stopEvidenceAnchor(active))) {\n        finishStop(confirmed)\n",
-     "    if (pumpIsOff(null)) {\n        finishStop(confirmed)\n"))
+     "    Long anchor = null   // MUTANT\n    if (pumpIsOff(anchor)) {"))
 
 # ---- doseSafetyBlocks interlocks ----
 mut("M04", "killed", "no 'a dose is already running' interlock",
