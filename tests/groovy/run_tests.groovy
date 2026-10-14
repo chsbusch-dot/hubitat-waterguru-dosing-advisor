@@ -46,9 +46,13 @@ def shell = new GroovyShell(HubitatStub.classLoader, new Binding(), compilerConf
 // each of the 150-odd checks.
 def appClass = shell.parse(appFile).getClass()
 
+/** Every app the checks built, so the 2.5.0 dash check can read every notice the suite made the app send. */
+List allApps = []
+
 /** A fresh app per test: state must not leak between scenarios. */
 def newApp = {
     def script = appClass.getDeclaredConstructor().newInstance()
+    allApps << script
     script.run()
     // The app's own sendNotice() fans out to notifyDevices. A fake whose sink IS the stub's
     // notice list means noticesMatching() observes exactly what the app really sent.
@@ -3338,7 +3342,7 @@ check("2.4.3 fix 1: WaterGuru's replace-cassette step is not dose advice (live O
     expect(tile.lastSent("status") == "YELLOW" && tile.lastSent("recommendation") == "Replace cassette soon",
            "a maintenance step neither recommends nor turns the tile RED: ${tile.lastSent('status')} / ${tile.lastSent('recommendation')}")
     expect(!text.toLowerCase().contains("follow these steps"), "nor appears as advice:\n${text}")
-    expect(text.contains("None — WaterGuru reports no pH / TA / CH / CYA adjustment needed."), "WaterGuru asked for no dose:\n${text}")
+    expect(text.contains("None: WaterGuru reports no pH / TA / CH / CYA adjustment needed."), "WaterGuru asked for no dose:\n${text}")
     expect(text.contains("Cassette: C5 · installed Sep 12, 2026 · 4 days left · 12.0% · replace soon"), "the cassette line says it:\n${text}")
     app.wgAdviceIncludeChlorine = true                         // the setting still governs WaterGuru's chlorine line
     app.runAndDeliver(false, false, "preview")
@@ -3747,7 +3751,7 @@ check("2.4.4 fix 11: right after the first dose the tank runway asks for half a 
     def pump = hubPlug(app)
     app.state.tankDoseHistory = []
     app.state.remove("lastDose")
-    expect(app.tankRunwayLine(app.computeTankRunway()) == "⏳ Tank runway: learning — a completed app-controlled dose is needed to estimate days until 10%.",
+    expect(app.tankRunwayLine(app.computeTankRunway()) == "⏳ Tank runway: learning; a completed app-controlled dose is needed to estimate days until 10%.",
            "control: with no dose on record the old text stays")
     confirmedHubStart(app, pump)
     expect(app.state.tankDoseHistory.size() == 1, "sanity: the dose is on record: ${app.state.tankDoseHistory}")
@@ -4790,6 +4794,59 @@ check("2.4.8 guard (h): live notice settings (autoRun off, daily digest on): the
     expect(okDaily.size() == 1 && okDaily[0].contains("add 3000 mL of 12.5% liquid chlorine") && okDaily[0].contains(SLAM_REST) &&
            !okDaily[0].contains("not pumped") && d2.pump.commands == ["on"] && ok.noticesMatching("BLOCKED").isEmpty(),
            "the capped dose: ${okDaily} / ${d2.pump.commands}")
+}
+
+// ----------------------------------------------------------------------- 2.5.0 (WOR-741): no em or en dash in what users read
+
+def DASHES = ~/[\u2014\u2013]|&mdash;|&ndash;/
+
+check("2.5.0 change 6: no em or en dash in any notice the suite made the app send") {
+    List hits = allApps.collectMany { it.notices.findAll { n -> n != null && DASHES.matcher(n).find() } }.unique()
+    expect(allApps.size() > 200 && allApps.sum { it.notices.size() } > 500, "sanity: the suite sent notices: ${allApps.size()} apps")
+    expect(hits.isEmpty(), "${hits.size()} notice(s) with a dash, e.g. ${hits.take(3)}")
+}
+
+check("2.5.0 change 6: no em or en dash in the page, the banners or the advice text") {
+    def app = newApp()
+    def d = slamApp(app)
+    slamSample(app, d.wg)
+    List texts = [app.state.lastPreview, app.slamPageBanner(), app.dosingStatusHtml(), app.nextCycleHtml(),
+                  app.scheduledStopMessage([startConfirmed: false, ml: "237"]),
+                  app.runwayLine([state: "below", floor: 2.5G]), app.runwayLine([state: "holding", floor: 2.5G]),
+                  app.tankRunwayLine([state: "learning", pct: 10G, n: 0])]
+    ["STARTING", "RUNNING", "FAULT"].each { kind ->
+        app.state.activeDose = [ml: "237", startConfirmed: kind != "STARTING", fault: kind == "FAULT" ? "power-loss" : null, stopAt: app.clockMs]
+        texts << app.dosingStatusHtml()
+    }
+    app.state.remove("activeDose")
+    app.state.faultStopAt = app.clockMs
+    app.state.startFault = [reason: "test"]
+    texts << app.dosingStatusHtml()
+    expect(texts.every { it != null }, "sanity: every text was built")
+    List hits = texts.findAll { DASHES.matcher(it.toString()).find() }
+    expect(hits.isEmpty(), "dash in: ${hits}")
+    expect(app.state.lastPreview.contains("🚨 SLAM MODE ACTIVE. Free chlorine is held high on purpose: target 13.2 ppm"), "the SLAM banner: ${app.state.lastPreview}")
+    expect(app.slamPageBanner().contains("SLAM MODE IS ON: the free-chlorine target is deliberately elevated"), "the page banner")
+    expect(app.scheduledStopMessage([startConfirmed: false, ml: "237"]).startsWith("Chlorine pump stopped, but the start was never confirmed, so no scheduled dose is claimed;"),
+           "the unconfirmed stop's notice")
+}
+
+check("2.5.0 change 6: no em or en dash in the app's source outside comments and log lines (input titles, page text)") {
+    // Input titles and page paragraphs never run in the stub (input() and paragraph() are no-ops), so only the
+    // source shows them. A dash in a comment or a log line is allowed.
+    List offending = []
+    appFile.readLines().eachWithIndex { String line, int i ->
+        def m = DASHES.matcher(line)
+        if (!m.find()) return
+        String t = line.trim()
+        if (t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")) return
+        if (t.contains("log.") || t.contains("logDebug")) return
+        int comment = line.indexOf(" //")
+        if (comment >= 0 && comment < m.start()) return
+        offending << "${i + 1}: ${t}"
+    }
+    expect(appFile.readLines().size() > 3000, "sanity: the source was read")
+    expect(offending.isEmpty(), "user-visible dash on line ${offending}")
 }
 
 // --------------------------------------------------------------------------- summary

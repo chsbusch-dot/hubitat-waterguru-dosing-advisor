@@ -13,7 +13,7 @@ the 2.4.1 code and asserted (killed) since 2.5.0, M21 retired as equivalent; F1-
 each (WOR-731), Y1-Y2 one 2.4.5 change each (WOR-739), Z1-Z2 one 2.4.6 item each (WOR-740), L1-L8 one
 2.4.7 change each, K1-K5 one fix each from the 2.4.7 verification round and J1-J8 one follow-up change each
 (WOR-752), S1-S16 one 2.4.8 SLAM-cap behaviour each, TG1-TG12 one SLAM plausibility-guard rule each
-(WOR-755; TG, since T1-T4 were taken), U1-U4 one 2.5.0 save rule each and N1-N6 one notice-slot or stopOpen() rule each (WOR-741), and every one of those
+(WOR-755; TG, since T1-T4 were taken), U1-U4 one 2.5.0 save rule each and N1-N6 one notice-slot or stopOpen() rule each and D1-D4 one dash put back each (WOR-741), and every one of those
 must be killed by the tests that guard it.
 
 A mutant edits the child app unless it is declared with mutp(), which edits the profiler. Each mutant
@@ -83,7 +83,7 @@ mut("M07", "killed", "no AUTO dosing-window block",
      "        blocks << \"outside the configured AUTO dosing window\"\n    }\n", ""))
 mut("M08", "killed", "no pH safety block",
     ("    if (ph == null) blocks << \"pH reading is unavailable\"\n"
-     "    else if ((loPh != null && ph < loPh) || (hiPh != null && ph > hiPh)) blocks << \"pH ${n2(ph)} is outside ${n2(loPh)}\u2013${n2(hiPh)}\"\n",
+     "    else if ((loPh != null && ph < loPh) || (hiPh != null && ph > hiPh)) blocks << \"pH ${n2(ph)} is outside ${n2(loPh)} to ${n2(hiPh)}\"\n",
      "    // MUTANT: pH guard removed\n"))
 mut("M09", "killed", "no sample-age block",
     ("    else if (maxAge != null && (now() - measured) > (maxAge * 3600000G)) blocks << \"WaterGuru sample is older than ${n1(maxAge)} hours\"\n", ""))
@@ -455,6 +455,17 @@ mut("N5", "killed", "a stop notice 2.4.8 left pending is said with no head (`req
 mut("N6", "killed", "stopOpen() leaves out a stop with nothing behind it (idleStopAt): a stale OFF can close it",
     ("    return state.activeDose != null || state.faultStopAt != null || state.idleStopAt != null\n",
      "    return state.activeDose != null || state.faultStopAt != null\n"))
+
+# ---- 2.5.0 (WOR-741): positive controls for the dash checks, a dash put back (must be killed) ----
+mut("D1", "killed", "an em dash is back in the unconfirmed-stop notice",
+    ("never confirmed, so no scheduled dose is claimed; the ${active.ml} mL attempt remains reserved and unreconciled",
+     "never confirmed \u2014 no scheduled dose is claimed; the ${active.ml} mL attempt remains reserved and unreconciled"))
+mut("D2", "killed", "an em dash is back in the SLAM banner of the advice text",
+    ("SLAM MODE ACTIVE. Free chlorine is held high on purpose", "SLAM MODE ACTIVE \u2014 free chlorine is held high on purpose"))
+mut("D3", "killed", "an em dash is back in the SLAM input title (page text the stub never runs)",
+    ("title: \"SLAM mode: target FC as a multiple of CYA", "title: \"SLAM mode \u2014 target FC as a multiple of CYA"))
+mut("D4", "killed", "an en dash is back in the pH block reason",
+    ("is outside ${n2(loPh)} to ${n2(hiPh)}", "is outside ${n2(loPh)}\u2013${n2(hiPh)}"))
 
 
 def build(name):

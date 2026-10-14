@@ -431,7 +431,7 @@ preferences {
 // ---------------------------------------------------------------------------
 
 def mainPage() {
-    dynamicPage(name: "mainPage", title: "WaterGuru Dosing Advisor — pool", uninstall: true, install: true) {
+    dynamicPage(name: "mainPage", title: "WaterGuru Dosing Advisor: pool", uninstall: true, install: true) {
 
         section("<b>Current dosing preview</b>") {
             paragraph nextCycleHtml()
@@ -463,7 +463,7 @@ def mainPage() {
 
         section("<b>Free chlorine target (this app's core value-add)</b>") {
             input "slamMode", "bool",
-                title: "SLAM mode — target FC as a multiple of CYA (recommended while recovering)",
+                title: "SLAM mode: target FC as a multiple of CYA (recommended while recovering)",
                 defaultValue: true, submitOnChange: true
             if (slamMode != false) {
                 paragraph slamPageBanner()
@@ -474,17 +474,17 @@ def mainPage() {
                 paragraph "SLAM off: FC min = ${TFP_MIN_FACTOR} x CYA, target = ${TFP_TARGET_FACTOR} x CYA (TFP model)."
             }
             input "fcTargetOverride", "decimal",
-                title: "Manual FC target override (ppm) — blank = compute from CYA above",
+                title: "Manual FC target override (ppm); blank = compute from CYA above",
                 required: false
         }
 
         section("<b>Chlorine runway (algae forecast)</b>") {
             input "showRunway", "bool",
-                title: "Show a chlorine-runway estimate — days until FC drops below the algae floor",
+                title: "Show a chlorine-runway estimate (days until FC drops below the algae floor)",
                 defaultValue: true, submitOnChange: true
             if (showRunway != false) {
                 input "fcLossPerDay", "decimal",
-                    title: "Daily FC loss rate (ppm/day) — blank = auto (measured from samples, else estimated)",
+                    title: "Daily FC loss rate (ppm/day); blank = auto (measured from samples, else estimated)",
                     required: false
                 paragraph "The floor is the algae-prevention minimum (${TFP_MIN_FACTOR} × CYA). " +
                           "Runway = (FC − floor) ÷ daily loss. The loss rate is measured from your own " +
@@ -590,7 +590,7 @@ def mainPage() {
                 title: "Limit AUTO mode to one completed dose per calendar day",
                 defaultValue: true
 
-            paragraph "<b>Safety limits</b> — every limit must pass before the pump can start. A blocked dose is logged and notified."
+            paragraph "<b>Safety limits:</b> every limit must pass before the pump can start. A blocked dose is logged and notified."
             input "maxSampleAgeHours", "decimal", title: "Maximum WaterGuru sample age (hours)", defaultValue: 18, required: true
             input "minDoseMl", "decimal", title: "Minimum dose to run (mL)", defaultValue: 50, required: true
             input "maxSingleDoseMl", "decimal", title: "Maximum single dose (mL)", defaultValue: 3000, required: true
@@ -666,8 +666,8 @@ def mainPage() {
             if (createTile != false) {
                 def tdev = getTileDevice()
                 if (tdev) {
-                    paragraph "Tile device: <b>${tdev.displayName}</b> — current status " +
-                              "<b>${tdev.currentValue('status') ?: '—'}</b>. Add it to a dashboard as an " +
+                    paragraph "Tile device: <b>${tdev.displayName}</b>, current status " +
+                              "<b>${tdev.currentValue('status') ?: 'unknown'}</b>. Add it to a dashboard as an " +
                               "<b>Attribute</b> tile bound to <code>recommendation</code> (one-liner), " +
                               "<code>tileHtml</code> (formatted), or <code>status</code> " +
                               "(GREEN / YELLOW / RED, for coloring)."
@@ -702,7 +702,7 @@ def mainPage() {
 
         section {
             input "logEnable", "bool", title: "Enable debug logging", defaultValue: true
-            paragraph "<small>v${appVersion()} — doses are estimates; always confirm with your own test kit before adding chemicals.</small>"
+            paragraph "<small>v${appVersion()}: doses are estimates; always confirm with your own test kit before adding chemicals.</small>"
         }
     }
 }
@@ -714,9 +714,9 @@ def mainPage() {
  */
 private String hint(String attr, String fallback = null) {
     def v = sourceDevice?.currentValue(attr)
-    if (v != null) return " — blank uses WaterGuru's value (currently ${v})"
-    if (fallback)  return " — blank uses WaterGuru's value (fallback ${fallback})"
-    return " — blank uses WaterGuru's value"
+    if (v != null) return "; blank uses WaterGuru's value (currently ${v})"
+    if (fallback)  return "; blank uses WaterGuru's value (fallback ${fallback})"
+    return "; blank uses WaterGuru's value"
 }
 
 /** Loud red banner shown on the config page whenever SLAM mode is on. */
@@ -728,7 +728,7 @@ private String slamPageBanner() {
         tgt = " Current target &asymp; ${n1((cyaNow as BigDecimal) * fac)} ppm (${n2(fac)} &times; CYA ${n0(cyaNow as BigDecimal)})."
     }
     return "<div style='background:#c0392b;color:#ffffff;padding:10px;border-radius:6px;font-weight:bold'>" +
-           "&#128680; SLAM MODE IS ON &mdash; free-chlorine target is deliberately elevated to clear algae.${tgt} " +
+           "&#128680; SLAM MODE IS ON: the free-chlorine target is deliberately elevated to clear algae.${tgt} " +
            "Switch it off once the pool is clear and holds chlorine overnight.</div>"
 }
 
@@ -825,25 +825,25 @@ private String dosingStatusHtml() {
     Map active = state.activeDose instanceof Map ? state.activeDose : null
     String activeText
     if (active == null && state.faultStopAt != null) {
-        activeText = "STOPPING — recovering a stop after a fault; waiting for a fresh OFF report"
+        activeText = "STOPPING: recovering a stop after a fault; waiting for a fresh OFF report"
     } else if (active == null && state.idleStopAt != null) {
         activeText = "STOPPING: an OFF was requested; waiting for the switch to confirm it"
     } else if (active == null) {
         activeText = "idle"
     } else if (active.fault != null) {
-        activeText = "FAULT (${active.fault}) — stop protection stays armed until the switch confirms off"
+        activeText = "FAULT (${active.fault}): stop protection stays armed until the switch confirms off"
     } else if (active.startConfirmed == true) {
-        activeText = "RUNNING — start confirmed; ${active.ml} mL; scheduled stop ${new Date((active.stopAt ?: 0L) as Long)}"
+        activeText = "RUNNING: start confirmed; ${active.ml} mL; scheduled stop ${new Date((active.stopAt ?: 0L) as Long)}"
     } else {
-        activeText = "STARTING — waiting for a fresh ON report before it is reported as running; ${active.ml} mL planned"
+        activeText = "STARTING: waiting for a fresh ON report before it is reported as running; ${active.ml} mL planned"
     }
     String pending = state.pendingDose ? "${state.pendingDose.ml} mL / ${formatDuration((state.pendingDose.seconds ?: 0) as Integer)} from sample ${state.pendingDose.sample}" : "none"
     String basis = state.lastDose?.observed == true ? "booked from the observed ON-to-OFF run time, not measured delivery" : "planned estimate, not measured delivery"
     String last = state.lastDose ? "${state.lastDose.ml} mL on ${new Date((state.lastDose.time ?: 0) as Long)} (${basis})" : "none"
-    String fault = state.startFault ? "<b>UNACKNOWLEDGED: ${state.startFault.reason}</b> — press <i>Acknowledge pump fault</i> when reviewed (does not run the pump, and the attempt stays reserved)" : "none"
+    String fault = state.startFault ? "<b>UNACKNOWLEDGED: ${state.startFault.reason}</b>. Press <i>Acknowledge pump fault</i> when reviewed (does not run the pump, and the attempt stays reserved)" : "none"
     String confirm = powerConfirmationRequired()
         ? "fresh ON report + power ≥ ${n1(startPowerMinWatts())} W (within ${startTimeoutSeconds()}s, never past the planned stop)"
-        : "fresh ON report only (this switch does not report power) — power and flow are unverified"
+        : "fresh ON report only (this switch does not report power); power and flow are unverified"
     String circulation = circulationSwitch ? "${circulationSwitch.displayName} (${circulationSwitch.currentValue('switch') ?: 'unknown'})" :
                          (circulationAlwaysOn == true ? "confirmed continuous (24/7)" : "not confirmed")
     String subs = subscriptionsCurrent() ? "current" :
@@ -1275,7 +1275,7 @@ private Map computeAdvice() {
     boolean red = false      // a chemical is needed, or SLAM is active
     boolean yellow = false   // optional / advisory / uncertain
 
-    out << "🌊 WaterGuru Dosing Advisor — ${label}"
+    out << "🌊 WaterGuru Dosing Advisor: ${label}"
     out << currentReadingsSummary(false)
     String lossLine = safeFcLossText("summary line") { fcLossLine() }
     if (lossLine) out << lossLine
@@ -1304,7 +1304,7 @@ private Map computeAdvice() {
         out << fcResult.banner
     }
     out << ""
-    out << "FREE CHLORINE (computed)${fcResult.slam ? ' — 🚨 SLAM MODE' : ''}"
+    out << "FREE CHLORINE (computed)${fcResult.slam ? ': 🚨 SLAM MODE' : ''}"
     out.addAll(fcResult.lines)
     anyAction = anyAction || fcResult.action
     red    = red    || fcResult.required || fcResult.slam
@@ -1326,7 +1326,7 @@ private Map computeAdvice() {
             red = true
             kept.each { chips << shortenWg(it) }
         } else {
-            out << "  • None — WaterGuru reports no pH / TA / CH / CYA adjustment needed."
+            out << "  • None: WaterGuru reports no pH / TA / CH / CYA adjustment needed."
         }
     } else {
         out << "pH / TA / CH / CYA (generic estimates)"
@@ -1338,7 +1338,7 @@ private Map computeAdvice() {
             yellow = yellow || gen.advisories
             chips.addAll(gen.chips)
         } else {
-            out << "  • All within target (or readings unavailable) — nothing to add."
+            out << "  • All within target (or readings unavailable); nothing to add."
         }
     }
 
@@ -1359,7 +1359,7 @@ private Map computeAdvice() {
     out << ""
     if (runway) { out << runwayLine(runway); out << "" }
     warnings.unique().each { out << "⚠ ${it}" }
-    out << "⚠ Estimates only — confirm with your own test kit before adding chemicals."
+    out << "⚠ Estimates only: confirm with your own test kit before adding chemicals."
     if (!anyAction) out << "✅ No chemical additions indicated right now."
 
     // ---- At-a-glance status + one-liner (for the tile & digest) ------------
@@ -1410,7 +1410,7 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
             target = (cya * factor)
             basis = "SLAM ${n2(factor)} x CYA ${n0(cya)}"
             slam = true
-            banner = "🚨 SLAM MODE ACTIVE — free chlorine is held high on purpose: target ${n1(target)} ppm (${n2(factor)} × CYA ${n0(cya)}). Maintain it and retest often; turn SLAM off once the pool is clear and holds chlorine overnight."
+            banner = "🚨 SLAM MODE ACTIVE. Free chlorine is held high on purpose: target ${n1(target)} ppm (${n2(factor)} × CYA ${n0(cya)}). Maintain it and retest often; turn SLAM off once the pool is clear and holds chlorine overnight."
         } else {
             minFc  = cya * TFP_MIN_FACTOR
             target = cya * TFP_TARGET_FACTOR
@@ -1419,7 +1419,7 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
     } else {
         // No CYA and no manual target — fall back to the device's own FC target.
         target = attrNum("freeChlorineTarget") ?: 3G
-        basis = "CYA unavailable — using WaterGuru FC target ${n1(target)} ppm (not CYA-aware)"
+        basis = "CYA unavailable; using WaterGuru FC target ${n1(target)} ppm (not CYA-aware)"
         warnings << "CYA reading unavailable; FC target is not CYA-aware. Add a manual FC target or check the sensor."
     }
 
@@ -1429,7 +1429,7 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
         return [lines: lines, action: false, slam: slam, banner: banner,
                 required: false, optional: false, chip: null, fcVal: null, target: target,
                 doseMl: null, runSeconds: null,
-                fcSummary: "FC — → ${n1(target)} ppm"]
+                fcSummary: "FC n/a → ${n1(target)} ppm"]
     }
 
     lines << "  FC ${n1(fc)} ppm  →  target ${n1(target)} ppm  (${basis})"
@@ -1463,13 +1463,13 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
         if (suspect != null) lines << "  ⚠ Not pumped: ${suspect}."
         chip = "${optional ? 'Top up' : 'Add'} ${shortVol(floz)} chlorine"
         action = true
-        if (ppmGap > 8G) warnings << "Large chlorine addition (+${n1(ppmGap)} ppm) — add in stages and retest between doses."
-        if (floz > 640G) warnings << "Very large chlorine dose (${n0(floz)} fl oz) — double-check pool volume and the FC reading."
+        if (ppmGap > 8G) warnings << "Large chlorine addition (+${n1(ppmGap)} ppm): add in stages and retest between doses."
+        if (floz > 640G) warnings << "Very large chlorine dose (${n0(floz)} fl oz): double-check pool volume and the FC reading."
     } else {
         if (slamMode != false && !numSet(fcTargetOverride)) {
-            lines << "  ✔ FC ${n1(fc)} ≥ SLAM target ${n1(target)} ppm — maintain SLAM level, retest, do not add."
+            lines << "  ✔ FC ${n1(fc)} ≥ SLAM target ${n1(target)} ppm: maintain SLAM level, retest, do not add."
         } else {
-            lines << "  ✔ FC ${n1(fc)} ≥ target ${n1(target)} ppm — hold, no chlorine needed."
+            lines << "  ✔ FC ${n1(fc)} ≥ target ${n1(target)} ppm: hold, no chlorine needed."
         }
     }
     return [lines: lines, action: action, slam: slam, banner: banner,
@@ -1618,7 +1618,7 @@ private Map computeGeneric(BigDecimal ph, BigDecimal ta, BigDecimal ch, BigDecim
         }
         additions = true
     } else if (ph != null && ph < phTarget) {
-        lines << "  • pH ${n1(ph)} low (target ${n1(phTarget)}): aerate to raise, or add soda ash per product directions (no amount estimated — base is easy to overshoot)."
+        lines << "  • pH ${n1(ph)} low (target ${n1(phTarget)}): aerate to raise, or add soda ash per product directions (no amount estimated; base is easy to overshoot)."
         chips << "raise pH"
         additions = true
     }
@@ -1643,7 +1643,7 @@ private Map computeGeneric(BigDecimal ph, BigDecimal ta, BigDecimal ch, BigDecim
         additions = true
     } else if (ch != null && ch > chTarget + 50G) {
         BigDecimal frac = (1G - (chTarget / ch)) * 100G
-        lines << "  • CH ${n0(ch)} high (target ${n0(chTarget)}): no additive lowers CH — partial drain/refill ~${n0(frac)}% (~${n0(volume * frac / 100G)} gal)."
+        lines << "  • CH ${n0(ch)} high (target ${n0(chTarget)}): no additive lowers CH; partial drain/refill ~${n0(frac)}% (~${n0(volume * frac / 100G)} gal)."
         chips << "CH high: partial drain"
         advisories = true
     }
@@ -1656,7 +1656,7 @@ private Map computeGeneric(BigDecimal ph, BigDecimal ta, BigDecimal ch, BigDecim
         additions = true
     } else if (cya != null && cya > cyaTarget) {
         BigDecimal frac = (1G - (cyaTarget / cya)) * 100G
-        lines << "  • CYA ${n0(cya)} high (target ${n0(cyaTarget)}): no additive lowers CYA — partial drain/refill ~${n0(frac)}% (~${n0(volume * frac / 100G)} gal)."
+        lines << "  • CYA ${n0(cya)} high (target ${n0(cyaTarget)}): no additive lowers CYA; partial drain/refill ~${n0(frac)}% (~${n0(volume * frac / 100G)} gal)."
         chips << "CYA high: partial drain"
         advisories = true
     }
@@ -2231,7 +2231,7 @@ private void failRunPower(Map active, String reason) {
     unschedule("verifyRunPower")
     latchStartFault("power-loss", "Power was lost during a confirmed run: ${reason}", current)
     String msg = "Chlorine pump power LOST during a confirmed run (${reason}). Aborting safely; requesting OFF; the independent cutoff stays armed until the switch freshly reports OFF. " +
-                 "The ${current.ml} mL attempt stays reserved and delivery is now UNCERTAIN — operator review required. Once OFF is confirmed the tank is booked from the observed ON-to-OFF run time, an upper bound on what ran."
+                 "The ${current.ml} mL attempt stays reserved and delivery is now UNCERTAIN; operator review required. Once OFF is confirmed the tank is booked from the observed ON-to-OFF run time, an upper bound on what ran."
     log.error "WaterGuru Dosing Advisor: ${msg}"
     sendPumpNotice(msg)
     safeStopPump("the confirmed run lost power", false)
@@ -2398,7 +2398,7 @@ private void requestStopRefresh(Map active) {
  */
 private String scheduledStopMessage(Map active) {
     if (startUnconfirmed(active)) {
-        return "Chlorine pump stopped, but the start was never confirmed — no scheduled dose is claimed; the ${active.ml} mL attempt remains reserved and unreconciled for operator review."
+        return "Chlorine pump stopped, but the start was never confirmed, so no scheduled dose is claimed; the ${active.ml} mL attempt remains reserved and unreconciled for operator review."
     }
     return "Chlorine pump stopped after scheduled ${formatDuration((active.seconds ?: 0) as Integer)} dose (${active.ml} mL planned, an estimate not measured delivery)."
 }
@@ -2445,7 +2445,7 @@ def verifyPumpOff() {
             boolean armed = armEmergencyPumpCutoff("stop still unconfirmed after ${attempt} OFF attempts")
             String tail = armed
                 ? "The independent cutoff is armed, but the pump may need to be stopped by hand."
-                : "The independent cutoff is DISABLED (watchdogAnyPumpRun is off), so nothing will retry automatically — stop the pump by hand."
+                : "The independent cutoff is DISABLED (watchdogAnyPumpRun is off), so nothing will retry automatically. Stop the pump by hand."
             log.error "WaterGuru Dosing Advisor: chlorine pump OFF not freshly confirmed after ${attempt} OFF attempts; the EMERGENCY notice waits ${STOP_CONFIRM_SECONDS}s for the OFF answer"
             // The OFF sent just above is answered 0.5 to 1.6 s later on the live plug, so the
             // notice waits for that answer like the stop notice does.
@@ -2611,7 +2611,7 @@ private void safeStopPump(String reason, boolean notify = false) {
 
     String stopMsg
     if (active != null && startUnconfirmed(active)) {
-        stopMsg = "Chlorine pump stopped; the start was never confirmed — no scheduled dose is claimed; the ${active.ml} mL attempt remains reserved."
+        stopMsg = "Chlorine pump stopped; the start was never confirmed, so no scheduled dose is claimed; the ${active.ml} mL attempt remains reserved."
     } else if (notify || wasActive) {
         stopMsg = "Chlorine pump stopped: ${reason}."
     } else {
@@ -3001,7 +3001,7 @@ private List doseSafetyBlocks(Map result) {
     BigDecimal ph = toBD(result?.pH)
     BigDecimal loPh = firstNum(minSafePh, 6.8G), hiPh = firstNum(maxSafePh, 8.2G)
     if (ph == null) blocks << "pH reading is unavailable"
-    else if ((loPh != null && ph < loPh) || (hiPh != null && ph > hiPh)) blocks << "pH ${n2(ph)} is outside ${n2(loPh)}–${n2(hiPh)}"
+    else if ((loPh != null && ph < loPh) || (hiPh != null && ph > hiPh)) blocks << "pH ${n2(ph)} is outside ${n2(loPh)} to ${n2(hiPh)}"
 
     Long measured = toEpochMs(result?.sampleKey)
     BigDecimal maxAge = firstNum(maxSampleAgeHours, 18G)
@@ -3636,7 +3636,7 @@ private String tankRunwayLine(Map runway) {
                 String doses = runway.n == 1 ? "1 dose" : "${runway.n} doses"
                 return "⏳ Tank runway: learning, ${doses} recorded so far; days until ${n0(runway.pct)}% can be estimated once the dose history spans half a day."
             }
-            return "⏳ Tank runway: learning — a completed app-controlled dose is needed to estimate days until ${n0(runway.pct)}%."
+            return "⏳ Tank runway: learning; a completed app-controlled dose is needed to estimate days until ${n0(runway.pct)}%."
         case "ok":
             String samples = runway.n == 1 ? "dose sample" : "dose samples"
             return "⏳ Tank runway: ~${n1(runway.days)} days until inventory drops below ${n0(runway.pct)}% (average ${n0(runway.dailyUse)} mL/day measured over ${n1(runway.spanDays)} days)."
@@ -3722,7 +3722,7 @@ private void updateTileDevice(Map r) {
     if (!dev) return   // driver missing — ensureTileDevice already logged why
     try {
         dev.sendEvent(name: "status",         value: (r.status ?: "YELLOW"))
-        dev.sendEvent(name: "recommendation", value: clip(r.headline ?: "—", 190))
+        dev.sendEvent(name: "recommendation", value: clip(r.headline ?: "n/a", 190))
         dev.sendEvent(name: "detail",         value: clip(r.text ?: "", 1000))
         dev.sendEvent(name: "tileHtml",       value: clip(buildTileHtml(r), 1024))
         dev.sendEvent(name: "lastCalc",       value: nowDate())
@@ -4241,8 +4241,8 @@ private boolean hasCover() {
 /** One-line runway summary for the notification / tile-detail text. */
 private String runwayLine(Map r) {
     switch (r?.state) {
-        case "below":   return "⏳ Chlorine runway: FC is at/below the algae floor (${n1(r.floor)} ppm) — add chlorine now."
-        case "holding": return "⏳ Chlorine runway: FC is holding or rising — nothing to project (floor ${n1(r.floor)} ppm)."
+        case "below":   return "⏳ Chlorine runway: FC is at/below the algae floor (${n1(r.floor)} ppm). Add chlorine now."
+        case "holding": return "⏳ Chlorine runway: FC is holding or rising; nothing to project (floor ${n1(r.floor)} ppm)."
         case "ok":      return "⏳ Chlorine runway: ~${n1(r.days)} days until FC drops below the ${n1(r.floor)} ppm algae floor (${r.basis})."
         default:        return ""
     }
