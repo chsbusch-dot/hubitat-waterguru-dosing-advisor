@@ -161,7 +161,7 @@ check("verifyPumpOff: keeps retrying, then re-arms the cutoff rather than giving
            "the cutoff must be (re-)armed when the retries are exhausted")
     // 2.4.2: the EMERGENCY notice waits a few seconds for the answer to the final OFF.
     expect(app.noticesMatching("may need to be stopped by hand").isEmpty(), "not before the OFF answer had a chance to land")
-    app.fire("verifyEmergencyNotice")
+    app.fire("verifyStopRequest")
     expect(!app.noticesMatching("may need to be stopped by hand").isEmpty(),
            "it must say plainly that the pump may need stopping by hand")
     expect(app.unscheduled.contains("emergencyPumpOff") == false,
@@ -195,7 +195,7 @@ check("emergencyPumpOff: does not claim success against a stuck relay, and re-ar
     app.emergencyPumpOff()
 
     expect(app.state.activeDose != null, "the cutoff must not forget the dose it could not stop")
-    app.fire("verifyEmergencyNotice")                   // 2.4.2: the notice waits for the OFF answer
+    app.fire("verifyStopRequest")                       // 2.4.2: the notice waits for the OFF answer
     expect(!app.noticesMatching("has not been able to turn").isEmpty(),
            "the cutoff must admit it could not stop the pump")
     expect(app.scheduled["emergencyPumpOff"] != null, "the cutoff must re-arm and try again")
@@ -346,7 +346,7 @@ check("with the watchdog off, exhaustion must not claim a cutoff was armed") {
     app.state.stopAttempts = 4
 
     app.verifyPumpOff()
-    app.fire("verifyEmergencyNotice")                   // 2.4.2: the notice waits for the OFF answer
+    app.fire("verifyStopRequest")                       // 2.4.2: the notice waits for the OFF answer
 
     expect(app.scheduled["emergencyPumpOff"] == null,
            "nothing should be scheduled when the watchdog is off")
@@ -4016,6 +4016,50 @@ check("2.5.0 change 2: a source without a refresh command gets no daily fetch, a
     expect(!app.scheduled.containsKey("refreshWaterGuruSource") && app.dueAt["retryWaterGuruRefresh"] == null,
            "neither fetch stays: ${app.scheduled} / ${app.dueAt}")
     expect(app.logLines.any { it.contains("selected source device has no refresh command") }, "and the log says why")
+}
+
+// ----------------------------------------------------------------------- 2.5.0 (WOR-741): one notice slot
+
+check("2.5.0 change 4: STOP pressed while the cutoff's EMERGENCY waits: the EMERGENCY is said, and the STOP's 'stopped' ends it") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    app.deliverDeviceReport(pump, "switch", "on")              // a run this app did not start
+    app.advance(1_000L)
+    app.deliverDeviceReport(pump, "power", 6.7G)
+    app.runUntil(app.dueAt["emergencyPumpOff"] as Long)        // the cutoff fires; its OFF goes unanswered
+    app.advance(1_000L)
+    app.appButtonHandler("btnStopPump")                        // STOP inside the cutoff's 4 s wait
+    app.advance(5_000L)
+    expect(app.notices == ["WaterGuru dosing: EMERGENCY: the cutoff has not been able to turn the chlorine pump off (attempt 1). Still trying, but the pump may need to be stopped by hand."],
+           "the EMERGENCY is said at its time, not the STOP's 'Retrying' (2.4.8 said both): ${app.notices}")
+    app.deliverDeviceReport(pump, "switch", "off")
+    app.deliverDeviceReport(pump, "power", 0G)
+    expect(app.notices.size() == 2 && app.notices[1] == "WaterGuru dosing: Chlorine pump stopped: STOP button pressed.",
+           "the STOP's own word is the last one, not the cutoff's: ${app.notices}")
+    expect(app.dueAt.isEmpty() && app.state.pendingStopNotice == null, "nothing is left behind: ${app.dueAt}")
+}
+
+check("2.5.0 change 4: notices 2.4.8 left pending when the code updates are still said, in the one slot") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    app.deliverDeviceReport(pump, "switch", "on")
+    app.state.pendingEmergencyNotice = [head: "EMERGENCY: the cutoff has not been able to turn the chlorine pump off (attempt 1)", withSwitch: false,
+                                        tail: "Still trying, but the pump may need to be stopped by hand.",
+                                        confirmed: "EMERGENCY cutoff confirmed the chlorine pump OFF after 15.0 minutes."]
+    app.verifyEmergencyNotice()                                // 2.4.8's job, firing under this code
+    expect(app.notices == ["WaterGuru dosing: EMERGENCY: the cutoff has not been able to turn the chlorine pump off (attempt 1). Still trying, but the pump may need to be stopped by hand."],
+           "the EMERGENCY is said: ${app.notices}")
+    expect(app.state.pendingEmergencyNotice == null && app.state.pendingStopNotice?.announced == true, "from the one slot: ${app.state.pendingStopNotice}")
+    app.deliverDeviceReport(pump, "switch", "off")
+    expect(app.notices[-1] == "WaterGuru dosing: EMERGENCY cutoff confirmed the chlorine pump OFF after 15.0 minutes.", "with its final word: ${app.notices}")
+
+    def old = newApp()
+    def oldPump = hubPlug(old)
+    old.deliverDeviceReport(oldPump, "switch", "on")
+    old.state.pendingStopNotice = [requested: "Chlorine pump stop requested (STOP button pressed)", confirmed: "Chlorine pump stopped: STOP button pressed."]
+    old.verifyStopRequest()                                    // a 2.4.8 stop notice named its head `requested`
+    expect(old.notices == ["WaterGuru dosing: Chlorine pump stop requested (STOP button pressed), but the switch reports ON. Retrying; the independent cutoff stays armed."],
+           "a 2.4.8 stop notice reads as before: ${old.notices}")
 }
 
 // ----------------------------------------------------------------------- 2.4.6 (WOR-740): debt review items

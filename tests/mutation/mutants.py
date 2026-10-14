@@ -13,7 +13,7 @@ the 2.4.1 code and asserted (killed) since 2.5.0, M21 retired as equivalent; F1-
 each (WOR-731), Y1-Y2 one 2.4.5 change each (WOR-739), Z1-Z2 one 2.4.6 item each (WOR-740), L1-L8 one
 2.4.7 change each, K1-K5 one fix each from the 2.4.7 verification round and J1-J8 one follow-up change each
 (WOR-752), S1-S16 one 2.4.8 SLAM-cap behaviour each, TG1-TG12 one SLAM plausibility-guard rule each
-(WOR-755; TG, since T1-T4 were taken), U1-U4 one 2.5.0 save rule each (WOR-741), and every one of those
+(WOR-755; TG, since T1-T4 were taken), U1-U4 one 2.5.0 save rule each and N1-N6 one notice-slot or stopOpen() rule each (WOR-741), and every one of those
 must be killed by the tests that guard it.
 
 A mutant edits the child app unless it is declared with mutp(), which edits the profiler. Each mutant
@@ -150,8 +150,9 @@ mut("R1", "killed", "fix 1 reverted: a stop with nothing open gets no anchor (a 
     ("        state.idleStopAt = offAt\n", "        // MUTANT: no idle anchor\n"))
 mut("R1b", "killed", "fix 1: an unconfirmed idle stop no longer blocks a new dose",
     ("    if (state.idleStopAt != null) blocks << \"a pump stop is still waiting for the switch to confirm OFF\"\n", ""))
-mut("R1c", "killed", "fix 1: an announced stop notice keeps no final word for the OFF still to come",
-    ("        state.pendingStopNotice = [confirmed: pending.confirmed ?: \"${pending.requested}: the switch has now confirmed OFF.\".toString(),\n"
+# Re-anchored in 2.5.0: stop and EMERGENCY notices share one slot, so this also covers X1b.
+mut("R1c", "killed", "fix 1: an announced stop or EMERGENCY notice keeps no final word for the OFF still to come",
+    ("        state.pendingStopNotice = [confirmed: pending.confirmed ?: \"${head}: the switch has now confirmed OFF.\".toString(),\n"
      "                                   announced: true]\n", ""))
 mut("R2", "killed", "fix 2 reverted: an unchanged ON restarts an aborted start's stop",
     ("                if (unchangedOn && active.offRequestedAt != null) {\n", "                if (false) {\n"))
@@ -169,12 +170,12 @@ mut("R3b", "killed", "fix 3 reverted: removal goes through safeStopPump and its 
 mut("R4", "killed", "fix 4 reverted: an overdue cutoff gets a fresh full window",
     ("    if (existing != null && existing <= nowMs) {\n", "    if (false && existing != null && existing <= nowMs) {\n"))
 mut("R5", "killed", "fix 5 reverted: the final retry's EMERGENCY notice is sent the moment OFF is sent",
-    ("            deferEmergencyNotice(\"EMERGENCY: chlorine pump OFF not freshly confirmed after ${attempt} OFF attempts\", true, tail,\n"
-     "                                 \"Chlorine pump stopped on retry ${attempt}.\")\n",
+    ("            deferNotice(\"EMERGENCY: chlorine pump OFF not freshly confirmed after ${attempt} OFF attempts\",\n"
+     "                        \"Chlorine pump stopped on retry ${attempt}.\", tail, true)\n",
      "            sendPumpNotice(\"EMERGENCY: chlorine pump OFF not freshly confirmed after ${attempt} OFF attempts (${switchStatusPhrase()}). ${tail}\")\n"))
 mut("R5b", "killed", "fix 5 reverted: the cutoff's EMERGENCY notice is sent the moment OFF is sent",
-    ("        deferEmergencyNotice(\"EMERGENCY: the cutoff has not been able to turn the chlorine pump off (attempt ${attempt})\", false,\n"
-     "                             \"Still trying, but the pump may need to be stopped by hand.\", confirmed)\n",
+    ("        deferNotice(\"EMERGENCY: the cutoff has not been able to turn the chlorine pump off (attempt ${attempt})\", confirmed,\n"
+     "                    \"Still trying, but the pump may need to be stopped by hand.\")\n",
      "        sendPumpNotice(\"EMERGENCY: the cutoff has not been able to turn the chlorine pump off (attempt ${attempt}). Still trying, but the pump may need to be stopped by hand.\")\n"))
 mut("R6", "killed", "fix 6 reverted: the power watch keeps judging a run after its OFF request (both guards; the initialize one went in 2.5.0)",
     ("    if (active.offRequestedAt != null) return\n    if (!powerConfirmationRequired()) return\n",
@@ -225,11 +226,10 @@ mut("W3b", "killed", "fix 3: readings stored before 2.4.3 still count in the mea
 
 
 # ---- 2.4.4 (WOR-731): each fix reverted (must be killed) ----
-mut("X1", "killed", "fix 1 reverted: finishStop ignores the deferred EMERGENCY notice's final word",
-    ("    if (!msg && emergency?.confirmed) msg = emergency.confirmed.toString()\n", ""))
-mut("X1b", "killed", "fix 1 reverted: an EMERGENCY notice that was sent keeps no final word for the OFF still to come",
-    ("        state.pendingEmergencyNotice = [confirmed: pending.confirmed ?: \"${pending.head}: the switch has now confirmed OFF.\".toString(),\n"
-     "                                        announced: true]\n", ""))
+# Re-anchored in 2.5.0 to the one notice slot; X1b (an EMERGENCY that was sent keeps no final word) is the same
+# line as R1c now and is retired.
+mut("X1", "killed", "fix 1 reverted: finishStop ignores the deferred notice's final word (stop or EMERGENCY)",
+    ("    if (!msg && pending?.confirmed) msg = pending.confirmed.toString()\n", ""))
 mut("X2", "killed", "fix 2 reverted: a booked run with no lastDose never reaches the historian",
     ("        publishDoseRecord(historyTime, ranMl, ranSec, \"the booked run\")\n", "        // MUTANT: not published\n"))
 mut("X3", "killed", "fix 3 reverted: the cassette status adds no chip and leaves the tile GREEN",
@@ -437,7 +437,24 @@ mut("U2", "killed", "a save with the daily refresh switched off leaves the fetch
 mut("U3", "killed", "a save with the daily summary switched off leaves it scheduled",
     ("    } else {\n        unschedule(\"dailyDigestHandler\")\n    }\n", "    }\n"))
 mut("U4", "killed", "a save no longer checks an open stop's cutoff (an overdue one waits for its late job)",
-    ("    if (stopOpen) armEmergencyPumpCutoff(\"a save found a stop still open\")\n", ""))
+    ("    if (stopOpen()) armEmergencyPumpCutoff(\"a save found a stop still open\")\n", ""))
+
+# ---- 2.5.0 (WOR-741): one notice slot for stop and EMERGENCY notices (must be killed) ----
+mut("N1", "killed", "a stop notice replaces an EMERGENCY not yet said (the STOP's 'Retrying' is said instead)",
+    ("    if (held != null && held.announced != true && held.tail != null && tail == null) {\n", "    if (false) {\n"))
+mut("N2", "killed", "an EMERGENCY takes the final word from a stop notice",
+    ("    String word = (tail == null && confirmed) ? confirmed : (held?.confirmed ?: confirmed)\n",
+     "    String word = confirmed ?: held?.confirmed\n"))
+mut("N3", "killed", "a stop notice's own final word does not outrank an EMERGENCY's held one",
+    ("    String word = (tail == null && confirmed) ? confirmed : (held?.confirmed ?: confirmed)\n",
+     "    String word = held?.confirmed ?: confirmed\n"))
+mut("N4", "killed", "an EMERGENCY 2.4.8 left pending is dropped when its job fires under 2.5.0",
+    ("    if (old != null && old.announced != true) deferNotice(", "    if (false) deferNotice("))
+mut("N5", "killed", "a stop notice 2.4.8 left pending is said with no head (`requested` not read)",
+    ("    String head = (pending.head ?: pending.requested)?.toString()", "    String head = pending.head?.toString()"))
+mut("N6", "killed", "stopOpen() leaves out a stop with nothing behind it (idleStopAt): a stale OFF can close it",
+    ("    return state.activeDose != null || state.faultStopAt != null || state.idleStopAt != null\n",
+     "    return state.activeDose != null || state.faultStopAt != null\n"))
 
 
 def build(name):

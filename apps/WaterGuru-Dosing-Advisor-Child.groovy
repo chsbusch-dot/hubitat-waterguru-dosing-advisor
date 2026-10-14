@@ -998,7 +998,7 @@ def uninstalled() {
  */
 private void stopForRemoval() {
     if (!pumpSwitch) return
-    boolean open = state.activeDose != null || state.faultStopAt != null || state.idleStopAt != null
+    boolean open = stopOpen()
     Map sw = readDeviceReading("switch")
     boolean reportsOn = sw.ok == true && sw.value?.toString() == "on"
     try { pumpSwitch.off() }
@@ -1069,13 +1069,11 @@ def initialize() {
 
     // A save with a stop still open checks the backstop: a cutoff whose deadline passed without its job runs
     // now, a missing one is armed, a pending one is left alone (armEmergencyPumpCutoff never postpones one).
-    boolean stopOpen = state.activeDose != null || state.faultStopAt != null || state.idleStopAt != null
-    if (stopOpen) armEmergencyPumpCutoff("a save found a stop still open")
-    // A deferred notice with nothing open has nothing left to say.
-    if (!stopOpen) {
-        state.remove("pendingStopNotice")
-        state.remove("pendingEmergencyNotice")
-    }
+    if (stopOpen()) armEmergencyPumpCutoff("a save found a stop still open")
+    // A deferred notice with nothing open has nothing left to say. 2.4.8's second notice slot goes either
+    // way: a save sends a stop notice of its own (safeStopPump).
+    if (!stopOpen()) state.remove("pendingStopNotice")
+    state.remove("pendingEmergencyNotice")
 
     // Populate the tile right away so it is never blank after a save.
     refreshTile()
@@ -2087,6 +2085,11 @@ private Long stopEvidenceAnchor(Map active) {
     return state.idleStopAt instanceof Number ? (state.idleStopAt as Long) : null
 }
 
+/** A stop is open until the switch confirms OFF: a tracked dose, a fault recovery, or a stop with nothing behind it. */
+private boolean stopOpen() {
+    return state.activeDose != null || state.faultStopAt != null || state.idleStopAt != null
+}
+
 /**
  * Remember the receipt time of an OFF report that passed the anchor checks.
  *
@@ -2259,7 +2262,7 @@ private void stopPump(Map active, String requested, String confirmed, String why
     unschedule("verifyStartConfirmation")
     try {
         if (sendOffAndConfirm(active, why, confirmed)) return
-        if (requested) deferStopNotice(requested, confirmed)
+        if (requested) deferNotice(requested, confirmed)
     } catch (e) {
         // Anything unexpected -- a device read throwing, a notification device failing -- must not
         // end this with nothing scheduled while the pump may still be running.
@@ -2297,22 +2300,37 @@ private String switchStatusPhrase() {
 }
 
 /**
- * Hold the "stop requested" notice back for STOP_CONFIRM_SECONDS.
+ * Hold a stop notice, or an EMERGENCY notice (one with a `tail`), back for STOP_CONFIRM_SECONDS.
  *
- * off() returns before the plug answers: on Oct 2 the command went out at 19:48:38.297 and the OFF
- * report arrived at 38.745. Checking the switch straight after off() would therefore announce every
- * healthy stop as "the switch reports ON. Retrying". The OFF report normally completes the stop
- * through pumpSwitchHandler well inside this window, and finishStop() discards the notice. Only the
- * notice moves: the retry job and the independent cutoff are armed by the caller exactly as before.
- * `confirmed` is the final notice if the switch is found off when the check runs.
+ * off() returns before the plug answers: on Oct 2 the command went out at 19:48:38.297 and the OFF report
+ * arrived at 38.745, and the final retry's or the cutoff's OFF is answered 0.5 to 1.6 s later. Checking the
+ * switch straight after off() would announce every healthy stop as "the switch reports ON. Retrying" and
+ * send an EMERGENCY against a plug about to confirm. The OFF report normally completes the stop through
+ * pumpSwitchHandler well inside this window, and finishStop() discards the notice. Only the notice moves:
+ * every command, retry and cutoff has already been sent or armed by the caller.
+ *
+ * A stop notice reads "head, but <switch status>. Retrying; the independent cutoff stays armed.", an
+ * EMERGENCY "head (<switch status>). tail", the status only `withSwitch`. `confirmed` is the final word if
+ * the check finds the switch off, or, once the notice was said, when the OFF lands.
+ *
+ * One slot (pendingStopNotice) holds the notice still to be said and the final word. With one already held:
+ *   - an EMERGENCY not yet said is never replaced by a stop notice, and keeps its time;
+ *   - the final word becomes the new notice's only when it is a stop notice with one of its own (a stop's
+ *     "stopped" text outranks an EMERGENCY's); otherwise the held word stays.
  */
-private void deferStopNotice(String requested, String confirmed) {
-    state.pendingStopNotice = [requested: requested, confirmed: confirmed]
+private void deferNotice(String head, String confirmed, String tail = null, boolean withSwitch = false) {
+    Map held = state.pendingStopNotice instanceof Map ? state.pendingStopNotice : null
+    String word = (tail == null && confirmed) ? confirmed : (held?.confirmed ?: confirmed)
+    if (held != null && held.announced != true && held.tail != null && tail == null) {
+        state.pendingStopNotice = held + [confirmed: word]
+        return
+    }
+    state.pendingStopNotice = [head: head, tail: tail, withSwitch: withSwitch, confirmed: word]
     runIn(STOP_CONFIRM_SECONDS, "verifyStopRequest", [overwrite: true])
 }
 
 /**
- * The deferred half of a stop request. It never sends a command and never disarms anything except
+ * The deferred half of a stop or EMERGENCY notice. It never sends a command and never disarms anything except
  * through finishStop() on a confirmed OFF, which is the same rule every other stop path follows.
  */
 def verifyStopRequest() {
@@ -2320,60 +2338,39 @@ def verifyStopRequest() {
     if (pending == null || pending.announced == true) return   // already said; it waits for the OFF
     state.remove("pendingStopNotice")
     Map active = state.activeDose instanceof Map ? state.activeDose : null
+    String head = (pending.head ?: pending.requested)?.toString()   // a 2.4.8 stop notice named it `requested`
     try {
         if (pumpIsOff(stopEvidenceAnchor(active))) {
             finishStop(pending.confirmed?.toString())
             return
         }
-        String msg = "${pending.requested}, but ${switchStatusPhrase()}. Retrying; the independent cutoff stays armed."
-        log.warn "WaterGuru Dosing Advisor: ${msg}"
-        sendPumpNotice(msg)
-        // Keep a final word for the OFF that is still to come. Without it a stop that carries no message
-        // of its own (STOP on an idle app, a save, a fault recovery) ends in silence when its OFF lands
-        // after this notice, and "Retrying" is the last thing the user hears.
-        state.pendingStopNotice = [confirmed: pending.confirmed ?: "${pending.requested}: the switch has now confirmed OFF.".toString(),
+        if (pending.tail != null) {
+            String status = pending.withSwitch == true ? " (${switchStatusPhrase()})" : ""
+            String msg = "${head}${status}. ${pending.tail}"
+            log.error "WaterGuru Dosing Advisor: ${msg}"
+            sendPumpNotice(msg)
+        } else {
+            String msg = "${head}, but ${switchStatusPhrase()}. Retrying; the independent cutoff stays armed."
+            log.warn "WaterGuru Dosing Advisor: ${msg}"
+            sendPumpNotice(msg)
+        }
+        // Keep a final word for the OFF that is still to come. Without it a stop that carries no message of
+        // its own (STOP on an idle app, a save, a fault recovery, the cutoff stopping a run the app did not
+        // start) ends in silence when its OFF lands after this notice, and "Retrying" or the EMERGENCY is the
+        // last thing the user hears.
+        state.pendingStopNotice = [confirmed: pending.confirmed ?: "${head}: the switch has now confirmed OFF.".toString(),
                                    announced: true]
     } catch (e) {
-        log.error "WaterGuru Dosing Advisor: the stop notice check hit an unexpected error: ${e.message}"
+        log.error "WaterGuru Dosing Advisor: the deferred notice check hit an unexpected error: ${e.message}"
     }
 }
 
-/**
- * Hold an EMERGENCY notice back for STOP_CONFIRM_SECONDS, exactly like deferStopNotice().
- *
- * The plug's OFF answer lands 0.5 to 1.6 s after the final retry's or the cutoff's off(), so a check
- * straight after it would send the notice against a plug about to confirm. Only the notice moves: every command and
- * re-arm has already happened. `head` + the switch's status (when `withSwitch`) + `tail` is the text;
- * `confirmed` is the final word if the check finds the switch off.
- */
-private void deferEmergencyNotice(String head, boolean withSwitch, String tail, String confirmed) {
-    state.pendingEmergencyNotice = [head: head, withSwitch: withSwitch, tail: tail, confirmed: confirmed]
-    runIn(STOP_CONFIRM_SECONDS, "verifyEmergencyNotice", [overwrite: true])
-}
-
-/** The deferred half of an EMERGENCY notice. Like verifyStopRequest, it never sends a command. */
+/** 2.4.8 kept EMERGENCY notices in a slot and job of their own. One still pending when the code updates speaks here. */
 def verifyEmergencyNotice() {
-    Map pending = state.pendingEmergencyNotice instanceof Map ? state.pendingEmergencyNotice : null
-    if (pending == null || pending.announced == true) return   // already said; it waits for the OFF
+    Map old = state.pendingEmergencyNotice instanceof Map ? state.pendingEmergencyNotice : null
     state.remove("pendingEmergencyNotice")
-    Map active = state.activeDose instanceof Map ? state.activeDose : null
-    try {
-        if (pumpIsOff(stopEvidenceAnchor(active))) {
-            finishStop(pending.confirmed?.toString())
-            return
-        }
-        String status = pending.withSwitch == true ? " (${switchStatusPhrase()})" : ""
-        String msg = "${pending.head}${status}. ${pending.tail}"
-        log.error "WaterGuru Dosing Advisor: ${msg}"
-        sendPumpNotice(msg)
-        // Keep the final word for the OFF still to come, as verifyStopRequest does. The cutoff stopping
-        // a run the app did not start opens no stop of its own, so when that OFF lands after this notice
-        // the EMERGENCY would be the last thing the operator hears.
-        state.pendingEmergencyNotice = [confirmed: pending.confirmed ?: "${pending.head}: the switch has now confirmed OFF.".toString(),
-                                        announced: true]
-    } catch (e) {
-        log.error "WaterGuru Dosing Advisor: the EMERGENCY notice check hit an unexpected error: ${e.message}"
-    }
+    if (old != null && old.announced != true) deferNotice(old.head?.toString(), old.confirmed?.toString(), old.tail?.toString(), old.withSwitch == true)
+    verifyStopRequest()
 }
 
 /** Ask a supporting device to re-report during stop recovery, throttled. A refresh is a request,
@@ -2452,8 +2449,8 @@ def verifyPumpOff() {
             log.error "WaterGuru Dosing Advisor: chlorine pump OFF not freshly confirmed after ${attempt} OFF attempts; the EMERGENCY notice waits ${STOP_CONFIRM_SECONDS}s for the OFF answer"
             // The OFF sent just above is answered 0.5 to 1.6 s later on the live plug, so the
             // notice waits for that answer like the stop notice does.
-            deferEmergencyNotice("EMERGENCY: chlorine pump OFF not freshly confirmed after ${attempt} OFF attempts", true, tail,
-                                 "Chlorine pump stopped on retry ${attempt}.")
+            deferNotice("EMERGENCY: chlorine pump OFF not freshly confirmed after ${attempt} OFF attempts",
+                        "Chlorine pump stopped on retry ${attempt}.", tail, true)
             return
         }
     } catch (e) {
@@ -2537,15 +2534,12 @@ private void finishStop(String msg) {
         String reason = active.fault == "emergency-stop" ? "the emergency cutoff" : active.fault.toString()
         msg = "Chlorine pump confirmed OFF after ${reason}. ${active.ml} mL was planned; delivery is UNCERTAIN. Review and acknowledge the pump fault before future dosing."
     }
-    // A deferred "stop requested" notice is moot now, but its "stopped" text is the right final word
-    // when the path that confirmed the OFF brought none of its own (an idle or recovery OFF report).
+    // A deferred notice is moot now, but its final word is the right one when the path that confirmed the OFF
+    // brought none of its own: an idle or recovery OFF report, or the cutoff stopping a run the app did not
+    // start, which opens no stop of its own (the operator would hear nothing when the OFF lands inside the
+    // wait, or an EMERGENCY with no follow-up when it lands after).
     Map pending = state.pendingStopNotice instanceof Map ? state.pendingStopNotice : null
     if (!msg && pending?.confirmed) msg = pending.confirmed.toString()
-    // So is a deferred EMERGENCY notice's. The cutoff stopping a run the app did not start opens no stop
-    // and no stop notice, so its OFF would otherwise arrive here with nothing to say: the operator would
-    // hear nothing (OFF inside the wait) or an EMERGENCY with no follow-up (OFF after it).
-    Map emergency = state.pendingEmergencyNotice instanceof Map ? state.pendingEmergencyNotice : null
-    if (!msg && emergency?.confirmed) msg = emergency.confirmed.toString()
     // Book what actually ran while the run's ON/OFF evidence is still at hand. A booking
     // failure must not be able to skip the cleanup below.
     String booked = null
@@ -2557,7 +2551,6 @@ private void finishStop(String msg) {
     unschedule("verifyStartConfirmation")
     unschedule("verifyRunPower")
     unschedule("verifyStopRequest")
-    unschedule("verifyEmergencyNotice")
     state.remove("emergencyJobScheduled")
     state.remove("activeDose")
     state.remove("stopAttempts")
@@ -2568,7 +2561,6 @@ private void finishStop(String msg) {
     state.remove("idleStopAt")
     state.remove("stopRefreshAt")
     state.remove("pendingStopNotice")
-    state.remove("pendingEmergencyNotice")
     state.remove("repeatedOnLoggedAt")
     state.remove("faultRun")
     List parts = []
@@ -2798,8 +2790,8 @@ private void logRepeatedOn(String text) {
 private void handlePumpOffEvent(evt) {
     Map active = state.activeDose instanceof Map ? state.activeDose : null
     boolean wasActive = active != null
-    // A stop requested with nothing open (idleStopAt) is held to its anchor too.
-    boolean recovering = wasActive || (state.startFault != null && state.faultStopAt != null) || state.idleStopAt != null
+    // Every open stop, a fault recovery and one with nothing behind it (idleStopAt) included, is held to its anchor.
+    boolean recovering = stopOpen()
     Long anchor = stopEvidenceAnchor(active)
     Long evtAt = eventDateMs(evt)
 
@@ -2961,8 +2953,8 @@ def emergencyPumpOff() {
 
     if (attempt <= 3 || attempt % 10 == 0) {
         // Deferred like the stop notice: the plug's answer to the OFF above lands 0.5 to 1.6 s later.
-        deferEmergencyNotice("EMERGENCY: the cutoff has not been able to turn the chlorine pump off (attempt ${attempt})", false,
-                             "Still trying, but the pump may need to be stopped by hand.", confirmed)
+        deferNotice("EMERGENCY: the cutoff has not been able to turn the chlorine pump off (attempt ${attempt})", confirmed,
+                    "Still trying, but the pump may need to be stopped by hand.")
     }
     armEmergencyPumpCutoff("cutoff OFF unconfirmed (attempt ${attempt})")
 }
@@ -3418,7 +3410,7 @@ private void voidRecordedDose() {
         return
     }
     // While a dose or a stop is open, booking and its corrections may still be writing the same records.
-    if (state.activeDose != null || state.faultStopAt != null || state.idleStopAt != null) {
+    if (stopOpen()) {
         sendPumpNotice("No dose voided: the pump is running or a stop is still being confirmed. Try again once the pump is idle.")
         return
     }
