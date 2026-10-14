@@ -27,6 +27,24 @@
  * All doses are ESTIMATES. Always confirm with your own test kit before adding.
  *
  * Version history
+ *   2.5.0 - The cleanup from the 2026-10-08 debt review (WOR-741). How the pump is started, watched and stopped
+ *           is unchanged. (1) A save no longer clears the job queue: initialize() lost its blanket unschedule()
+ *           and the ~60 lines that recreated what it had cleared. Jobs persist across a save and a hub restart,
+ *           so a stop's retry, cutoff and deferred notice, a pending sample and the 20:30 second fetch keep their
+ *           time (a save between the 19:45 fetch and 20:30 used to drop the second fetch). A save sets the daily
+ *           fetch and the daily summary again (schedule() replaces a handler's job) or removes the one whose
+ *           setting is off, the fetch together with a pending second fetch, and checks an open stop's cutoff
+ *           (armEmergencyPumpCutoff runs an overdue one now); updated() still requests OFF. (2) The planned stop,
+ *           STOP, a save, the retries and the cutoff send OFF through one tail (sendOffAndConfirm, stopPump)
+ *           instead of four copies; the retry and the cutoff now check the switch before asking it to report, as
+ *           the others did. (3) Stop and EMERGENCY notices share one deferred slot and job (deferNotice,
+ *           verifyStopRequest). An EMERGENCY not yet said is never replaced by a stop notice, and a stop notice's
+ *           own final word outranks an EMERGENCY's, so STOP pressed inside the cutoff's 4 s wait sends only the
+ *           EMERGENCY (2.4.8 sent both) and ends with "Chlorine pump stopped: STOP button pressed.". A 2.4.8
+ *           EMERGENCY job still pending after a code update speaks through the verifyEmergencyNotice shim;
+ *           pendingEmergencyNotice is dropped at the next save. One stopOpen() predicate for an open stop.
+ *           (4) No em or en dash in any user-visible string (page, input titles, banners, advice text,
+ *           notices). The subscribe set is unchanged (SUBSCRIPTION_SET 2).
  *   2.4.8 - SLAM doses are capped to the pump limits instead of blocked. On 2026-10-10 at 19:45 SLAM
  *           (0.40 x CYA 33 = 13.2 ppm) asked 6329 mL for FC 5.2, 28m 39s at 221 mL/min, and doseSafetyBlocks
  *           refused it whole: over the 3000 mL single-dose limit, the 14 minute runtime limit and the 3500 mL
@@ -286,7 +304,7 @@
 
 import groovy.transform.Field
 
-def appVersion() { "2.4.8" }
+def appVersion() { "2.5.0" }
 
 definition(
     name:        "WaterGuru Dosing Advisor Pool",

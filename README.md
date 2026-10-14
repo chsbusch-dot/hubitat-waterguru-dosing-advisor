@@ -67,7 +67,7 @@ use **Add a WaterGuru pool** to create an advisor for each pool.
 ## Configure
 
 Each pool is one child app. Fields that read from the WaterGuru device show the
-current live value in their label (e.g. *"Pool volume (gallons) — blank uses
+current live value in their label (e.g. *"Pool volume (gallons); blank uses
 WaterGuru's value (currently 25000)"*), so you can see what "blank" will use
 without pinning it.
 
@@ -418,6 +418,8 @@ keeps counting up to the EMERGENCY escalation and the cutoff runs as scheduled. 
 relay closing again) is still answered with OFF at once. The EMERGENCY notices wait a few seconds
 for the plug's answer to the OFF just sent, like the stop notice, and an emergency cutoff that is
 overdue (a busy hub, or a save just after its deadline) runs at once instead of being rescheduled.
+If STOP is pressed while an EMERGENCY warning is still waiting, only the EMERGENCY is sent, and the
+final notice when the OFF lands is the STOP's own ("Chlorine pump stopped: STOP button pressed.").
 The running power watch stops as soon as an OFF is requested, so falling power during a stop is
 never reported as a power loss, and the cutoff latches the start fault when it stops an attempt
 that was never confirmed. A power check that runs more than two intervals after the previous one
@@ -480,6 +482,12 @@ once and clears the field.
   sending it.
 
 Every one of these also refreshes the dashboard tile (if enabled).
+
+Saving the app (**Done**) keeps every scheduled job where it was. Since 2.5.0 a save no longer clears
+the hub's job queue: a stop in progress keeps its retries, its cutoff and its pending notice, a sample
+that arrived in the last 20 seconds is still processed, and the second evening fetch (20:30 for a
+19:45 refresh) still goes out after a save at 19:55. A save sets the daily fetch and the daily summary
+again, removes the one whose setting is off, and, as before, requests OFF for the pump.
 
 ## License
 
