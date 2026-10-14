@@ -4831,11 +4831,12 @@ check("2.5.0 change 6: no em or en dash in the page, the banners or the advice t
            "the unconfirmed stop's notice")
 }
 
-check("2.5.0 change 6: no em or en dash in the app's source outside comments and log lines (input titles, page text)") {
+check("2.5.0 change 6: no em or en dash in the apps' source outside comments and log lines (input titles, page text)") {
     // Input titles and page paragraphs never run in the stub (input() and paragraph() are no-ops), so only the
-    // source shows them. A dash in a comment or a log line is allowed.
+    // source shows them. A dash in a comment or a log line is allowed. The parent app (2.0.1) is read too.
     List offending = []
-    appFile.readLines().eachWithIndex { String line, int i ->
+    def parentFile = new File("apps/WaterGuru-Dosing-Advisor.groovy")
+    [appFile, parentFile].each { File f -> f.readLines().eachWithIndex { String line, int i ->
         def m = DASHES.matcher(line)
         if (!m.find()) return
         String t = line.trim()
@@ -4843,9 +4844,9 @@ check("2.5.0 change 6: no em or en dash in the app's source outside comments and
         if (t.contains("log.") || t.contains("logDebug")) return
         int comment = line.indexOf(" //")
         if (comment >= 0 && comment < m.start()) return
-        offending << "${i + 1}: ${t}"
-    }
-    expect(appFile.readLines().size() > 3000, "sanity: the source was read")
+        offending << "${f.name}:${i + 1}: ${t}"
+    } }
+    expect(appFile.readLines().size() > 3000 && parentFile.readLines().size() > 50, "sanity: both sources were read")
     expect(offending.isEmpty(), "user-visible dash on line ${offending}")
 }
 

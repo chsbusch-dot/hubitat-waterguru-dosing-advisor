@@ -13,7 +13,7 @@ the 2.4.1 code and asserted (killed) since 2.5.0, M21 retired as equivalent; F1-
 each (WOR-731), Y1-Y2 one 2.4.5 change each (WOR-739), Z1-Z2 one 2.4.6 item each (WOR-740), L1-L8 one
 2.4.7 change each, K1-K5 one fix each from the 2.4.7 verification round and J1-J8 one follow-up change each
 (WOR-752), S1-S16 one 2.4.8 SLAM-cap behaviour each, TG1-TG12 one SLAM plausibility-guard rule each
-(WOR-755; TG, since T1-T4 were taken), U1-U4 one 2.5.0 save rule each and N1-N6 one notice-slot or stopOpen() rule each and D1-D4 one dash put back each (WOR-741), and every one of those
+(WOR-755; TG, since T1-T4 were taken), U1-U4 one 2.5.0 save rule each and N1-N6 one notice-slot or stopOpen() rule each and D1-D5 one dash put back each (WOR-741; D5 in the parent app), and every one of those
 must be killed by the tests that guard it.
 
 A mutant edits the child app unless it is declared with mutp(), which edits the profiler. Each mutant
@@ -34,7 +34,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 OUT = ROOT / "tests" / "mutation" / "out"
 APP = "apps/WaterGuru-Dosing-Advisor-Child.groovy"
 PROFILER = "apps/PumpPowerProfiler.groovy"
-SUITES = {APP: ["run_tests.groovy"], PROFILER: ["profiler_tests.groovy"]}
+PARENT = "apps/WaterGuru-Dosing-Advisor.groovy"
+SUITES = {APP: ["run_tests.groovy"], PROFILER: ["profiler_tests.groovy"], PARENT: ["run_tests.groovy"]}
 
 # name -> (expectation, description, [(old, new, count), ...], target file or None for the base)
 V = {}
@@ -466,6 +467,9 @@ mut("D3", "killed", "an em dash is back in the SLAM input title (page text the s
     ("title: \"SLAM mode: target FC as a multiple of CYA", "title: \"SLAM mode \u2014 target FC as a multiple of CYA"))
 mut("D4", "killed", "an en dash is back in the pH block reason",
     ("is outside ${n2(loPh)} to ${n2(hiPh)}", "is outside ${n2(loPh)}\u2013${n2(hiPh)}"))
+mut("D5", "killed", "an em dash is back in the parent app's page text (parent 2.0.1)",
+    ("paragraph \"Complementary to the WaterGuru Integration app: it does not", "paragraph \"Complementary to the WaterGuru Integration app \u2014 it does not"),
+    target=PARENT)
 
 
 def build(name):

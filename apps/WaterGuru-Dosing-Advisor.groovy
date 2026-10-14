@@ -24,6 +24,7 @@
  *           on the tile. (Parent unchanged except this version bump.)
  *   2.0.0 - Children can control a calibrated liquid-chlorine pump with
  *           advisory, approval or automatic modes and fail-closed safety limits.
+ *   2.0.1 - No em dash in the page text (WOR-741, with the pool app's 2.5.0).
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy
@@ -38,7 +39,7 @@
  * under the License.
  */
 
-def appVersion() { "2.0.0" }
+def appVersion() { "2.0.1" }
 
 definition(
     name:        "WaterGuru Dosing Advisor",
@@ -61,7 +62,7 @@ def mainPage() {
     dynamicPage(name: "mainPage", title: "WaterGuru Dosing Advisor", uninstall: true, install: true) {
         section {
             paragraph "Create one guarded dosing controller per WaterGuru pool. Each child reads WaterGuru, calculates a liquid-chlorine dose, converts it to pump runtime, and can advise, queue for approval, or dose automatically after safety checks."
-            paragraph "Complementary to the WaterGuru Integration app — it does not duplicate that app's alerts, quiet hours or thresholds."
+            paragraph "Complementary to the WaterGuru Integration app: it does not duplicate that app's alerts, quiet hours or thresholds."
         }
 
         section("<b>Pools</b>") {
@@ -71,7 +72,7 @@ def mainPage() {
 
         section {
             input "logEnable", "bool", title: "Enable debug logging (parent)", defaultValue: false
-            paragraph "<small>v${appVersion()} — doses are estimates; always confirm with your own test kit before adding chemicals.</small>"
+            paragraph "<small>v${appVersion()}: doses are estimates; always confirm with your own test kit before adding chemicals.</small>"
         }
     }
 }
