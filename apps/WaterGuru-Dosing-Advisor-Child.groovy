@@ -972,11 +972,9 @@ private String sampleTimestampText() {
 def installed() { initialize() }
 
 def updated() {
-    // Rebuild the subscriptions and the job queue FIRST, then stop. initialize() clears every job and
-    // restores protection only for the stops it knows about: stopping before it would throw away the
-    // retry and the cutoff of a run the app is not tracking (a manual run), and a lost OFF would then
-    // leave the pump on with nothing scheduled to stop it. The stop must happen even if initialize()
-    // fails part way: its first step already cleared the queue.
+    // Rebuild the subscriptions, then stop. The stop must happen even if initialize() fails part way, and
+    // it is what re-arms an open stop: safeStopPump() requests OFF and keeps the retry and the cutoff
+    // until the switch confirms it, whatever was running (a dose, a fault recovery, a manual run).
     unsubscribe()
     try {
         initialize()
@@ -989,7 +987,7 @@ def updated() {
 def uninstalled() {
     stopForRemoval()
     unsubscribe()
-    clearScheduledJobs("uninstalled")
+    unschedule()
     removeTileDevice()
 }
 
@@ -1013,22 +1011,12 @@ private void stopForRemoval() {
     sendPumpNotice(msg)
 }
 
-/**
- * Clear every scheduled job AND the record of what was scheduled.
- *
- * unschedule() alone is not enough. state.emergencyDeadline survives it, and a surviving deadline
- * that still reads as "armed" is how protection came to depend on a timestamp instead of a timer:
- * after a queue reset the app believed a cutoff was in place while the queue was empty. Anything
- * that clears the queue goes through here so the two cannot disagree.
- */
-private void clearScheduledJobs(String why) {
-    unschedule()
-    state.remove("emergencyJobScheduled")
-    logDebug "Cleared every scheduled job (${why})"
-}
-
 def initialize() {
-    clearScheduledJobs("initialize")   // digest, sample-delay, dose and watchdog jobs are rebuilt below
+    // No unschedule() here. Jobs persist across a save (and a hub restart), so a stop's retry, cutoff and
+    // deferred notice, a sample waiting to be processed and the second evening fetch all keep their time,
+    // and nothing has to be rebuilt. Up to 2.4.8 a blanket unschedule() cleared the queue here and the rest
+    // of this method recreated what it had cleared; a save between the 19:45 fetch and 20:30 lost the second
+    // fetch that way. schedule() replaces a handler's job, so the daily jobs are simply set again below.
 
     // Give the child a meaningful name in the parent's list if unnamed.
     if (sourceDevice && (!app.label || app.label == "WaterGuru Dosing Advisor Pool")) {
@@ -1056,78 +1044,37 @@ def initialize() {
     // they are made, so an initialize() that fails before this point leaves the install reading as stale.
     state.subscriptionSet = SUBSCRIPTION_SET
 
+    // A time-of-day input schedules a daily recurring job at that clock time. A daily job whose setting is
+    // off goes, with the second fetch the refresh may have left pending.
     if (dailyDigest == true && digestTime) {
-        // A time-of-day input schedules a daily recurring job at that clock time.
         schedule(digestTime, "dailyDigestHandler")
         logDebug "Scheduled daily summary at ${digestTime}"
+    } else {
+        unschedule("dailyDigestHandler")
     }
-    if (refreshSourceDaily == true && sourceRefreshTime) {
-        if (sourceDevice?.hasCommand("refresh")) {
-            schedule(sourceRefreshTime, "refreshWaterGuruSource")
-            logDebug "Scheduled daily WaterGuru refresh at ${sourceRefreshTime}"
-        } else {
-            log.warn "WaterGuru Dosing Advisor: selected source device has no refresh command"
-        }
+    boolean refreshes = refreshSourceDaily == true && sourceRefreshTime
+    if (refreshes && !sourceDevice?.hasCommand("refresh")) {
+        log.warn "WaterGuru Dosing Advisor: selected source device has no refresh command"
+        refreshes = false
     }
-    // A sample that arrived in the 20 s before this queue reset loses its processing job with it (and
-    // its FC reading), so a save right after a new sample would drop that sample. Schedule it again.
-    String pendingSample = state.pendingSampleKey?.toString()
-    if (pendingSample && sourceDevice) {
-        runIn(20, "processNewSample", [data: [sampleKey: pendingSample], overwrite: true])
-        logDebug "Rescheduled the processing of WaterGuru sample ${pendingSample} after the queue reset"
-    } else if (pendingSample) {
-        state.remove("pendingSampleKey")
+    if (refreshes) {
+        schedule(sourceRefreshTime, "refreshWaterGuruSource")
+        logDebug "Scheduled daily WaterGuru refresh at ${sourceRefreshTime}"
+    } else {
+        unschedule("refreshWaterGuruSource")
+        unschedule("retryWaterGuruRefresh")
     }
+    // 2.4.4 to 2.4.8 kept a pending sample's key so the queue reset could reschedule its processing.
+    state.remove("pendingSampleKey")
 
-    // unschedule() at the top of this method clears EVERY job, including an armed cutoff or a
-    // pending stop verification. A configuration change must not be the reason the last backstop
-    // disappears, so if a dose is still recorded as active, put the protection back before
-    // anything else assumes the pump is safe.
-    if (state.activeDose != null) {
-        Map active = state.activeDose instanceof Map ? state.activeDose : null
-        log.warn "WaterGuru Dosing Advisor: initialize found a dose still recorded as active; re-arming stop protection"
-        armEmergencyPumpCutoff("initialize found a dose still recorded as active")
-        runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
-        // A start that was still being confirmed loses its verification timer in the queue reset.
-        // Recreate it (the deadline and the reservation live in state, not in the job) unless the
-        // attempt has already faulted, in which case only the stop/backstop jobs above apply.
-        if (active != null && active.startConfirmed != true && active.fault == null) {
-            runIn(START_CHECK_SECONDS, "verifyStartConfirmation", [overwrite: true])
-            log.warn "WaterGuru Dosing Advisor: recreated the start-confirmation check after the queue reset"
-        }
-        // Not once an OFF has been requested: the watch would read the falling power of the
-        // stop itself and latch a false power loss.
-        if (active != null && active.startConfirmed == true && active.offRequestedAt == null && powerConfirmationRequired()) {
-            runIn(RUN_POWER_CHECK_SECONDS, "verifyRunPower", [overwrite: true])
-            log.warn "WaterGuru Dosing Advisor: recreated the running power watch after the queue reset"
-        }
-    } else if (state.startFault != null && state.faultStopAt != null) {
-        // A standalone fault recovery (a late ON after the dose was cleaned up) has no activeDose,
-        // so the block above would miss it and the queue reset would silently drop its stop jobs.
-        // Recreate the stop verification and re-arm the ORIGINAL emergency deadline. Do NOT
-        // recreate the start-confirmation or power-watch jobs: this is stop-only.
-        log.warn "WaterGuru Dosing Advisor: initialize found a standalone fault recovery; re-arming stop protection"
-        armEmergencyPumpCutoff("initialize found a standalone fault recovery")
-        runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
-    } else if (state.idleStopAt != null) {
-        // A stop with nothing open (STOP on an idle app, an earlier save) that is still
-        // unconfirmed keeps its retry and its cutoff too.
-        log.warn "WaterGuru Dosing Advisor: initialize found an unconfirmed stop; re-arming stop protection"
-        armEmergencyPumpCutoff("initialize found an unconfirmed stop")
-        runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
-    }
-    // The deferred notices lost their jobs in the queue reset too. Recreate them while a stop is
-    // still open; with nothing open there is nothing left to say. A stop notice that was already sent
-    // only waits for the OFF, to give the final word, so its check is not run a second time.
+    // A save with a stop still open checks the backstop: a cutoff whose deadline passed without its job runs
+    // now, a missing one is armed, a pending one is left alone (armEmergencyPumpCutoff never postpones one).
     boolean stopOpen = state.activeDose != null || state.faultStopAt != null || state.idleStopAt != null
-    if (state.pendingStopNotice != null) {
-        if (!stopOpen) state.remove("pendingStopNotice")
-        else if (state.pendingStopNotice.announced != true) runIn(STOP_CONFIRM_SECONDS, "verifyStopRequest", [overwrite: true])
-    }
-    if (state.pendingEmergencyNotice != null) {
-        // An EMERGENCY notice already sent only waits for the OFF too, like the stop notice.
-        if (!stopOpen) state.remove("pendingEmergencyNotice")
-        else if (state.pendingEmergencyNotice.announced != true) runIn(STOP_CONFIRM_SECONDS, "verifyEmergencyNotice", [overwrite: true])
+    if (stopOpen) armEmergencyPumpCutoff("a save found a stop still open")
+    // A deferred notice with nothing open has nothing left to say.
+    if (!stopOpen) {
+        state.remove("pendingStopNotice")
+        state.remove("pendingEmergencyNotice")
     }
 
     // Populate the tile right away so it is never blank after a save.
@@ -1188,13 +1135,10 @@ def onNewSample(evt) {
     // the 8 samples from Sep 29 to Oct 5 on the live hub. processNewSample reads the sample once it is in.
     logDebug "New WaterGuru sample (${evt?.value}); waiting briefly for all attributes"
     String key = evt?.value?.toString() ?: attrRaw("LastMeasurement") ?: now().toString()
-    // Kept until processNewSample runs, so initialize() can schedule it again after a queue reset.
-    state.pendingSampleKey = key
     runIn(20, "processNewSample", [data: [sampleKey: key], overwrite: true])
 }
 
 def processNewSample(Map data = [:]) {
-    state.remove("pendingSampleKey")
     String key = attrRaw("LastMeasurement") ?: data?.sampleKey?.toString()
     if (key && state.lastProcessedSample == key) {
         logDebug "Ignoring duplicate WaterGuru sample ${key}"

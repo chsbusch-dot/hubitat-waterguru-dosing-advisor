@@ -544,9 +544,11 @@ check("computeTankRunway: ongoing zero-dose days lower the measured rate") {
            "and the runway should lengthen")
 }
 
-// ------------------------------------------------------- queue resets (initialize/updated)
+// ------------------------------------------------------- saves (initialize/updated)
+// Up to 2.4.8 initialize() cleared the queue and recreated the jobs it knew about, and these checks asserted the
+// recreation. Since 2.5.0 nothing clears the queue, so they assert that the jobs survive a save unchanged.
 
-check("a queue reset must RECREATE the cutoff job, keeping the original deadline") {
+check("a save keeps the cutoff job and its original deadline") {
     def app = newApp()
     def pump = new FakeSwitch("on")
     pump.mode = "ignoresOff"
@@ -560,17 +562,17 @@ check("a queue reset must RECREATE the cutoff job, keeping the original deadline
     app.state.emergencyJobScheduled = true
     app.scheduled["emergencyPumpOff"] = 300
 
-    app.updated()      // safeStopPump -> unsubscribe -> initialize, which clears the queue
+    app.updated()      // unsubscribe -> initialize -> safeStopPump; nothing clears the queue
 
     expect(app.scheduled["emergencyPumpOff"] != null,
-           "the cutoff timer must exist after the reset; queue was ${app.scheduled}")
+           "the cutoff timer must exist after the save; queue was ${app.scheduled}")
     expect(app.state.emergencyDeadline == app.clockMs + 300_000L,
            "the original deadline must be preserved, got ${app.state.emergencyDeadline}")
     expect(app.scheduled["emergencyPumpOff"] == 300,
-           "recreated with the REMAINING 300s, not a fresh window; got ${app.scheduled['emergencyPumpOff']}")
+           "still the original 300 s job, not a fresh window; got ${app.scheduled['emergencyPumpOff']}")
 }
 
-check("after a queue reset, exhausting the retries must leave a REAL armed job") {
+check("after a save, exhausting the retries must leave a REAL armed job") {
     def app = newApp()
     def pump = new FakeSwitch("on")
     pump.mode = "ignoresOff"
@@ -601,7 +603,7 @@ check("after a queue reset, exhausting the retries must leave a REAL armed job")
            "and the app should know a job is pending")
 }
 
-check("control: a queue reset with a healthy switch clears state and queue") {
+check("control: a save with a healthy switch clears state and queue") {
     def app = newApp()
     def pump = new FakeSwitch("on")
     app.pumpSwitch = pump
@@ -1042,22 +1044,23 @@ check("fault: acknowledging when nothing is pending is a no-op") {
     expect(!app.noticesMatching("No pump fault").isEmpty(), "it should say there is nothing to acknowledge")
 }
 
-check("initialize: a pending start keeps its verification and reservation across a queue reset") {
+check("initialize: a pending start keeps its verification and reservation across a save") {
     def app = newApp()
     def pump = bindClock(app, new FakeSwitch("off"))
     primeForStart(app, pump)
     pump.powerCapable = true
     app.startDose(sampleDose(app), "test")
     def reserved = app.state.doseMlToday
+    Map due = new LinkedHashMap(app.dueAt)
 
     app.initialize()
 
-    expect(app.scheduled["verifyStartConfirmation"] != null,
-           "the start check must be recreated after a queue reset")
+    expect(app.dueAt == due, "every job keeps its time across a save, none is recreated: ${due} -> ${app.dueAt}")
+    expect(app.scheduled["verifyStartConfirmation"] != null, "the start check is still pending")
     expect(app.state.activeDose != null && app.state.activeDose.startConfirmed == false,
-           "the unconfirmed dose must survive the reset")
-    expect(app.state.doseMlToday == reserved, "the reservation must survive the reset")
-    expect(app.scheduled["emergencyPumpOff"] != null, "the cutoff must be re-armed")
+           "the unconfirmed dose must survive the save")
+    expect(app.state.doseMlToday == reserved, "the reservation must survive the save")
+    expect(app.scheduled["emergencyPumpOff"] != null, "the cutoff stays armed")
 }
 
 check("initialize: a latched fault stays visible and is not resurrected as a start") {
@@ -1073,10 +1076,10 @@ check("initialize: a latched fault stays visible and is not resurrected as a sta
 
     app.initialize()
 
-    expect(app.state.startFault != null, "the fault must survive a queue reset")
+    expect(app.state.startFault != null, "the fault must survive a save")
     expect(app.state.activeDose != null && app.state.activeDose.fault != null,
            "the aborted attempt must not be resurrected for confirmation")
-    expect(app.scheduled["verifyPumpOff"] != null, "stop protection must be recreated")
+    expect(app.scheduled["verifyPumpOff"] != null, "stop protection stays pending")
 }
 
 check("start: refresh is requested at most about every 10 s while confirming") {
@@ -1175,10 +1178,10 @@ check("updated: renewing configuration during a pending start keeps stop protect
     app.startDose(sampleDose(app), "test")
     def reserved = app.state.doseMlToday
 
-    app.updated()   // safeStopPump -> unsubscribe -> initialize
+    app.updated()   // unsubscribe -> initialize -> safeStopPump
 
     expect(app.state.activeDose != null, "an unconfirmed stop must survive a configuration change")
-    expect(app.scheduled["verifyPumpOff"] != null, "stop retries must be recreated")
+    expect(app.scheduled["verifyPumpOff"] != null, "stop retries stay pending")
     expect(app.scheduled["emergencyPumpOff"] != null, "the cutoff must be re-armed")
     expect(app.state.doseMlToday == reserved, "the reservation must survive")
 }
@@ -1652,8 +1655,8 @@ check("initialize: a standalone fault recovery keeps real stop jobs and the orig
 
     app.initialize()
 
-    expect(app.scheduled["verifyPumpOff"] != null, "the stop verification must be recreated")
-    expect(app.scheduled["emergencyPumpOff"] != null, "the cutoff job must be recreated")
+    expect(app.scheduled["verifyPumpOff"] != null, "the stop verification stays pending")
+    expect(app.scheduled["emergencyPumpOff"] != null, "the cutoff job stays pending")
     expect(app.state.emergencyDeadline == deadline, "the ORIGINAL deadline must be preserved")
     expect(app.scheduled["verifyStartConfirmation"] == null, "no start job for a fault-only recovery")
     expect(app.scheduled["verifyRunPower"] == null, "nor a power-watch job")
@@ -2299,8 +2302,8 @@ check("fix 3: a configuration save during an unconfirmed stop keeps the deferred
     def app = newApp()
     def pump = hubPlug(app)
     confirmedHubStart(app, pump)
-    app.updated()                                              // safeStopPump, then a full queue reset
-    expect(app.dueAt["verifyStopRequest"] != null, "the deferred check survives the reset: ${app.dueAt}")
+    app.updated()                                              // Done: initialize(), then safeStopPump
+    expect(app.dueAt["verifyStopRequest"] != null, "the deferred check survives the save: ${app.dueAt}")
     app.advance(5_000L)
     expect(app.noticesMatching("stop requested (configuration changed)").size() == 1, "and speaks when the OFF never lands")
 }
@@ -2680,12 +2683,13 @@ check("fault: a late ON while an aborted attempt's stop is still open is answere
     expect(app.state.activeDose.startConfirmed == false, "it is never reclassified as a start")
 }
 
-check("initialize: a confirmed power run gets its power watch back after a queue reset") {
+check("initialize: a confirmed power run keeps its power watch across a save") {
     def app = newApp()
     def pump = hubPlug(app)
     confirmedHubStart(app, pump)
+    Map due = new LinkedHashMap(app.dueAt)
     app.initialize()
-    expect(app.dueAt["verifyRunPower"] != null, "the running power watch must be recreated: ${app.dueAt}")
+    expect(app.dueAt["verifyRunPower"] != null && app.dueAt == due, "the running power watch keeps its time: ${due} -> ${app.dueAt}")
     expect(app.dueAt["emergencyPumpOff"] != null && app.dueAt["verifyPumpOff"] != null, "with stop protection")
 }
 
@@ -2834,7 +2838,7 @@ check("2.4.2 fix 3: a settings save during a manual run keeps the retry and the 
     app.updated()
     expect(pump.commands.count("off") == 1, "the save sends one OFF: ${pump.commands}")
     expect(app.dueAt["verifyPumpOff"] != null && app.dueAt["emergencyPumpOff"] != null,
-           "and its retry and cutoff survive the queue reset: ${app.dueAt}")
+           "and its retry and cutoff survive the save: ${app.dueAt}")
     app.advance(3_600_000L)                                    // that OFF never lands
     expect(pump.commands.count("off") >= 6, "OFF keeps being sent: ${pump.commands.count('off')}")
     expect(app.noticesMatching("EMERGENCY").size() >= 1, "and the escalation is reached")
@@ -2912,11 +2916,11 @@ check("2.4.2 fix 4: a cutoff that is due but has not run is fired now, never pus
     expect(app.state.emergencyAttempts == 1 && pump.offCalls == before + 1, "and it did run")
 }
 
-check("2.4.2 fix 4: a queue reset after the deadline passed fires the cutoff now") {
+check("2.4.2 fix 4: a save after the deadline passed fires the cutoff now") {
     def app = newApp()
     def pump = hubPlug(app)
     confirmedHubStart(app, pump)
-    app.state.emergencyDeadline = app.clockMs - 5_000L         // due five seconds ago; the reset drops its job
+    app.state.emergencyDeadline = app.clockMs - 5_000L         // due five seconds ago and its job has not run
     app.state.emergencyJobScheduled = true
     app.initialize()
     expect(app.dueAt["emergencyPumpOff"] <= app.clockMs + 1_000L, "it runs now, not a whole window later: ${app.dueAt}")
@@ -3948,6 +3952,70 @@ check("2.4.5 change 2: the second fetch is skipped when the AUTO window has clos
     app.runUntil(t0 + 3_600_000L)
     expect(wg.refreshCalls == 1 && app.dueAt["retryWaterGuruRefresh"] == null, "but does not go out: ${wg.refreshCalls} / ${app.dueAt}")
     expect(app.logLines.count { it.contains("AUTO dosing window is closed; no second refresh") } == 1, "one line says why: ${app.logLines.findAll { it.contains('window') }}")
+}
+
+// ----------------------------------------------------------------------- 2.5.0 (WOR-741): a save keeps the queue
+
+check("2.5.0 change 2: a save between the 19:45 fetch and 20:30 keeps the second fetch (2.4.8: dropped it)") {
+    def app = newApp()
+    def d = eveningApp(app)
+    def pump = d.pump, wg = d.wg
+    long t0 = app.clockMs
+    app.fire("refreshWaterGuruSource")                         // 19:45: nothing new comes back
+    app.advance(600_000L)
+    app.updated()                                              // Done at 19:55
+    app.advance(400L)
+    app.deliverDeviceReport(pump, "switch", "off")             // the save's OFF is answered
+    expect(app.dueAt["retryWaterGuruRefresh"] == t0 + 2_700_000L, "the second fetch keeps its 20:30 time: ${app.dueAt}")
+    app.runUntil(t0 + 2_700_000L)
+    expect(wg.refreshCalls == 2, "and goes out at 20:30: ${wg.refreshCalls}")
+}
+
+check("2.5.0 change 2: a save during a confirmed run leaves every job where it was") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    confirmedHubStart(app, pump, incidentDose(app) + [doseMl: 2210G, runSeconds: 600])
+    healthyUntil(app, pump, app.clockMs + 25_000L)
+    Map due = new LinkedHashMap(app.dueAt)
+    app.initialize()
+    expect(app.dueAt == due, "the stop, its retry, the cutoff and the power watch keep their times: ${due} -> ${app.dueAt}")
+    expect(app.logLines.count { it.contains("cutoff already armed and due sooner") } == 1, "the save only checked the cutoff")
+}
+
+check("2.5.0 change 2: a save with a daily job switched off removes it, and the second fetch with the refresh") {
+    def app = newApp()
+    def d = eveningApp(app)
+    app.dailyDigest = true
+    app.digestTime = "20:00"
+    app.initialize()
+    expect(app.scheduled["dailyDigestHandler"] == "20:00" && app.scheduled["refreshWaterGuruSource"] == "19:45",
+           "sanity: both daily jobs are set: ${app.scheduled}")
+    app.fire("refreshWaterGuruSource")
+    expect(app.dueAt["retryWaterGuruRefresh"] != null, "sanity: a second fetch is pending")
+    app.dailyDigest = false
+    app.refreshSourceDaily = false
+    app.updated()
+    expect(!app.scheduled.containsKey("dailyDigestHandler") && !app.scheduled.containsKey("refreshWaterGuruSource"),
+           "the daily jobs are gone: ${app.scheduled}")
+    expect(app.dueAt["retryWaterGuruRefresh"] == null, "and the pending second fetch with them: ${app.dueAt}")
+    app.dailyDigest = true
+    app.refreshSourceDaily = true
+    app.sourceRefreshTime = "19:50"
+    app.initialize()
+    expect(app.scheduled["dailyDigestHandler"] == "20:00" && app.scheduled["refreshWaterGuruSource"] == "19:50",
+           "switched back on, each is set once at its time: ${app.scheduled}")
+}
+
+check("2.5.0 change 2: a source without a refresh command gets no daily fetch, and says why") {
+    def app = newApp()
+    def d = eveningApp(app)
+    app.fire("refreshWaterGuruSource")
+    app.sourceDevice = new FakeSwitch("off")                   // no refresh command on this one
+    app.sourceDevice.refreshSupported = false
+    app.initialize()
+    expect(!app.scheduled.containsKey("refreshWaterGuruSource") && app.dueAt["retryWaterGuruRefresh"] == null,
+           "neither fetch stays: ${app.scheduled} / ${app.dueAt}")
+    expect(app.logLines.any { it.contains("selected source device has no refresh command") }, "and the log says why")
 }
 
 // ----------------------------------------------------------------------- 2.4.6 (WOR-740): debt review items

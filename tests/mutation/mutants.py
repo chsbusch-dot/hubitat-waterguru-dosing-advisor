@@ -13,7 +13,7 @@ the 2.4.1 code and asserted (killed) since 2.5.0, M21 retired as equivalent; F1-
 each (WOR-731), Y1-Y2 one 2.4.5 change each (WOR-739), Z1-Z2 one 2.4.6 item each (WOR-740), L1-L8 one
 2.4.7 change each, K1-K5 one fix each from the 2.4.7 verification round and J1-J8 one follow-up change each
 (WOR-752), S1-S16 one 2.4.8 SLAM-cap behaviour each, TG1-TG12 one SLAM plausibility-guard rule each
-(WOR-755; TG, since T1-T4 were taken), and every one of those
+(WOR-755; TG, since T1-T4 were taken), U1-U4 one 2.5.0 save rule each (WOR-741), and every one of those
 must be killed by the tests that guard it.
 
 A mutant edits the child app unless it is declared with mutp(), which edits the profiler. Each mutant
@@ -120,11 +120,8 @@ mut("M17", "killed", "late ON during an aborted (active) attempt no longer reque
      "                // MUTANT: no immediate OFF"))
 mut("M18", "killed", "pumpIsOff accepts a future-dated OFF",
     ("        if (futureDated(at)) return false   // future-dated OFF\n", ""))
-mut("M19", "killed", "initialize does not recreate the running power watch",
-    ("        if (active != null && active.startConfirmed == true && active.offRequestedAt == null && powerConfirmationRequired()) {\n"
-     "            runIn(RUN_POWER_CHECK_SECONDS, \"verifyRunPower\", [overwrite: true])\n"
-     "            log.warn \"WaterGuru Dosing Advisor: recreated the running power watch after the queue reset\"\n"
-     "        }\n", ""))
+# M19 (initialize does not recreate the running power watch) is retired in 2.5.0 with the queue reset it
+# undid: nothing clears the power watch at a save any more, and U1 puts the clearing back.
 mut("M20", "killed", "verifyStartConfirmation ignores an OFF request (startStopRequested guard removed)",
     ("    if (startStopRequested(active)) return   // an OFF was requested; a late report must not confirm\n", ""))
 # M21 (power event ignores an OFF request) is retired in 2.5.0 as an equivalent mutant: every path that requests
@@ -182,13 +179,11 @@ mut("R5b", "killed", "fix 5 reverted: the cutoff's EMERGENCY notice is sent the 
     ("        deferEmergencyNotice(\"EMERGENCY: the cutoff has not been able to turn the chlorine pump off (attempt ${attempt})\", false,\n"
      "                             \"Still trying, but the pump may need to be stopped by hand.\", confirmed)\n",
      "        sendPumpNotice(\"EMERGENCY: the cutoff has not been able to turn the chlorine pump off (attempt ${attempt}). Still trying, but the pump may need to be stopped by hand.\")\n"))
-mut("R6", "killed", "fix 6 reverted: the power watch keeps judging a run after its OFF request (all three guards)",
+mut("R6", "killed", "fix 6 reverted: the power watch keeps judging a run after its OFF request (both guards; the initialize one went in 2.5.0)",
     ("    if (active.offRequestedAt != null) return\n    if (!powerConfirmationRequired()) return\n",
      "    if (!powerConfirmationRequired()) return\n"),
     ("    } else if (active.startConfirmed == true && active.offRequestedAt == null && powerConfirmationRequired()) {\n",
-     "    } else if (active.startConfirmed == true && powerConfirmationRequired()) {\n"),
-    ("        if (active != null && active.startConfirmed == true && active.offRequestedAt == null && powerConfirmationRequired()) {\n",
-     "        if (active != null && active.startConfirmed == true && powerConfirmationRequired()) {\n"))
+     "    } else if (active.startConfirmed == true && powerConfirmationRequired()) {\n"))
 mut("R6a", "killed", "fix 6, one guard only: verifyRunPower ignores offRequestedAt (a check queued behind the STOP latches a false power loss)",
     ("    if (active.offRequestedAt != null) return\n    if (!powerConfirmationRequired()) return\n",
      "    if (!powerConfirmationRequired()) return\n"))
@@ -259,8 +254,8 @@ mut("X6", "killed", "fix 6 reverted: a power check long after the previous one j
 mut("X6b", "killed", "fix 6 unsafe: every late power check is put off, so a silent run is never aborted",
     ("    if (previousCheck != null && nowMs - previousCheck > 2L * RUN_POWER_CHECK_SECONDS * 1000L && active.powerCheckDeferred != true) {\n",
      "    if (previousCheck != null && nowMs - previousCheck > 2L * RUN_POWER_CHECK_SECONDS * 1000L) {\n"))
-mut("X7", "killed", "fix 7 reverted: a queue reset drops a sample that is waiting to be processed",
-    ("        runIn(20, \"processNewSample\", [data: [sampleKey: pendingSample], overwrite: true])\n", ""))
+# X7 (a queue reset drops a sample waiting to be processed) is retired in 2.5.0: the processing job survives a
+# save, so there is no rescheduling left to revert. U1 (the queue reset back) drops the sample again.
 mut("X8", "killed", "fix 8 reverted: every unchanged ON during an outside run re-arms and logs a WARN",
     ("        if (unchangedOn && emergencyCutoffPendingNotDue()) {\n", "        if (false) {\n"))
 mut("X9", "killed", "fix 9 reverted: the confirmed-OFF notice carries the app name and no period",
@@ -435,6 +430,17 @@ mut("TG11", "killed", "the FREE CHLORINE block does not say why the dose is not 
     ("        if (suspect != null) lines << \"  ⚠ Not pumped: ${suspect}.\"\n", ""))
 mut("TG12", "killed", "the daily summary of an implausible reading reads as a capped dose (live: autoRun off, digest on)",
     ("    if (result?.doseSuspect) return \"Daily pool chlorine: not pumped.", "    if (false) return \"Daily pool chlorine: not pumped."))
+
+
+# ---- 2.5.0 (WOR-741): a save keeps the queue (must be killed) ----
+mut("U1", "killed", "the blanket unschedule() is back at the top of initialize(): a save clears every job",
+    ("def initialize() {\n", "def initialize() {\n    unschedule()\n"))
+mut("U2", "killed", "a save with the daily refresh switched off leaves the fetch and the second fetch scheduled",
+    ("        unschedule(\"refreshWaterGuruSource\")\n        unschedule(\"retryWaterGuruRefresh\")\n", ""))
+mut("U3", "killed", "a save with the daily summary switched off leaves it scheduled",
+    ("    } else {\n        unschedule(\"dailyDigestHandler\")\n    }\n", "    }\n"))
+mut("U4", "killed", "a save no longer checks an open stop's cutoff (an overdue one waits for its late job)",
+    ("    if (stopOpen) armEmergencyPumpCutoff(\"a save found a stop still open\")\n", ""))
 
 
 def build(name):
