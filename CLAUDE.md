@@ -96,7 +96,8 @@ source tests against that (`liveWaterGuru`, `wgSample` in `run_tests.groovy`).
 
 Optional, not in CI (a few minutes): `tests/mutation/run.sh` reruns the 2.4.0 review's mutation set
 plus one mutant per 2.4.1 fix (F*), per 2.4.2 fix (R*), per 2.4.3 fix (W*), per 2.4.4 fix (X*) and per
-profiler 1.1.1 fix (XP*, declared with `mutp`); each mutant runs the suite for its file, and the base
+profiler 1.1.1 fix (XP*, declared with `mutp`), per profiler 1.2.0 sampling behaviour (E*) and wear rule
+(WM*), and PI1 (the dosing app's own refresh, WOR-716); each mutant runs the suite for its file, and the base
 runs both. The unmutated `base` must pass and every `[killed]` mutant must fail;
 anchors are exact strings, so re-anchor a mutant when the code under it changes.
 

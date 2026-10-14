@@ -413,7 +413,7 @@ the app did not start, the OFF that answers it brings a final "EMERGENCY cutoff 
 chlorine pump OFF" notice, whether it lands before or after the EMERGENCY warning.
 
 Once a stop is being enforced, a repeated ON report whose value did not change (for example a
-stuck relay answering the Pump Power Profiler's 3 s refresh) does not restart it: the retry count
+stuck relay answering a refresh, this app's own or another app's) does not restart it: the retry count
 keeps counting up to the EMERGENCY escalation and the cutoff runs as scheduled. A changed ON (the
 relay closing again) is still answered with OFF at once. The EMERGENCY notices wait a few seconds
 for the plug's answer to the OFF just sent, like the stop notice, and an emergency cutoff that is
@@ -480,6 +480,63 @@ once and clears the field.
   sending it.
 
 Every one of these also refreshes the dashboard tile (if enabled).
+
+## Pump Power Profiler (optional)
+
+`apps/PumpPowerProfiler.groovy` is a separate app and not part of the Hubitat Package Manager
+package; install it by hand (*Apps Code > New App*) if you want power profiles of the pump. It is
+read-only toward the device: it sends `refresh()` and never switches it. Each run is saved to File
+Manager as `<prefix>-YYYYMMDD-HHMMSS.csv`, with one row per run in `<prefix>-summary.csv`.
+
+### Sampling (1.2.0)
+
+- When the switch turns on, the profiler subscribes to the device's power reports, unchanged ones
+  included, and records a row for each. The subscription ends with the capture.
+- It sends one refresh 5 s after the ON and one 3 s after the OFF.
+- It polls only when no power report has arrived for *fallbackSecs* (default 90 s, 15 to 900). A
+  ZEN05 set to report power once a minute (parameter 10 = 1) and on a 5 W change is never polled,
+  and during a dose the dosing app's own refresh every 10 s brings a report anyway.
+- A capture ends *tailSecs* after the OFF (default 15 s, at least 5) or after 60 minutes.
+
+Up to 1.1.1 the profiler refreshed the plug on every sample (*sampleSecs*, 5 s on the live
+instance); *sampleSecs* and *tailSamples* are no longer read. Refreshes per 13.5 minute run,
+counted in the test stub (`Gets:` checks in `tests/groovy/profiler_tests.groovy`) at about 6 Z-Wave
+Gets per refresh, as the 2026-10-14 capture measured:
+
+| Run | 1.1.1 | 1.2.0 |
+|---|---|---|
+| Dose, the dosing app refreshing every 10 s | 166 refreshes (about 996 Gets) | 2 (12 Gets) |
+| No other app, the plug's 1 minute report | 166 (about 996 Gets) | 2 (12 Gets) |
+| A plug that reports only changes | 166 (about 996 Gets) | 10 (60 Gets) |
+
+The dosing app does not depend on the profiler's refreshes: its start is confirmed on the plug's
+own ON and power reports, and its run watch asks the plug for a report every 10 s itself (82
+refreshes in a 13.5 minute dose). The `WOR-716` checks in `tests/groovy/run_tests.groovy` run such
+a dose with no profiler at all, and a control in which the dosing app's own refreshes go
+unanswered, which loses the run.
+
+### Wear monitor (1.2.0)
+
+Each run's average power in its steady phase, from 30 s after the ON to 5 s before the OFF, is
+compared with the median of the previous 10 runs. The first three runs only build that baseline;
+runs with less than 60 s of steady phase, or without a recorded ON and OFF, are not judged. When
+two judged runs in a row differ from their median by more than *wearThresholdPct* (default 10%),
+in either direction, one alert goes to the *wearNotify* devices and to the log; a run within the
+threshold ends the streak. The last 30 runs are kept in the app's state. *Clear the wear history*
+starts the baseline again, for example after the pump or its tube is replaced.
+
+The two baseline runs on plug 4680 (Oct 12 and 13, 814.6 s) give a steady phase of 6.86 W and
+6.82 W. Short doses read a little higher than long ones, because the draw eases from about 7.1 W
+to 6.7 W over a run.
+
+### CSV columns
+
+The run file keeps its 1.1.x columns and gains two at its end: `source` (on, manual, power, poll
+or off: what made the row) and `event_date_ms` (a power report's own date; an unchanged report
+leaves `watts_date_ms` where it was). There is now one row per report instead of one per poll, so
+`samples` and `onSamples` are not comparable with 1.1.x runs. The summary gains `steadyWattsAvg`,
+`steadySamples`, `wearMedianWatts`, `wearDeviationPct`, `profilerRefreshes` and `powerEvents` at
+its end; a summary file with a 1.0.x or 1.1.x header is extended in place.
 
 ## License
 
