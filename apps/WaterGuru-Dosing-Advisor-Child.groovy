@@ -27,6 +27,24 @@
  * All doses are ESTIMATES. Always confirm with your own test kit before adding.
  *
  * Version history
+ *   2.5.0 - The cleanup from the 2026-10-08 debt review (WOR-741). How the pump is started, watched and stopped
+ *           is unchanged. (1) A save no longer clears the job queue: initialize() lost its blanket unschedule()
+ *           and the ~60 lines that recreated what it had cleared. Jobs persist across a save and a hub restart,
+ *           so a stop's retry, cutoff and deferred notice, a pending sample and the 20:30 second fetch keep their
+ *           time (a save between the 19:45 fetch and 20:30 used to drop the second fetch). A save sets the daily
+ *           fetch and the daily summary again (schedule() replaces a handler's job) or removes the one whose
+ *           setting is off, the fetch together with a pending second fetch, and checks an open stop's cutoff
+ *           (armEmergencyPumpCutoff runs an overdue one now); updated() still requests OFF. (2) The planned stop,
+ *           STOP, a save, the retries and the cutoff send OFF through one tail (sendOffAndConfirm, stopPump)
+ *           instead of four copies; the retry and the cutoff now check the switch before asking it to report, as
+ *           the others did. (3) Stop and EMERGENCY notices share one deferred slot and job (deferNotice,
+ *           verifyStopRequest). An EMERGENCY not yet said is never replaced by a stop notice, and a stop notice's
+ *           own final word outranks an EMERGENCY's, so STOP pressed inside the cutoff's 4 s wait sends only the
+ *           EMERGENCY (2.4.8 sent both) and ends with "Chlorine pump stopped: STOP button pressed.". A 2.4.8
+ *           EMERGENCY job still pending after a code update speaks through the verifyEmergencyNotice shim;
+ *           pendingEmergencyNotice is dropped at the next save. One stopOpen() predicate for an open stop.
+ *           (4) No em or en dash in any user-visible string (page, input titles, banners, advice text,
+ *           notices). The subscribe set is unchanged (SUBSCRIPTION_SET 2).
  *   2.4.8 - SLAM doses are capped to the pump limits instead of blocked. On 2026-10-10 at 19:45 SLAM
  *           (0.40 x CYA 33 = 13.2 ppm) asked 6329 mL for FC 5.2, 28m 39s at 221 mL/min, and doseSafetyBlocks
  *           refused it whole: over the 3000 mL single-dose limit, the 14 minute runtime limit and the 3500 mL
@@ -286,7 +304,7 @@
 
 import groovy.transform.Field
 
-def appVersion() { "2.4.8" }
+def appVersion() { "2.5.0" }
 
 definition(
     name:        "WaterGuru Dosing Advisor Pool",
@@ -431,7 +449,7 @@ preferences {
 // ---------------------------------------------------------------------------
 
 def mainPage() {
-    dynamicPage(name: "mainPage", title: "WaterGuru Dosing Advisor — pool", uninstall: true, install: true) {
+    dynamicPage(name: "mainPage", title: "WaterGuru Dosing Advisor: pool", uninstall: true, install: true) {
 
         section("<b>Current dosing preview</b>") {
             paragraph nextCycleHtml()
@@ -463,7 +481,7 @@ def mainPage() {
 
         section("<b>Free chlorine target (this app's core value-add)</b>") {
             input "slamMode", "bool",
-                title: "SLAM mode — target FC as a multiple of CYA (recommended while recovering)",
+                title: "SLAM mode: target FC as a multiple of CYA (recommended while recovering)",
                 defaultValue: true, submitOnChange: true
             if (slamMode != false) {
                 paragraph slamPageBanner()
@@ -474,17 +492,17 @@ def mainPage() {
                 paragraph "SLAM off: FC min = ${TFP_MIN_FACTOR} x CYA, target = ${TFP_TARGET_FACTOR} x CYA (TFP model)."
             }
             input "fcTargetOverride", "decimal",
-                title: "Manual FC target override (ppm) — blank = compute from CYA above",
+                title: "Manual FC target override (ppm); blank = compute from CYA above",
                 required: false
         }
 
         section("<b>Chlorine runway (algae forecast)</b>") {
             input "showRunway", "bool",
-                title: "Show a chlorine-runway estimate — days until FC drops below the algae floor",
+                title: "Show a chlorine-runway estimate (days until FC drops below the algae floor)",
                 defaultValue: true, submitOnChange: true
             if (showRunway != false) {
                 input "fcLossPerDay", "decimal",
-                    title: "Daily FC loss rate (ppm/day) — blank = auto (measured from samples, else estimated)",
+                    title: "Daily FC loss rate (ppm/day); blank = auto (measured from samples, else estimated)",
                     required: false
                 paragraph "The floor is the algae-prevention minimum (${TFP_MIN_FACTOR} × CYA). " +
                           "Runway = (FC − floor) ÷ daily loss. The loss rate is measured from your own " +
@@ -590,7 +608,7 @@ def mainPage() {
                 title: "Limit AUTO mode to one completed dose per calendar day",
                 defaultValue: true
 
-            paragraph "<b>Safety limits</b> — every limit must pass before the pump can start. A blocked dose is logged and notified."
+            paragraph "<b>Safety limits:</b> every limit must pass before the pump can start. A blocked dose is logged and notified."
             input "maxSampleAgeHours", "decimal", title: "Maximum WaterGuru sample age (hours)", defaultValue: 18, required: true
             input "minDoseMl", "decimal", title: "Minimum dose to run (mL)", defaultValue: 50, required: true
             input "maxSingleDoseMl", "decimal", title: "Maximum single dose (mL)", defaultValue: 3000, required: true
@@ -666,8 +684,8 @@ def mainPage() {
             if (createTile != false) {
                 def tdev = getTileDevice()
                 if (tdev) {
-                    paragraph "Tile device: <b>${tdev.displayName}</b> — current status " +
-                              "<b>${tdev.currentValue('status') ?: '—'}</b>. Add it to a dashboard as an " +
+                    paragraph "Tile device: <b>${tdev.displayName}</b>, current status " +
+                              "<b>${tdev.currentValue('status') ?: 'unknown'}</b>. Add it to a dashboard as an " +
                               "<b>Attribute</b> tile bound to <code>recommendation</code> (one-liner), " +
                               "<code>tileHtml</code> (formatted), or <code>status</code> " +
                               "(GREEN / YELLOW / RED, for coloring)."
@@ -702,7 +720,7 @@ def mainPage() {
 
         section {
             input "logEnable", "bool", title: "Enable debug logging", defaultValue: true
-            paragraph "<small>v${appVersion()} — doses are estimates; always confirm with your own test kit before adding chemicals.</small>"
+            paragraph "<small>v${appVersion()}: doses are estimates; always confirm with your own test kit before adding chemicals.</small>"
         }
     }
 }
@@ -714,9 +732,9 @@ def mainPage() {
  */
 private String hint(String attr, String fallback = null) {
     def v = sourceDevice?.currentValue(attr)
-    if (v != null) return " — blank uses WaterGuru's value (currently ${v})"
-    if (fallback)  return " — blank uses WaterGuru's value (fallback ${fallback})"
-    return " — blank uses WaterGuru's value"
+    if (v != null) return "; blank uses WaterGuru's value (currently ${v})"
+    if (fallback)  return "; blank uses WaterGuru's value (fallback ${fallback})"
+    return "; blank uses WaterGuru's value"
 }
 
 /** Loud red banner shown on the config page whenever SLAM mode is on. */
@@ -728,7 +746,7 @@ private String slamPageBanner() {
         tgt = " Current target &asymp; ${n1((cyaNow as BigDecimal) * fac)} ppm (${n2(fac)} &times; CYA ${n0(cyaNow as BigDecimal)})."
     }
     return "<div style='background:#c0392b;color:#ffffff;padding:10px;border-radius:6px;font-weight:bold'>" +
-           "&#128680; SLAM MODE IS ON &mdash; free-chlorine target is deliberately elevated to clear algae.${tgt} " +
+           "&#128680; SLAM MODE IS ON: the free-chlorine target is deliberately elevated to clear algae.${tgt} " +
            "Switch it off once the pool is clear and holds chlorine overnight.</div>"
 }
 
@@ -825,25 +843,25 @@ private String dosingStatusHtml() {
     Map active = state.activeDose instanceof Map ? state.activeDose : null
     String activeText
     if (active == null && state.faultStopAt != null) {
-        activeText = "STOPPING — recovering a stop after a fault; waiting for a fresh OFF report"
+        activeText = "STOPPING: recovering a stop after a fault; waiting for a fresh OFF report"
     } else if (active == null && state.idleStopAt != null) {
         activeText = "STOPPING: an OFF was requested; waiting for the switch to confirm it"
     } else if (active == null) {
         activeText = "idle"
     } else if (active.fault != null) {
-        activeText = "FAULT (${active.fault}) — stop protection stays armed until the switch confirms off"
+        activeText = "FAULT (${active.fault}): stop protection stays armed until the switch confirms off"
     } else if (active.startConfirmed == true) {
-        activeText = "RUNNING — start confirmed; ${active.ml} mL; scheduled stop ${new Date((active.stopAt ?: 0L) as Long)}"
+        activeText = "RUNNING: start confirmed; ${active.ml} mL; scheduled stop ${new Date((active.stopAt ?: 0L) as Long)}"
     } else {
-        activeText = "STARTING — waiting for a fresh ON report before it is reported as running; ${active.ml} mL planned"
+        activeText = "STARTING: waiting for a fresh ON report before it is reported as running; ${active.ml} mL planned"
     }
     String pending = state.pendingDose ? "${state.pendingDose.ml} mL / ${formatDuration((state.pendingDose.seconds ?: 0) as Integer)} from sample ${state.pendingDose.sample}" : "none"
     String basis = state.lastDose?.observed == true ? "booked from the observed ON-to-OFF run time, not measured delivery" : "planned estimate, not measured delivery"
     String last = state.lastDose ? "${state.lastDose.ml} mL on ${new Date((state.lastDose.time ?: 0) as Long)} (${basis})" : "none"
-    String fault = state.startFault ? "<b>UNACKNOWLEDGED: ${state.startFault.reason}</b> — press <i>Acknowledge pump fault</i> when reviewed (does not run the pump, and the attempt stays reserved)" : "none"
+    String fault = state.startFault ? "<b>UNACKNOWLEDGED: ${state.startFault.reason}</b>. Press <i>Acknowledge pump fault</i> when reviewed (does not run the pump, and the attempt stays reserved)" : "none"
     String confirm = powerConfirmationRequired()
         ? "fresh ON report + power ≥ ${n1(startPowerMinWatts())} W (within ${startTimeoutSeconds()}s, never past the planned stop)"
-        : "fresh ON report only (this switch does not report power) — power and flow are unverified"
+        : "fresh ON report only (this switch does not report power); power and flow are unverified"
     String circulation = circulationSwitch ? "${circulationSwitch.displayName} (${circulationSwitch.currentValue('switch') ?: 'unknown'})" :
                          (circulationAlwaysOn == true ? "confirmed continuous (24/7)" : "not confirmed")
     String subs = subscriptionsCurrent() ? "current" :
@@ -972,11 +990,9 @@ private String sampleTimestampText() {
 def installed() { initialize() }
 
 def updated() {
-    // Rebuild the subscriptions and the job queue FIRST, then stop. initialize() clears every job and
-    // restores protection only for the stops it knows about: stopping before it would throw away the
-    // retry and the cutoff of a run the app is not tracking (a manual run), and a lost OFF would then
-    // leave the pump on with nothing scheduled to stop it. The stop must happen even if initialize()
-    // fails part way: its first step already cleared the queue.
+    // Rebuild the subscriptions, then stop. The stop must happen even if initialize() fails part way, and
+    // it is what re-arms an open stop: safeStopPump() requests OFF and keeps the retry and the cutoff
+    // until the switch confirms it, whatever was running (a dose, a fault recovery, a manual run).
     unsubscribe()
     try {
         initialize()
@@ -989,7 +1005,7 @@ def updated() {
 def uninstalled() {
     stopForRemoval()
     unsubscribe()
-    clearScheduledJobs("uninstalled")
+    unschedule()
     removeTileDevice()
 }
 
@@ -1000,7 +1016,7 @@ def uninstalled() {
  */
 private void stopForRemoval() {
     if (!pumpSwitch) return
-    boolean open = state.activeDose != null || state.faultStopAt != null || state.idleStopAt != null
+    boolean open = stopOpen()
     Map sw = readDeviceReading("switch")
     boolean reportsOn = sw.ok == true && sw.value?.toString() == "on"
     try { pumpSwitch.off() }
@@ -1013,22 +1029,12 @@ private void stopForRemoval() {
     sendPumpNotice(msg)
 }
 
-/**
- * Clear every scheduled job AND the record of what was scheduled.
- *
- * unschedule() alone is not enough. state.emergencyDeadline survives it, and a surviving deadline
- * that still reads as "armed" is how protection came to depend on a timestamp instead of a timer:
- * after a queue reset the app believed a cutoff was in place while the queue was empty. Anything
- * that clears the queue goes through here so the two cannot disagree.
- */
-private void clearScheduledJobs(String why) {
-    unschedule()
-    state.remove("emergencyJobScheduled")
-    logDebug "Cleared every scheduled job (${why})"
-}
-
 def initialize() {
-    clearScheduledJobs("initialize")   // digest, sample-delay, dose and watchdog jobs are rebuilt below
+    // No unschedule() here. Jobs persist across a save (and a hub restart), so a stop's retry, cutoff and
+    // deferred notice, a sample waiting to be processed and the second evening fetch all keep their time,
+    // and nothing has to be rebuilt. Up to 2.4.8 a blanket unschedule() cleared the queue here and the rest
+    // of this method recreated what it had cleared; a save between the 19:45 fetch and 20:30 lost the second
+    // fetch that way. schedule() replaces a handler's job, so the daily jobs are simply set again below.
 
     // Give the child a meaningful name in the parent's list if unnamed.
     if (sourceDevice && (!app.label || app.label == "WaterGuru Dosing Advisor Pool")) {
@@ -1056,79 +1062,36 @@ def initialize() {
     // they are made, so an initialize() that fails before this point leaves the install reading as stale.
     state.subscriptionSet = SUBSCRIPTION_SET
 
+    // A time-of-day input schedules a daily recurring job at that clock time. A daily job whose setting is
+    // off goes, with the second fetch the refresh may have left pending.
     if (dailyDigest == true && digestTime) {
-        // A time-of-day input schedules a daily recurring job at that clock time.
         schedule(digestTime, "dailyDigestHandler")
         logDebug "Scheduled daily summary at ${digestTime}"
+    } else {
+        unschedule("dailyDigestHandler")
     }
-    if (refreshSourceDaily == true && sourceRefreshTime) {
-        if (sourceDevice?.hasCommand("refresh")) {
-            schedule(sourceRefreshTime, "refreshWaterGuruSource")
-            logDebug "Scheduled daily WaterGuru refresh at ${sourceRefreshTime}"
-        } else {
-            log.warn "WaterGuru Dosing Advisor: selected source device has no refresh command"
-        }
+    boolean refreshes = refreshSourceDaily == true && sourceRefreshTime
+    if (refreshes && !sourceDevice?.hasCommand("refresh")) {
+        log.warn "WaterGuru Dosing Advisor: selected source device has no refresh command"
+        refreshes = false
     }
-    // A sample that arrived in the 20 s before this queue reset loses its processing job with it (and
-    // its FC reading), so a save right after a new sample would drop that sample. Schedule it again.
-    String pendingSample = state.pendingSampleKey?.toString()
-    if (pendingSample && sourceDevice) {
-        runIn(20, "processNewSample", [data: [sampleKey: pendingSample], overwrite: true])
-        logDebug "Rescheduled the processing of WaterGuru sample ${pendingSample} after the queue reset"
-    } else if (pendingSample) {
-        state.remove("pendingSampleKey")
+    if (refreshes) {
+        schedule(sourceRefreshTime, "refreshWaterGuruSource")
+        logDebug "Scheduled daily WaterGuru refresh at ${sourceRefreshTime}"
+    } else {
+        unschedule("refreshWaterGuruSource")
+        unschedule("retryWaterGuruRefresh")
     }
+    // 2.4.4 to 2.4.8 kept a pending sample's key so the queue reset could reschedule its processing.
+    state.remove("pendingSampleKey")
 
-    // unschedule() at the top of this method clears EVERY job, including an armed cutoff or a
-    // pending stop verification. A configuration change must not be the reason the last backstop
-    // disappears, so if a dose is still recorded as active, put the protection back before
-    // anything else assumes the pump is safe.
-    if (state.activeDose != null) {
-        Map active = state.activeDose instanceof Map ? state.activeDose : null
-        log.warn "WaterGuru Dosing Advisor: initialize found a dose still recorded as active; re-arming stop protection"
-        armEmergencyPumpCutoff("initialize found a dose still recorded as active")
-        runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
-        // A start that was still being confirmed loses its verification timer in the queue reset.
-        // Recreate it (the deadline and the reservation live in state, not in the job) unless the
-        // attempt has already faulted, in which case only the stop/backstop jobs above apply.
-        if (active != null && active.startConfirmed != true && active.fault == null) {
-            runIn(START_CHECK_SECONDS, "verifyStartConfirmation", [overwrite: true])
-            log.warn "WaterGuru Dosing Advisor: recreated the start-confirmation check after the queue reset"
-        }
-        // Not once an OFF has been requested: the watch would read the falling power of the
-        // stop itself and latch a false power loss.
-        if (active != null && active.startConfirmed == true && active.offRequestedAt == null && powerConfirmationRequired()) {
-            runIn(RUN_POWER_CHECK_SECONDS, "verifyRunPower", [overwrite: true])
-            log.warn "WaterGuru Dosing Advisor: recreated the running power watch after the queue reset"
-        }
-    } else if (state.startFault != null && state.faultStopAt != null) {
-        // A standalone fault recovery (a late ON after the dose was cleaned up) has no activeDose,
-        // so the block above would miss it and the queue reset would silently drop its stop jobs.
-        // Recreate the stop verification and re-arm the ORIGINAL emergency deadline. Do NOT
-        // recreate the start-confirmation or power-watch jobs: this is stop-only.
-        log.warn "WaterGuru Dosing Advisor: initialize found a standalone fault recovery; re-arming stop protection"
-        armEmergencyPumpCutoff("initialize found a standalone fault recovery")
-        runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
-    } else if (state.idleStopAt != null) {
-        // A stop with nothing open (STOP on an idle app, an earlier save) that is still
-        // unconfirmed keeps its retry and its cutoff too.
-        log.warn "WaterGuru Dosing Advisor: initialize found an unconfirmed stop; re-arming stop protection"
-        armEmergencyPumpCutoff("initialize found an unconfirmed stop")
-        runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
-    }
-    // The deferred notices lost their jobs in the queue reset too. Recreate them while a stop is
-    // still open; with nothing open there is nothing left to say. A stop notice that was already sent
-    // only waits for the OFF, to give the final word, so its check is not run a second time.
-    boolean stopOpen = state.activeDose != null || state.faultStopAt != null || state.idleStopAt != null
-    if (state.pendingStopNotice != null) {
-        if (!stopOpen) state.remove("pendingStopNotice")
-        else if (state.pendingStopNotice.announced != true) runIn(STOP_CONFIRM_SECONDS, "verifyStopRequest", [overwrite: true])
-    }
-    if (state.pendingEmergencyNotice != null) {
-        // An EMERGENCY notice already sent only waits for the OFF too, like the stop notice.
-        if (!stopOpen) state.remove("pendingEmergencyNotice")
-        else if (state.pendingEmergencyNotice.announced != true) runIn(STOP_CONFIRM_SECONDS, "verifyEmergencyNotice", [overwrite: true])
-    }
+    // A save with a stop still open checks the backstop: a cutoff whose deadline passed without its job runs
+    // now, a missing one is armed, a pending one is left alone (armEmergencyPumpCutoff never postpones one).
+    if (stopOpen()) armEmergencyPumpCutoff("a save found a stop still open")
+    // A deferred notice with nothing open has nothing left to say. 2.4.8's second notice slot goes either
+    // way: a save sends a stop notice of its own (safeStopPump).
+    if (!stopOpen()) state.remove("pendingStopNotice")
+    state.remove("pendingEmergencyNotice")
 
     // Populate the tile right away so it is never blank after a save.
     refreshTile()
@@ -1188,13 +1151,10 @@ def onNewSample(evt) {
     // the 8 samples from Sep 29 to Oct 5 on the live hub. processNewSample reads the sample once it is in.
     logDebug "New WaterGuru sample (${evt?.value}); waiting briefly for all attributes"
     String key = evt?.value?.toString() ?: attrRaw("LastMeasurement") ?: now().toString()
-    // Kept until processNewSample runs, so initialize() can schedule it again after a queue reset.
-    state.pendingSampleKey = key
     runIn(20, "processNewSample", [data: [sampleKey: key], overwrite: true])
 }
 
 def processNewSample(Map data = [:]) {
-    state.remove("pendingSampleKey")
     String key = attrRaw("LastMeasurement") ?: data?.sampleKey?.toString()
     if (key && state.lastProcessedSample == key) {
         logDebug "Ignoring duplicate WaterGuru sample ${key}"
@@ -1333,7 +1293,7 @@ private Map computeAdvice() {
     boolean red = false      // a chemical is needed, or SLAM is active
     boolean yellow = false   // optional / advisory / uncertain
 
-    out << "🌊 WaterGuru Dosing Advisor — ${label}"
+    out << "🌊 WaterGuru Dosing Advisor: ${label}"
     out << currentReadingsSummary(false)
     String lossLine = safeFcLossText("summary line") { fcLossLine() }
     if (lossLine) out << lossLine
@@ -1362,7 +1322,7 @@ private Map computeAdvice() {
         out << fcResult.banner
     }
     out << ""
-    out << "FREE CHLORINE (computed)${fcResult.slam ? ' — 🚨 SLAM MODE' : ''}"
+    out << "FREE CHLORINE (computed)${fcResult.slam ? ': 🚨 SLAM MODE' : ''}"
     out.addAll(fcResult.lines)
     anyAction = anyAction || fcResult.action
     red    = red    || fcResult.required || fcResult.slam
@@ -1384,7 +1344,7 @@ private Map computeAdvice() {
             red = true
             kept.each { chips << shortenWg(it) }
         } else {
-            out << "  • None — WaterGuru reports no pH / TA / CH / CYA adjustment needed."
+            out << "  • None: WaterGuru reports no pH / TA / CH / CYA adjustment needed."
         }
     } else {
         out << "pH / TA / CH / CYA (generic estimates)"
@@ -1396,7 +1356,7 @@ private Map computeAdvice() {
             yellow = yellow || gen.advisories
             chips.addAll(gen.chips)
         } else {
-            out << "  • All within target (or readings unavailable) — nothing to add."
+            out << "  • All within target (or readings unavailable); nothing to add."
         }
     }
 
@@ -1417,7 +1377,7 @@ private Map computeAdvice() {
     out << ""
     if (runway) { out << runwayLine(runway); out << "" }
     warnings.unique().each { out << "⚠ ${it}" }
-    out << "⚠ Estimates only — confirm with your own test kit before adding chemicals."
+    out << "⚠ Estimates only: confirm with your own test kit before adding chemicals."
     if (!anyAction) out << "✅ No chemical additions indicated right now."
 
     // ---- At-a-glance status + one-liner (for the tile & digest) ------------
@@ -1468,7 +1428,7 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
             target = (cya * factor)
             basis = "SLAM ${n2(factor)} x CYA ${n0(cya)}"
             slam = true
-            banner = "🚨 SLAM MODE ACTIVE — free chlorine is held high on purpose: target ${n1(target)} ppm (${n2(factor)} × CYA ${n0(cya)}). Maintain it and retest often; turn SLAM off once the pool is clear and holds chlorine overnight."
+            banner = "🚨 SLAM MODE ACTIVE. Free chlorine is held high on purpose: target ${n1(target)} ppm (${n2(factor)} × CYA ${n0(cya)}). Maintain it and retest often; turn SLAM off once the pool is clear and holds chlorine overnight."
         } else {
             minFc  = cya * TFP_MIN_FACTOR
             target = cya * TFP_TARGET_FACTOR
@@ -1477,7 +1437,7 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
     } else {
         // No CYA and no manual target — fall back to the device's own FC target.
         target = attrNum("freeChlorineTarget") ?: 3G
-        basis = "CYA unavailable — using WaterGuru FC target ${n1(target)} ppm (not CYA-aware)"
+        basis = "CYA unavailable; using WaterGuru FC target ${n1(target)} ppm (not CYA-aware)"
         warnings << "CYA reading unavailable; FC target is not CYA-aware. Add a manual FC target or check the sensor."
     }
 
@@ -1487,7 +1447,7 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
         return [lines: lines, action: false, slam: slam, banner: banner,
                 required: false, optional: false, chip: null, fcVal: null, target: target,
                 doseMl: null, runSeconds: null,
-                fcSummary: "FC — → ${n1(target)} ppm"]
+                fcSummary: "FC n/a → ${n1(target)} ppm"]
     }
 
     lines << "  FC ${n1(fc)} ppm  →  target ${n1(target)} ppm  (${basis})"
@@ -1521,13 +1481,13 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
         if (suspect != null) lines << "  ⚠ Not pumped: ${suspect}."
         chip = "${optional ? 'Top up' : 'Add'} ${shortVol(floz)} chlorine"
         action = true
-        if (ppmGap > 8G) warnings << "Large chlorine addition (+${n1(ppmGap)} ppm) — add in stages and retest between doses."
-        if (floz > 640G) warnings << "Very large chlorine dose (${n0(floz)} fl oz) — double-check pool volume and the FC reading."
+        if (ppmGap > 8G) warnings << "Large chlorine addition (+${n1(ppmGap)} ppm): add in stages and retest between doses."
+        if (floz > 640G) warnings << "Very large chlorine dose (${n0(floz)} fl oz): double-check pool volume and the FC reading."
     } else {
         if (slamMode != false && !numSet(fcTargetOverride)) {
-            lines << "  ✔ FC ${n1(fc)} ≥ SLAM target ${n1(target)} ppm — maintain SLAM level, retest, do not add."
+            lines << "  ✔ FC ${n1(fc)} ≥ SLAM target ${n1(target)} ppm: maintain SLAM level, retest, do not add."
         } else {
-            lines << "  ✔ FC ${n1(fc)} ≥ target ${n1(target)} ppm — hold, no chlorine needed."
+            lines << "  ✔ FC ${n1(fc)} ≥ target ${n1(target)} ppm: hold, no chlorine needed."
         }
     }
     return [lines: lines, action: action, slam: slam, banner: banner,
@@ -1676,7 +1636,7 @@ private Map computeGeneric(BigDecimal ph, BigDecimal ta, BigDecimal ch, BigDecim
         }
         additions = true
     } else if (ph != null && ph < phTarget) {
-        lines << "  • pH ${n1(ph)} low (target ${n1(phTarget)}): aerate to raise, or add soda ash per product directions (no amount estimated — base is easy to overshoot)."
+        lines << "  • pH ${n1(ph)} low (target ${n1(phTarget)}): aerate to raise, or add soda ash per product directions (no amount estimated; base is easy to overshoot)."
         chips << "raise pH"
         additions = true
     }
@@ -1701,7 +1661,7 @@ private Map computeGeneric(BigDecimal ph, BigDecimal ta, BigDecimal ch, BigDecim
         additions = true
     } else if (ch != null && ch > chTarget + 50G) {
         BigDecimal frac = (1G - (chTarget / ch)) * 100G
-        lines << "  • CH ${n0(ch)} high (target ${n0(chTarget)}): no additive lowers CH — partial drain/refill ~${n0(frac)}% (~${n0(volume * frac / 100G)} gal)."
+        lines << "  • CH ${n0(ch)} high (target ${n0(chTarget)}): no additive lowers CH; partial drain/refill ~${n0(frac)}% (~${n0(volume * frac / 100G)} gal)."
         chips << "CH high: partial drain"
         advisories = true
     }
@@ -1714,7 +1674,7 @@ private Map computeGeneric(BigDecimal ph, BigDecimal ta, BigDecimal ch, BigDecim
         additions = true
     } else if (cya != null && cya > cyaTarget) {
         BigDecimal frac = (1G - (cyaTarget / cya)) * 100G
-        lines << "  • CYA ${n0(cya)} high (target ${n0(cyaTarget)}): no additive lowers CYA — partial drain/refill ~${n0(frac)}% (~${n0(volume * frac / 100G)} gal)."
+        lines << "  • CYA ${n0(cya)} high (target ${n0(cyaTarget)}): no additive lowers CYA; partial drain/refill ~${n0(frac)}% (~${n0(volume * frac / 100G)} gal)."
         chips << "CYA high: partial drain"
         advisories = true
     }
@@ -2143,6 +2103,11 @@ private Long stopEvidenceAnchor(Map active) {
     return state.idleStopAt instanceof Number ? (state.idleStopAt as Long) : null
 }
 
+/** A stop is open until the switch confirms OFF: a tracked dose, a fault recovery, or a stop with nothing behind it. */
+private boolean stopOpen() {
+    return state.activeDose != null || state.faultStopAt != null || state.idleStopAt != null
+}
+
 /**
  * Remember the receipt time of an OFF report that passed the anchor checks.
  *
@@ -2284,7 +2249,7 @@ private void failRunPower(Map active, String reason) {
     unschedule("verifyRunPower")
     latchStartFault("power-loss", "Power was lost during a confirmed run: ${reason}", current)
     String msg = "Chlorine pump power LOST during a confirmed run (${reason}). Aborting safely; requesting OFF; the independent cutoff stays armed until the switch freshly reports OFF. " +
-                 "The ${current.ml} mL attempt stays reserved and delivery is now UNCERTAIN — operator review required. Once OFF is confirmed the tank is booked from the observed ON-to-OFF run time, an upper bound on what ran."
+                 "The ${current.ml} mL attempt stays reserved and delivery is now UNCERTAIN; operator review required. Once OFF is confirmed the tank is booked from the observed ON-to-OFF run time, an upper bound on what ran."
     log.error "WaterGuru Dosing Advisor: ${msg}"
     sendPumpNotice(msg)
     safeStopPump("the confirmed run lost power", false)
@@ -2292,46 +2257,54 @@ private void failRunPower(Map active, String reason) {
 
 def stopDose() {
     Map active = state.activeDose instanceof Map ? state.activeDose : null
-    Long offAt = now()
-    if (active != null) { active.offRequestedAt = offAt; state.activeDose = active }
-    unschedule("verifyRunPower")
-    unschedule("verifyStartConfirmation")
-
+    if (active != null) { active.offRequestedAt = now(); state.activeDose = active }
     // A scheduled stop firing before the start was confirmed terminates an UNCONFIRMED attempt.
     // It must latch the start fault and use the unverified accounting notice, not quietly clear
     // the dose and cancel the timeout job with no trace.
     if (startUnconfirmed(active)) {
         alertStartUnconfirmed(active, "the planned stop time arrived before the start was confirmed")
     }
+    String requested = active ? "Chlorine pump stop requested after its scheduled ${formatDuration((active.seconds ?: 0) as Integer)} dose (${active.ml} mL planned)" : null
+    stopPump(active, requested, active ? scheduledStopMessage(active) : null, "scheduled stop")
+}
 
+/**
+ * The stop that the planned stop, STOP, a save and a fault all go through. The run's own jobs go, OFF is
+ * sent, and until the switch FRESHLY reports off nothing is disarmed and no dose is forgotten: the notice
+ * waits STOP_CONFIRM_SECONDS for the OFF answer, the retries start over and the cutoff stays armed (never
+ * postponed). A relay that ignores OFF is exactly the case the independent cutoff exists for.
+ */
+private void stopPump(Map active, String requested, String confirmed, String why) {
+    unschedule("stopDose")
+    unschedule("verifyRunPower")
+    unschedule("verifyStartConfirmation")
     try {
-        try { if (pumpSwitch) pumpSwitch.off() }
-        catch (e) { log.error "WaterGuru Dosing Advisor: pump OFF command failed — ${e.message}" }
-
-        // The switch has been ASKED to stop, which is not the same as stopped. Nothing is
-        // disarmed and no dose is forgotten until it FRESHLY reports off: a relay that ignores
-        // OFF is exactly the case the independent cutoff exists for, so cancelling it here on the
-        // failure path would remove the last backstop at the moment it is most needed.
-        Long since = stopEvidenceAnchor(active)
-        if (pumpIsOff(since)) {
-            finishStop(active ? scheduledStopMessage(active) : null)
-            return
-        }
-
-        if (active) {
-            requestStopRefresh(active)
-            deferStopNotice("Chlorine pump stop requested after its scheduled ${formatDuration((active.seconds ?: 0) as Integer)} dose (${active.ml} mL planned)",
-                            scheduledStopMessage(active))
-        }
+        if (sendOffAndConfirm(active, why, confirmed)) return
+        if (requested) deferNotice(requested, confirmed)
     } catch (e) {
         // Anything unexpected -- a device read throwing, a notification device failing -- must not
         // end this with nothing scheduled while the pump may still be running.
-        log.error "WaterGuru Dosing Advisor: scheduled stop hit an unexpected error — ${e.message}; retrying"
+        log.error "WaterGuru Dosing Advisor: the stop (${why}) hit an unexpected error: ${e.message}; retrying"
     }
-
     state.stopAttempts = 0
     runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
-    armEmergencyPumpCutoff("scheduled stop not confirmed")
+    armEmergencyPumpCutoff("stop unconfirmed (${why})")
+}
+
+/**
+ * Send OFF and finish the stop when the switch confirms it at once; otherwise ask the plug to report (a
+ * request, never evidence). Every stop path sends its OFF here. A command that throws is logged and never
+ * trusted. Returns true when the stop finished.
+ */
+private boolean sendOffAndConfirm(Map active, String why, String confirmed) {
+    try { if (pumpSwitch) pumpSwitch.off() }
+    catch (e) { log.error "WaterGuru Dosing Advisor: the OFF command (${why}) failed: ${e.message}" }
+    if (pumpIsOff(stopEvidenceAnchor(active))) {
+        finishStop(confirmed)
+        return true
+    }
+    requestStopRefresh(active)
+    return false
 }
 
 /**
@@ -2345,22 +2318,37 @@ private String switchStatusPhrase() {
 }
 
 /**
- * Hold the "stop requested" notice back for STOP_CONFIRM_SECONDS.
+ * Hold a stop notice, or an EMERGENCY notice (one with a `tail`), back for STOP_CONFIRM_SECONDS.
  *
- * off() returns before the plug answers: on Oct 2 the command went out at 19:48:38.297 and the OFF
- * report arrived at 38.745. Checking the switch straight after off() would therefore announce every
- * healthy stop as "the switch reports ON. Retrying". The OFF report normally completes the stop
- * through pumpSwitchHandler well inside this window, and finishStop() discards the notice. Only the
- * notice moves: the retry job and the independent cutoff are armed by the caller exactly as before.
- * `confirmed` is the final notice if the switch is found off when the check runs.
+ * off() returns before the plug answers: on Oct 2 the command went out at 19:48:38.297 and the OFF report
+ * arrived at 38.745, and the final retry's or the cutoff's OFF is answered 0.5 to 1.6 s later. Checking the
+ * switch straight after off() would announce every healthy stop as "the switch reports ON. Retrying" and
+ * send an EMERGENCY against a plug about to confirm. The OFF report normally completes the stop through
+ * pumpSwitchHandler well inside this window, and finishStop() discards the notice. Only the notice moves:
+ * every command, retry and cutoff has already been sent or armed by the caller.
+ *
+ * A stop notice reads "head, but <switch status>. Retrying; the independent cutoff stays armed.", an
+ * EMERGENCY "head (<switch status>). tail", the status only `withSwitch`. `confirmed` is the final word if
+ * the check finds the switch off, or, once the notice was said, when the OFF lands.
+ *
+ * One slot (pendingStopNotice) holds the notice still to be said and the final word. With one already held:
+ *   - an EMERGENCY not yet said is never replaced by a stop notice, and keeps its time;
+ *   - the final word becomes the new notice's only when it is a stop notice with one of its own (a stop's
+ *     "stopped" text outranks an EMERGENCY's); otherwise the held word stays.
  */
-private void deferStopNotice(String requested, String confirmed) {
-    state.pendingStopNotice = [requested: requested, confirmed: confirmed]
+private void deferNotice(String head, String confirmed, String tail = null, boolean withSwitch = false) {
+    Map held = state.pendingStopNotice instanceof Map ? state.pendingStopNotice : null
+    String word = (tail == null && confirmed) ? confirmed : (held?.confirmed ?: confirmed)
+    if (held != null && held.announced != true && held.tail != null && tail == null) {
+        state.pendingStopNotice = held + [confirmed: word]
+        return
+    }
+    state.pendingStopNotice = [head: head, tail: tail, withSwitch: withSwitch, confirmed: word]
     runIn(STOP_CONFIRM_SECONDS, "verifyStopRequest", [overwrite: true])
 }
 
 /**
- * The deferred half of a stop request. It never sends a command and never disarms anything except
+ * The deferred half of a stop or EMERGENCY notice. It never sends a command and never disarms anything except
  * through finishStop() on a confirmed OFF, which is the same rule every other stop path follows.
  */
 def verifyStopRequest() {
@@ -2368,60 +2356,39 @@ def verifyStopRequest() {
     if (pending == null || pending.announced == true) return   // already said; it waits for the OFF
     state.remove("pendingStopNotice")
     Map active = state.activeDose instanceof Map ? state.activeDose : null
+    String head = (pending.head ?: pending.requested)?.toString()   // a 2.4.8 stop notice named it `requested`
     try {
         if (pumpIsOff(stopEvidenceAnchor(active))) {
             finishStop(pending.confirmed?.toString())
             return
         }
-        String msg = "${pending.requested}, but ${switchStatusPhrase()}. Retrying; the independent cutoff stays armed."
-        log.warn "WaterGuru Dosing Advisor: ${msg}"
-        sendPumpNotice(msg)
-        // Keep a final word for the OFF that is still to come. Without it a stop that carries no message
-        // of its own (STOP on an idle app, a save, a fault recovery) ends in silence when its OFF lands
-        // after this notice, and "Retrying" is the last thing the user hears.
-        state.pendingStopNotice = [confirmed: pending.confirmed ?: "${pending.requested}: the switch has now confirmed OFF.".toString(),
+        if (pending.tail != null) {
+            String status = pending.withSwitch == true ? " (${switchStatusPhrase()})" : ""
+            String msg = "${head}${status}. ${pending.tail}"
+            log.error "WaterGuru Dosing Advisor: ${msg}"
+            sendPumpNotice(msg)
+        } else {
+            String msg = "${head}, but ${switchStatusPhrase()}. Retrying; the independent cutoff stays armed."
+            log.warn "WaterGuru Dosing Advisor: ${msg}"
+            sendPumpNotice(msg)
+        }
+        // Keep a final word for the OFF that is still to come. Without it a stop that carries no message of
+        // its own (STOP on an idle app, a save, a fault recovery, the cutoff stopping a run the app did not
+        // start) ends in silence when its OFF lands after this notice, and "Retrying" or the EMERGENCY is the
+        // last thing the user hears.
+        state.pendingStopNotice = [confirmed: pending.confirmed ?: "${head}: the switch has now confirmed OFF.".toString(),
                                    announced: true]
     } catch (e) {
-        log.error "WaterGuru Dosing Advisor: the stop notice check hit an unexpected error: ${e.message}"
+        log.error "WaterGuru Dosing Advisor: the deferred notice check hit an unexpected error: ${e.message}"
     }
 }
 
-/**
- * Hold an EMERGENCY notice back for STOP_CONFIRM_SECONDS, exactly like deferStopNotice().
- *
- * The plug's OFF answer lands 0.5 to 1.6 s after the final retry's or the cutoff's off(), so a check
- * straight after it would send the notice against a plug about to confirm. Only the notice moves: every command and
- * re-arm has already happened. `head` + the switch's status (when `withSwitch`) + `tail` is the text;
- * `confirmed` is the final word if the check finds the switch off.
- */
-private void deferEmergencyNotice(String head, boolean withSwitch, String tail, String confirmed) {
-    state.pendingEmergencyNotice = [head: head, withSwitch: withSwitch, tail: tail, confirmed: confirmed]
-    runIn(STOP_CONFIRM_SECONDS, "verifyEmergencyNotice", [overwrite: true])
-}
-
-/** The deferred half of an EMERGENCY notice. Like verifyStopRequest, it never sends a command. */
+/** 2.4.8 kept EMERGENCY notices in a slot and job of their own. One still pending when the code updates speaks here. */
 def verifyEmergencyNotice() {
-    Map pending = state.pendingEmergencyNotice instanceof Map ? state.pendingEmergencyNotice : null
-    if (pending == null || pending.announced == true) return   // already said; it waits for the OFF
+    Map old = state.pendingEmergencyNotice instanceof Map ? state.pendingEmergencyNotice : null
     state.remove("pendingEmergencyNotice")
-    Map active = state.activeDose instanceof Map ? state.activeDose : null
-    try {
-        if (pumpIsOff(stopEvidenceAnchor(active))) {
-            finishStop(pending.confirmed?.toString())
-            return
-        }
-        String status = pending.withSwitch == true ? " (${switchStatusPhrase()})" : ""
-        String msg = "${pending.head}${status}. ${pending.tail}"
-        log.error "WaterGuru Dosing Advisor: ${msg}"
-        sendPumpNotice(msg)
-        // Keep the final word for the OFF still to come, as verifyStopRequest does. The cutoff stopping
-        // a run the app did not start opens no stop of its own, so when that OFF lands after this notice
-        // the EMERGENCY would be the last thing the operator hears.
-        state.pendingEmergencyNotice = [confirmed: pending.confirmed ?: "${pending.head}: the switch has now confirmed OFF.".toString(),
-                                        announced: true]
-    } catch (e) {
-        log.error "WaterGuru Dosing Advisor: the EMERGENCY notice check hit an unexpected error: ${e.message}"
-    }
+    if (old != null && old.announced != true) deferNotice(old.head?.toString(), old.confirmed?.toString(), old.tail?.toString(), old.withSwitch == true)
+    verifyStopRequest()
 }
 
 /** Ask a supporting device to re-report during stop recovery, throttled. A refresh is a request,
@@ -2449,7 +2416,7 @@ private void requestStopRefresh(Map active) {
  */
 private String scheduledStopMessage(Map active) {
     if (startUnconfirmed(active)) {
-        return "Chlorine pump stopped, but the start was never confirmed — no scheduled dose is claimed; the ${active.ml} mL attempt remains reserved and unreconciled for operator review."
+        return "Chlorine pump stopped, but the start was never confirmed, so no scheduled dose is claimed; the ${active.ml} mL attempt remains reserved and unreconciled for operator review."
     }
     return "Chlorine pump stopped after scheduled ${formatDuration((active.seconds ?: 0) as Integer)} dose (${active.ml} mL planned, an estimate not measured delivery)."
 }
@@ -2478,14 +2445,7 @@ def verifyPumpOff() {
 
         Integer attempt = ((state.stopAttempts ?: 0) as Integer) + 1
         state.stopAttempts = attempt
-        try { pumpSwitch.off() }
-        catch (e) { log.error "WaterGuru Dosing Advisor: retry ${attempt} OFF command failed — ${e.message}" }
-        requestStopRefresh(active)
-
-        if (pumpIsOff(since)) {
-            finishStop("Chlorine pump stopped on retry ${attempt}.")
-            return
-        }
+        if (sendOffAndConfirm(active, "retry ${attempt}", "Chlorine pump stopped on retry ${attempt}.")) return
 
         if (attempt >= STOP_MAX_ATTEMPTS) {
             // A stop with nothing behind it (a save or STOP on an idle app) against a switch that has read
@@ -2503,12 +2463,12 @@ def verifyPumpOff() {
             boolean armed = armEmergencyPumpCutoff("stop still unconfirmed after ${attempt} OFF attempts")
             String tail = armed
                 ? "The independent cutoff is armed, but the pump may need to be stopped by hand."
-                : "The independent cutoff is DISABLED (watchdogAnyPumpRun is off), so nothing will retry automatically — stop the pump by hand."
+                : "The independent cutoff is DISABLED (watchdogAnyPumpRun is off), so nothing will retry automatically. Stop the pump by hand."
             log.error "WaterGuru Dosing Advisor: chlorine pump OFF not freshly confirmed after ${attempt} OFF attempts; the EMERGENCY notice waits ${STOP_CONFIRM_SECONDS}s for the OFF answer"
             // The OFF sent just above is answered 0.5 to 1.6 s later on the live plug, so the
             // notice waits for that answer like the stop notice does.
-            deferEmergencyNotice("EMERGENCY: chlorine pump OFF not freshly confirmed after ${attempt} OFF attempts", true, tail,
-                                 "Chlorine pump stopped on retry ${attempt}.")
+            deferNotice("EMERGENCY: chlorine pump OFF not freshly confirmed after ${attempt} OFF attempts",
+                        "Chlorine pump stopped on retry ${attempt}.", tail, true)
             return
         }
     } catch (e) {
@@ -2518,9 +2478,9 @@ def verifyPumpOff() {
     log.warn "WaterGuru Dosing Advisor: chlorine pump OFF not freshly confirmed; retrying in ${STOP_RETRY_SECONDS}s"
     runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
     // Re-assert the backstop on EVERY unconfirmed outcome, not only at exhaustion. The cutoff can
-    // be missing for reasons this method did not cause -- it was never armed, a queue reset dropped
-    // it, the watchdog was switched on after the dose started -- and protection should not depend
-    // on which path arrived here. armEmergencyPumpCutoff never postpones an earlier deadline.
+    // be missing for reasons this method did not cause -- it was never armed, the watchdog was
+    // switched on after the dose started -- and protection should not depend on which path arrived
+    // here. armEmergencyPumpCutoff never postpones an earlier deadline.
     armEmergencyPumpCutoff("stop still unconfirmed (attempt ${state.stopAttempts})")
 }
 
@@ -2592,15 +2552,12 @@ private void finishStop(String msg) {
         String reason = active.fault == "emergency-stop" ? "the emergency cutoff" : active.fault.toString()
         msg = "Chlorine pump confirmed OFF after ${reason}. ${active.ml} mL was planned; delivery is UNCERTAIN. Review and acknowledge the pump fault before future dosing."
     }
-    // A deferred "stop requested" notice is moot now, but its "stopped" text is the right final word
-    // when the path that confirmed the OFF brought none of its own (an idle or recovery OFF report).
+    // A deferred notice is moot now, but its final word is the right one when the path that confirmed the OFF
+    // brought none of its own: an idle or recovery OFF report, or the cutoff stopping a run the app did not
+    // start, which opens no stop of its own (the operator would hear nothing when the OFF lands inside the
+    // wait, or an EMERGENCY with no follow-up when it lands after).
     Map pending = state.pendingStopNotice instanceof Map ? state.pendingStopNotice : null
     if (!msg && pending?.confirmed) msg = pending.confirmed.toString()
-    // So is a deferred EMERGENCY notice's. The cutoff stopping a run the app did not start opens no stop
-    // and no stop notice, so its OFF would otherwise arrive here with nothing to say: the operator would
-    // hear nothing (OFF inside the wait) or an EMERGENCY with no follow-up (OFF after it).
-    Map emergency = state.pendingEmergencyNotice instanceof Map ? state.pendingEmergencyNotice : null
-    if (!msg && emergency?.confirmed) msg = emergency.confirmed.toString()
     // Book what actually ran while the run's ON/OFF evidence is still at hand. A booking
     // failure must not be able to skip the cleanup below.
     String booked = null
@@ -2612,7 +2569,6 @@ private void finishStop(String msg) {
     unschedule("verifyStartConfirmation")
     unschedule("verifyRunPower")
     unschedule("verifyStopRequest")
-    unschedule("verifyEmergencyNotice")
     state.remove("emergencyJobScheduled")
     state.remove("activeDose")
     state.remove("stopAttempts")
@@ -2623,7 +2579,6 @@ private void finishStop(String msg) {
     state.remove("idleStopAt")
     state.remove("stopRefreshAt")
     state.remove("pendingStopNotice")
-    state.remove("pendingEmergencyNotice")
     state.remove("repeatedOnLoggedAt")
     state.remove("faultRun")
     List parts = []
@@ -2666,42 +2621,23 @@ private void safeStopPump(String reason, boolean notify = false) {
         state.idleStopAt = offAt
     }
 
-    // The planned end of the dose is no longer wanted ...
-    unschedule("stopDose")
-    unschedule("verifyRunPower")
-    unschedule("verifyStartConfirmation")
-    // ... but the cutoff is deliberately NOT cancelled here: it is the backstop for this moment.
-
     // If the attempt was never confirmed, stopping it is itself a faulted termination: latch and
     // alert once, and keep the unverified accounting semantics, whatever the reason for the stop.
     if (startUnconfirmed(active)) {
         alertStartUnconfirmed(active, "the pump was stopped (${reason}) before the start was confirmed")
     }
 
-    try {
-        if (pumpSwitch) pumpSwitch.off()
-    } catch (e) {
-        log.error "WaterGuru Dosing Advisor: unable to send the stop command — ${e.message}"
-    }
-
     String stopMsg
     if (active != null && startUnconfirmed(active)) {
-        stopMsg = "Chlorine pump stopped; the start was never confirmed — no scheduled dose is claimed; the ${active.ml} mL attempt remains reserved."
+        stopMsg = "Chlorine pump stopped; the start was never confirmed, so no scheduled dose is claimed; the ${active.ml} mL attempt remains reserved."
     } else if (notify || wasActive) {
         stopMsg = "Chlorine pump stopped: ${reason}."
     } else {
         stopMsg = null
     }
-    if (pumpIsOff(stopEvidenceAnchor(active))) {
-        finishStop(stopMsg)
-        return
-    }
-
-    requestStopRefresh(active)
-    deferStopNotice("Chlorine pump stop requested (${reason})", stopMsg)
-    state.stopAttempts = 0
-    runIn(STOP_RETRY_SECONDS, "verifyPumpOff", [overwrite: true])
-    armEmergencyPumpCutoff("stop unconfirmed (${reason})")
+    // The planned end of the dose is no longer wanted, but the cutoff is deliberately NOT cancelled:
+    // it is the backstop for this moment.
+    stopPump(active, "Chlorine pump stop requested (${reason})", stopMsg, reason)
 }
 
 /**
@@ -2872,8 +2808,8 @@ private void logRepeatedOn(String text) {
 private void handlePumpOffEvent(evt) {
     Map active = state.activeDose instanceof Map ? state.activeDose : null
     boolean wasActive = active != null
-    // A stop requested with nothing open (idleStopAt) is held to its anchor too.
-    boolean recovering = wasActive || (state.startFault != null && state.faultStopAt != null) || state.idleStopAt != null
+    // Every open stop, a fault recovery and one with nothing behind it (idleStopAt) included, is held to its anchor.
+    boolean recovering = stopOpen()
     Long anchor = stopEvidenceAnchor(active)
     Long evtAt = eventDateMs(evt)
 
@@ -3030,20 +2966,13 @@ def emergencyPumpOff() {
     if (startUnconfirmed(active)) alertStartUnconfirmed(active, "the emergency cutoff fired before the start was confirmed")
     Integer attempt = ((state.emergencyAttempts ?: 0) as Integer) + 1
     state.emergencyAttempts = attempt
-    try { pumpSwitch.off() }
-    catch (e) { log.error "WaterGuru Dosing Advisor: cutoff OFF command failed — ${e.message}" }
-    requestStopRefresh(active)
-
     String confirmed = "EMERGENCY cutoff confirmed the chlorine pump OFF after ${n1(failsafeMinutes())} minutes."
-    if (pumpIsOff(stopEvidenceAnchor(active))) {
-        finishStop(confirmed)
-        return
-    }
+    if (sendOffAndConfirm(active, "cutoff attempt ${attempt}", confirmed)) return
 
     if (attempt <= 3 || attempt % 10 == 0) {
         // Deferred like the stop notice: the plug's answer to the OFF above lands 0.5 to 1.6 s later.
-        deferEmergencyNotice("EMERGENCY: the cutoff has not been able to turn the chlorine pump off (attempt ${attempt})", false,
-                             "Still trying, but the pump may need to be stopped by hand.", confirmed)
+        deferNotice("EMERGENCY: the cutoff has not been able to turn the chlorine pump off (attempt ${attempt})", confirmed,
+                    "Still trying, but the pump may need to be stopped by hand.")
     }
     armEmergencyPumpCutoff("cutoff OFF unconfirmed (attempt ${attempt})")
 }
@@ -3090,7 +3019,7 @@ private List doseSafetyBlocks(Map result) {
     BigDecimal ph = toBD(result?.pH)
     BigDecimal loPh = firstNum(minSafePh, 6.8G), hiPh = firstNum(maxSafePh, 8.2G)
     if (ph == null) blocks << "pH reading is unavailable"
-    else if ((loPh != null && ph < loPh) || (hiPh != null && ph > hiPh)) blocks << "pH ${n2(ph)} is outside ${n2(loPh)}–${n2(hiPh)}"
+    else if ((loPh != null && ph < loPh) || (hiPh != null && ph > hiPh)) blocks << "pH ${n2(ph)} is outside ${n2(loPh)} to ${n2(hiPh)}"
 
     Long measured = toEpochMs(result?.sampleKey)
     BigDecimal maxAge = firstNum(maxSampleAgeHours, 18G)
@@ -3499,7 +3428,7 @@ private void voidRecordedDose() {
         return
     }
     // While a dose or a stop is open, booking and its corrections may still be writing the same records.
-    if (state.activeDose != null || state.faultStopAt != null || state.idleStopAt != null) {
+    if (stopOpen()) {
         sendPumpNotice("No dose voided: the pump is running or a stop is still being confirmed. Try again once the pump is idle.")
         return
     }
@@ -3725,7 +3654,7 @@ private String tankRunwayLine(Map runway) {
                 String doses = runway.n == 1 ? "1 dose" : "${runway.n} doses"
                 return "⏳ Tank runway: learning, ${doses} recorded so far; days until ${n0(runway.pct)}% can be estimated once the dose history spans half a day."
             }
-            return "⏳ Tank runway: learning — a completed app-controlled dose is needed to estimate days until ${n0(runway.pct)}%."
+            return "⏳ Tank runway: learning; a completed app-controlled dose is needed to estimate days until ${n0(runway.pct)}%."
         case "ok":
             String samples = runway.n == 1 ? "dose sample" : "dose samples"
             return "⏳ Tank runway: ~${n1(runway.days)} days until inventory drops below ${n0(runway.pct)}% (average ${n0(runway.dailyUse)} mL/day measured over ${n1(runway.spanDays)} days)."
@@ -3811,7 +3740,7 @@ private void updateTileDevice(Map r) {
     if (!dev) return   // driver missing — ensureTileDevice already logged why
     try {
         dev.sendEvent(name: "status",         value: (r.status ?: "YELLOW"))
-        dev.sendEvent(name: "recommendation", value: clip(r.headline ?: "—", 190))
+        dev.sendEvent(name: "recommendation", value: clip(r.headline ?: "n/a", 190))
         dev.sendEvent(name: "detail",         value: clip(r.text ?: "", 1000))
         dev.sendEvent(name: "tileHtml",       value: clip(buildTileHtml(r), 1024))
         dev.sendEvent(name: "lastCalc",       value: nowDate())
@@ -4330,8 +4259,8 @@ private boolean hasCover() {
 /** One-line runway summary for the notification / tile-detail text. */
 private String runwayLine(Map r) {
     switch (r?.state) {
-        case "below":   return "⏳ Chlorine runway: FC is at/below the algae floor (${n1(r.floor)} ppm) — add chlorine now."
-        case "holding": return "⏳ Chlorine runway: FC is holding or rising — nothing to project (floor ${n1(r.floor)} ppm)."
+        case "below":   return "⏳ Chlorine runway: FC is at/below the algae floor (${n1(r.floor)} ppm). Add chlorine now."
+        case "holding": return "⏳ Chlorine runway: FC is holding or rising; nothing to project (floor ${n1(r.floor)} ppm)."
         case "ok":      return "⏳ Chlorine runway: ~${n1(r.days)} days until FC drops below the ${n1(r.floor)} ppm algae floor (${r.basis})."
         default:        return ""
     }

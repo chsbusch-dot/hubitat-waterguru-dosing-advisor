@@ -20,12 +20,10 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 2
 fi
 
-python3 tests/mutation/mutants.py "$@" >/dev/null
-names=("$@")
-if [ ${#names[@]} -eq 0 ]; then
-    # (no mapfile: macOS ships bash 3.2)
-    names=($(cd tests/mutation/out && ls -1))
-fi
+# Run exactly the mutants this build made. Listing out/ instead picked up stray files (a saved run_all.txt) and
+# the directories of retired mutants. (no mapfile: macOS ships bash 3.2)
+built="$(python3 tests/mutation/mutants.py "$@")"
+names=($(printf '%s\n' "$built" | awk '$1 == "built" {print $2}'))
 
 run_one() {
     d="$1"

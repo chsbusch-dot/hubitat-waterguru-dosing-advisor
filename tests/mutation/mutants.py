@@ -8,16 +8,19 @@ or the build aborts, so a mutation that silently failed to apply can never be re
 "surviving" mutant. A mutant is KILLED when the suite fails against it.
 
 Origin: the M01-M21 / PC1-PC2 set from the independent review of 5f218c9 (2.4.0), re-anchored to
-the 2.4.1 code; F1-F6 revert one 2.4.1 fix each, R1-R9 one 2.4.2 fix each (WOR-718), W1-W3 one
+the 2.4.1 code and asserted (killed) since 2.5.0, M21 retired as equivalent; F1-F6 revert one 2.4.1 fix each, R1-R9 one 2.4.2 fix each (WOR-718), W1-W3 one
 2.4.3 fix each (WOR-724), X1-X12 one 2.4.4 fix each and XP1-XP3 one Pump Power Profiler 1.1.1 fix
 each (WOR-731), Y1-Y2 one 2.4.5 change each (WOR-739), Z1-Z2 one 2.4.6 item each (WOR-740), L1-L8 one
 2.4.7 change each, K1-K5 one fix each from the 2.4.7 verification round and J1-J8 one follow-up change each
 (WOR-752), S1-S16 one 2.4.8 SLAM-cap behaviour each, TG1-TG12 one SLAM plausibility-guard rule each
-(WOR-755; TG, since T1-T4 were taken), and for WOR-716 PI1 (the dosing app's own refresh), E1-E16 one
-Pump Power Profiler 1.2.0 sampling behaviour each and WM1-WM17 one wear-monitor rule each; every one of those
+(WOR-755; TG, since T1-T4 were taken), for WOR-716 PI1 (the dosing app's own refresh), E1-E16 one
+Pump Power Profiler 1.2.0 sampling behaviour each and WM1-WM17 one wear-monitor rule each, and for WOR-741
+U1-U4 one 2.5.0 save rule each, N1-N6 one notice-slot or stopOpen() rule each and D1-D5 one dash put back each
+(D5 in the parent app); every one of those
 must be killed by the tests that guard it.
 
-A mutant edits the child app unless it is declared with mutp(), which edits the profiler. Each mutant
+A mutant edits the child app unless it is declared with mutp(), which edits the profiler, or with
+target=PARENT, which edits the parent app. Each mutant
 runs the suite that covers its file (MUTATION.txt "suites:"); the base runs both.
 
   python3 tests/mutation/mutants.py              # build every mutant
@@ -35,7 +38,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 OUT = ROOT / "tests" / "mutation" / "out"
 APP = "apps/WaterGuru-Dosing-Advisor-Child.groovy"
 PROFILER = "apps/PumpPowerProfiler.groovy"
-SUITES = {APP: ["run_tests.groovy"], PROFILER: ["profiler_tests.groovy"]}
+PARENT = "apps/WaterGuru-Dosing-Advisor.groovy"
+SUITES = {APP: ["run_tests.groovy"], PROFILER: ["profiler_tests.groovy"], PARENT: ["run_tests.groovy"]}
 
 # name -> (expectation, description, [(old, new, count), ...], target file or None for the base)
 V = {}
@@ -59,79 +63,72 @@ mut("PC2", "killed", "armEmergencyPumpCutoff always opens a fresh window (postpo
      "    if (false && existing != null && existing > nowMs) {\n        if (jobPending) {"))
 
 # ---- stop-evidence anchors on the timer paths ----
-mut("M01", "?", "verifyPumpOff accepts a cached pre-request OFF (anchor dropped)",
+mut("M01", "killed", "verifyPumpOff accepts a cached pre-request OFF (anchor dropped)",
     ("    Long since = stopEvidenceAnchor(active)\n    try {\n        if (pumpIsOff(since)) {\n"
      "            finishStop(\"Chlorine pump confirmed OFF.\")",
      "    Long since = null   // MUTANT\n    try {\n        if (pumpIsOff(since)) {\n"
      "            finishStop(\"Chlorine pump confirmed OFF.\")"))
-mut("M02", "?", "stopDose accepts a cached pre-request OFF (anchor dropped)",
-    ("        Long since = stopEvidenceAnchor(active)\n        if (pumpIsOff(since)) {\n"
-     "            finishStop(active ? scheduledStopMessage(active) : null)",
-     "        Long since = null   // MUTANT\n        if (pumpIsOff(since)) {\n"
-     "            finishStop(active ? scheduledStopMessage(active) : null)"))
-mut("M03", "?", "emergencyPumpOff accepts a cached pre-request OFF (both anchors dropped)",
+# Re-anchored in 2.5.0: the planned stop, STOP, a save, the retries and the cutoff send their OFF through one tail.
+mut("M02", "killed", "the shared stop tail accepts a cached pre-request OFF (anchor dropped after every OFF)",
+    ("    if (pumpIsOff(stopEvidenceAnchor(active))) {\n        finishStop(confirmed)\n        return true\n",
+     "    if (pumpIsOff(null)) {\n        finishStop(confirmed)\n        return true\n"))
+mut("M03", "killed", "emergencyPumpOff's check before its OFF accepts a cached pre-request OFF (anchor dropped)",
     ("    Long anchor = stopEvidenceAnchor(active)\n    if (pumpIsOff(anchor)) {",
-     "    Long anchor = null   // MUTANT\n    if (pumpIsOff(anchor)) {"),
-    ("    if (pumpIsOff(stopEvidenceAnchor(active))) {\n        finishStop(confirmed)\n",
-     "    if (pumpIsOff(null)) {\n        finishStop(confirmed)\n"))
+     "    Long anchor = null   // MUTANT\n    if (pumpIsOff(anchor)) {"))
 
 # ---- doseSafetyBlocks interlocks ----
-mut("M04", "?", "no 'a dose is already running' interlock",
+mut("M04", "killed", "no 'a dose is already running' interlock",
     ("    if (state.activeDose) blocks << \"a dose is already running\"\n", ""))
-mut("M05", "?", "no 'pump switch is already on' interlock",
+mut("M05", "killed", "no 'pump switch is already on' interlock",
     ("    if (pumpSwitch?.currentValue(\"switch\")?.toString() == \"on\") blocks << \"pump switch is already on\"\n", ""))
-mut("M06", "?", "no 'stop is still being recovered' (faultStopAt) gate",
+mut("M06", "killed", "no 'stop is still being recovered' (faultStopAt) gate",
     ("    if (state.faultStopAt != null) blocks << \"a pump stop is still being recovered\"\n", ""))
-mut("M07", "?", "no AUTO dosing-window block",
+mut("M07", "killed", "no AUTO dosing-window block",
     ("    if ((dosingMode ?: \"ADVISORY\").toString() == \"AUTO\" && !autoDoseWindowOpen()) {\n"
      "        blocks << \"outside the configured AUTO dosing window\"\n    }\n", ""))
-mut("M08", "?", "no pH safety block",
+mut("M08", "killed", "no pH safety block",
     ("    if (ph == null) blocks << \"pH reading is unavailable\"\n"
-     "    else if ((loPh != null && ph < loPh) || (hiPh != null && ph > hiPh)) blocks << \"pH ${n2(ph)} is outside ${n2(loPh)}\u2013${n2(hiPh)}\"\n",
+     "    else if ((loPh != null && ph < loPh) || (hiPh != null && ph > hiPh)) blocks << \"pH ${n2(ph)} is outside ${n2(loPh)} to ${n2(hiPh)}\"\n",
      "    // MUTANT: pH guard removed\n"))
-mut("M09", "?", "no sample-age block",
+mut("M09", "killed", "no sample-age block",
     ("    else if (maxAge != null && (now() - measured) > (maxAge * 3600000G)) blocks << \"WaterGuru sample is older than ${n1(maxAge)} hours\"\n", ""))
-mut("M10", "?", "no insufficient-tank block",
+mut("M10", "killed", "no insufficient-tank block",
     ("    } else if (ml != null && tankRemaining != null && ml > tankRemaining) {\n"
      "        blocks << \"chlorine tank has only ${n0(tankRemaining)} mL remaining; dose needs ${n0(ml)} mL\"\n    }\n",
      "    }\n"))
-mut("M11", "?", "no circulation interlock (switch or 24/7 confirmation)",
+mut("M11", "killed", "no circulation interlock (switch or 24/7 confirmation)",
     ("    if (circulationSwitch && requireCirculationOn != false && circulationSwitch.currentValue(\"switch\")?.toString() != \"on\") {\n"
      "        blocks << \"circulation/filter switch is not on\"\n    }\n"
      "    if (!circulationSwitch && circulationAlwaysOn != true) {\n"
      "        blocks << \"no circulation interlock or 24/7 circulation confirmation\"\n    }\n", ""))
-mut("M12", "?", "no single-dose volume limit and no runtime limit",
+mut("M12", "killed", "no single-dose volume limit and no runtime limit",
     ("    if (ml != null && maxSingle != null && ml > maxSingle) blocks << \"${n0(ml)} mL exceeds the ${n0(maxSingle)} mL single-dose limit\"\n", ""),
     ("    if (seconds != null && maxMinutes != null && seconds > (maxMinutes * 60G)) blocks << \"${formatDuration(seconds)} exceeds the ${n1(maxMinutes)} minute runtime limit\"\n", ""))
 
 # ---- start / run / fault lifecycle ----
-mut("M13", "?", "power-capable start confirmed WITHOUT a fresh ON (power alone)",
+mut("M13", "killed", "power-capable start confirmed WITHOUT a fresh ON (power alone)",
     ("        if (switchOnFresh && powerFresh && watts != null && watts > 0G && watts >= startPowerMinWatts()) {",
      "        if (powerFresh && watts != null && watts > 0G && watts >= startPowerMinWatts()) {"))
-mut("M14", "?", "power loss latches a fault but never requests OFF",
+mut("M14", "killed", "power loss latches a fault but never requests OFF",
     ("    safeStopPump(\"the confirmed run lost power\", false)\n", "    // MUTANT: no stop on power loss\n"))
-mut("M15", "?", "acknowledgement ignores an active (unfinished) stop",
+mut("M15", "killed", "acknowledgement ignores an active (unfinished) stop",
     ("    if (state.activeDose != null) {\n"
      "        sendPumpNotice(\"Cannot acknowledge the pump fault yet: a stop is still being recovered. Wait until the switch freshly reports OFF.\")\n"
      "        return\n    }\n", ""))
-mut("M16", "?", "acknowledgement accepts an OFF of any age (anchor dropped)",
+mut("M16", "killed", "acknowledgement accepts an OFF of any age (anchor dropped)",
     ("    if (!pumpIsOff(requireAfter)) {", "    if (!pumpIsOff(null)) {"))
-mut("M17", "?", "late ON during an aborted (active) attempt no longer requests OFF",
+mut("M17", "killed", "late ON during an aborted (active) attempt no longer requests OFF",
     ("                stopOnlyForPendingFault(\"an aborted start is still unconfirmed\")",
      "                // MUTANT: no immediate OFF"))
-mut("M18", "?", "pumpIsOff accepts a future-dated OFF",
+mut("M18", "killed", "pumpIsOff accepts a future-dated OFF",
     ("        if (futureDated(at)) return false   // future-dated OFF\n", ""))
-mut("M19", "?", "initialize does not recreate the running power watch",
-    ("        if (active != null && active.startConfirmed == true && active.offRequestedAt == null && powerConfirmationRequired()) {\n"
-     "            runIn(RUN_POWER_CHECK_SECONDS, \"verifyRunPower\", [overwrite: true])\n"
-     "            log.warn \"WaterGuru Dosing Advisor: recreated the running power watch after the queue reset\"\n"
-     "        }\n", ""))
-mut("M20", "?", "verifyStartConfirmation ignores an OFF request (startStopRequested guard removed)",
+# M19 (initialize does not recreate the running power watch) is retired in 2.5.0 with the queue reset it
+# undid: nothing clears the power watch at a save any more, and U1 puts the clearing back.
+mut("M20", "killed", "verifyStartConfirmation ignores an OFF request (startStopRequested guard removed)",
     ("    if (startStopRequested(active)) return   // an OFF was requested; a late report must not confirm\n", ""))
-# Re-anchored: 2.4.1 split handlePumpPowerEvent's guard so evidence is noted before it.
-mut("M21", "?", "power event ignores an OFF request (startStopRequested guard removed)",
-    ("    if (active.fault != null || startStopRequested(active)) return\n",
-     "    if (active.fault != null) return\n"))
+# M21 (power event ignores an OFF request) is retired in 2.5.0 as an equivalent mutant: every path that requests
+# OFF for an unconfirmed attempt latches its fault first, and verifyStartConfirmation, where the event would go
+# next, repeats the startStopRequested guard. No test can tell it from the base.
 
 # ---- 2.4.1: each fix reverted (must be killed) ----
 mut("F1", "killed", "fix 1 reverted: pumpIsOff ignores the recorded OFF receipt time",
@@ -158,8 +155,9 @@ mut("R1", "killed", "fix 1 reverted: a stop with nothing open gets no anchor (a 
     ("        state.idleStopAt = offAt\n", "        // MUTANT: no idle anchor\n"))
 mut("R1b", "killed", "fix 1: an unconfirmed idle stop no longer blocks a new dose",
     ("    if (state.idleStopAt != null) blocks << \"a pump stop is still waiting for the switch to confirm OFF\"\n", ""))
-mut("R1c", "killed", "fix 1: an announced stop notice keeps no final word for the OFF still to come",
-    ("        state.pendingStopNotice = [confirmed: pending.confirmed ?: \"${pending.requested}: the switch has now confirmed OFF.\".toString(),\n"
+# Re-anchored in 2.5.0: stop and EMERGENCY notices share one slot, so this also covers X1b.
+mut("R1c", "killed", "fix 1: an announced stop or EMERGENCY notice keeps no final word for the OFF still to come",
+    ("        state.pendingStopNotice = [confirmed: pending.confirmed ?: \"${head}: the switch has now confirmed OFF.\".toString(),\n"
      "                                   announced: true]\n", ""))
 mut("R2", "killed", "fix 2 reverted: an unchanged ON restarts an aborted start's stop",
     ("                if (unchangedOn && active.offRequestedAt != null) {\n", "                if (false) {\n"))
@@ -177,21 +175,19 @@ mut("R3b", "killed", "fix 3 reverted: removal goes through safeStopPump and its 
 mut("R4", "killed", "fix 4 reverted: an overdue cutoff gets a fresh full window",
     ("    if (existing != null && existing <= nowMs) {\n", "    if (false && existing != null && existing <= nowMs) {\n"))
 mut("R5", "killed", "fix 5 reverted: the final retry's EMERGENCY notice is sent the moment OFF is sent",
-    ("            deferEmergencyNotice(\"EMERGENCY: chlorine pump OFF not freshly confirmed after ${attempt} OFF attempts\", true, tail,\n"
-     "                                 \"Chlorine pump stopped on retry ${attempt}.\")\n",
+    ("            deferNotice(\"EMERGENCY: chlorine pump OFF not freshly confirmed after ${attempt} OFF attempts\",\n"
+     "                        \"Chlorine pump stopped on retry ${attempt}.\", tail, true)\n",
      "            sendPumpNotice(\"EMERGENCY: chlorine pump OFF not freshly confirmed after ${attempt} OFF attempts (${switchStatusPhrase()}). ${tail}\")\n"))
 mut("R5b", "killed", "fix 5 reverted: the cutoff's EMERGENCY notice is sent the moment OFF is sent",
-    ("        deferEmergencyNotice(\"EMERGENCY: the cutoff has not been able to turn the chlorine pump off (attempt ${attempt})\", false,\n"
-     "                             \"Still trying, but the pump may need to be stopped by hand.\", confirmed)\n",
+    ("        deferNotice(\"EMERGENCY: the cutoff has not been able to turn the chlorine pump off (attempt ${attempt})\", confirmed,\n"
+     "                    \"Still trying, but the pump may need to be stopped by hand.\")\n",
      "        sendPumpNotice(\"EMERGENCY: the cutoff has not been able to turn the chlorine pump off (attempt ${attempt}). Still trying, but the pump may need to be stopped by hand.\")\n"))
-mut("R6", "killed", "fix 6 reverted: the power watch keeps judging a run after its OFF request (all three guards)",
+mut("R6", "killed", "fix 6 reverted: the power watch keeps judging a run after its OFF request (both guards; the initialize one went in 2.5.0)",
     ("    if (active.offRequestedAt != null) return\n    if (!powerConfirmationRequired()) return\n",
      "    if (!powerConfirmationRequired()) return\n"),
     ("    } else if (active.startConfirmed == true && active.offRequestedAt == null && powerConfirmationRequired()) {\n",
-     "    } else if (active.startConfirmed == true && powerConfirmationRequired()) {\n"),
-    ("        if (active != null && active.startConfirmed == true && active.offRequestedAt == null && powerConfirmationRequired()) {\n",
-     "        if (active != null && active.startConfirmed == true && powerConfirmationRequired()) {\n"))
-mut("R6a", "?", "fix 6, one guard only: verifyRunPower ignores offRequestedAt (the event and initialize guards remain)",
+     "    } else if (active.startConfirmed == true && powerConfirmationRequired()) {\n"))
+mut("R6a", "killed", "fix 6, one guard only: verifyRunPower ignores offRequestedAt (a check queued behind the STOP latches a false power loss)",
     ("    if (active.offRequestedAt != null) return\n    if (!powerConfirmationRequired()) return\n",
      "    if (!powerConfirmationRequired()) return\n"))
 mut("R7", "killed", "fix 7 reverted: the cutoff latches nothing for an attempt that was never confirmed",
@@ -235,11 +231,10 @@ mut("W3b", "killed", "fix 3: readings stored before 2.4.3 still count in the mea
 
 
 # ---- 2.4.4 (WOR-731): each fix reverted (must be killed) ----
-mut("X1", "killed", "fix 1 reverted: finishStop ignores the deferred EMERGENCY notice's final word",
-    ("    if (!msg && emergency?.confirmed) msg = emergency.confirmed.toString()\n", ""))
-mut("X1b", "killed", "fix 1 reverted: an EMERGENCY notice that was sent keeps no final word for the OFF still to come",
-    ("        state.pendingEmergencyNotice = [confirmed: pending.confirmed ?: \"${pending.head}: the switch has now confirmed OFF.\".toString(),\n"
-     "                                        announced: true]\n", ""))
+# Re-anchored in 2.5.0 to the one notice slot; X1b (an EMERGENCY that was sent keeps no final word) is the same
+# line as R1c now and is retired.
+mut("X1", "killed", "fix 1 reverted: finishStop ignores the deferred notice's final word (stop or EMERGENCY)",
+    ("    if (!msg && pending?.confirmed) msg = pending.confirmed.toString()\n", ""))
 mut("X2", "killed", "fix 2 reverted: a booked run with no lastDose never reaches the historian",
     ("        publishDoseRecord(historyTime, ranMl, ranSec, \"the booked run\")\n", "        // MUTANT: not published\n"))
 mut("X3", "killed", "fix 3 reverted: the cassette status adds no chip and leaves the tile GREEN",
@@ -261,8 +256,8 @@ mut("X6", "killed", "fix 6 reverted: a power check long after the previous one j
 mut("X6b", "killed", "fix 6 unsafe: every late power check is put off, so a silent run is never aborted",
     ("    if (previousCheck != null && nowMs - previousCheck > 2L * RUN_POWER_CHECK_SECONDS * 1000L && active.powerCheckDeferred != true) {\n",
      "    if (previousCheck != null && nowMs - previousCheck > 2L * RUN_POWER_CHECK_SECONDS * 1000L) {\n"))
-mut("X7", "killed", "fix 7 reverted: a queue reset drops a sample that is waiting to be processed",
-    ("        runIn(20, \"processNewSample\", [data: [sampleKey: pendingSample], overwrite: true])\n", ""))
+# X7 (a queue reset drops a sample waiting to be processed) is retired in 2.5.0: the processing job survives a
+# save, so there is no rescheduling left to revert. U1 (the queue reset back) drops the sample again.
 mut("X8", "killed", "fix 8 reverted: every unchanged ON during an outside run re-arms and logs a WARN",
     ("        if (unchangedOn && emergencyCutoffPendingNotDue()) {\n", "        if (false) {\n"))
 mut("X9", "killed", "fix 9 reverted: the confirmed-OFF notice carries the app name and no period",
@@ -524,6 +519,48 @@ mutp("WM16", "killed", "Clear leaves the wear history",
      ("        state.remove(\"wearRuns\")\n", ""))
 mutp("WM17", "killed", "the alert is not logged or kept for the page",
      ("    state.lastWearAlert = [at: now(), msg: msg]\n    log.warn \"Pump Power Profiler: ${msg}\"\n", ""))
+
+
+# ---- 2.5.0 (WOR-741): a save keeps the queue (must be killed) ----
+mut("U1", "killed", "the blanket unschedule() is back at the top of initialize(): a save clears every job",
+    ("def initialize() {\n", "def initialize() {\n    unschedule()\n"))
+mut("U2", "killed", "a save with the daily refresh switched off leaves the fetch and the second fetch scheduled",
+    ("        unschedule(\"refreshWaterGuruSource\")\n        unschedule(\"retryWaterGuruRefresh\")\n", ""))
+mut("U3", "killed", "a save with the daily summary switched off leaves it scheduled",
+    ("    } else {\n        unschedule(\"dailyDigestHandler\")\n    }\n", "    }\n"))
+mut("U4", "killed", "a save no longer checks an open stop's cutoff (an overdue one waits for its late job)",
+    ("    if (stopOpen()) armEmergencyPumpCutoff(\"a save found a stop still open\")\n", ""))
+
+# ---- 2.5.0 (WOR-741): one notice slot for stop and EMERGENCY notices (must be killed) ----
+mut("N1", "killed", "a stop notice replaces an EMERGENCY not yet said (the STOP's 'Retrying' is said instead)",
+    ("    if (held != null && held.announced != true && held.tail != null && tail == null) {\n", "    if (false) {\n"))
+mut("N2", "killed", "an EMERGENCY takes the final word from a stop notice",
+    ("    String word = (tail == null && confirmed) ? confirmed : (held?.confirmed ?: confirmed)\n",
+     "    String word = confirmed ?: held?.confirmed\n"))
+mut("N3", "killed", "a stop notice's own final word does not outrank an EMERGENCY's held one",
+    ("    String word = (tail == null && confirmed) ? confirmed : (held?.confirmed ?: confirmed)\n",
+     "    String word = held?.confirmed ?: confirmed\n"))
+mut("N4", "killed", "an EMERGENCY 2.4.8 left pending is dropped when its job fires under 2.5.0",
+    ("    if (old != null && old.announced != true) deferNotice(", "    if (false) deferNotice("))
+mut("N5", "killed", "a stop notice 2.4.8 left pending is said with no head (`requested` not read)",
+    ("    String head = (pending.head ?: pending.requested)?.toString()", "    String head = pending.head?.toString()"))
+mut("N6", "killed", "stopOpen() leaves out a stop with nothing behind it (idleStopAt): a stale OFF can close it",
+    ("    return state.activeDose != null || state.faultStopAt != null || state.idleStopAt != null\n",
+     "    return state.activeDose != null || state.faultStopAt != null\n"))
+
+# ---- 2.5.0 (WOR-741): positive controls for the dash checks, a dash put back (must be killed) ----
+mut("D1", "killed", "an em dash is back in the unconfirmed-stop notice",
+    ("never confirmed, so no scheduled dose is claimed; the ${active.ml} mL attempt remains reserved and unreconciled",
+     "never confirmed \u2014 no scheduled dose is claimed; the ${active.ml} mL attempt remains reserved and unreconciled"))
+mut("D2", "killed", "an em dash is back in the SLAM banner of the advice text",
+    ("SLAM MODE ACTIVE. Free chlorine is held high on purpose", "SLAM MODE ACTIVE \u2014 free chlorine is held high on purpose"))
+mut("D3", "killed", "an em dash is back in the SLAM input title (page text the stub never runs)",
+    ("title: \"SLAM mode: target FC as a multiple of CYA", "title: \"SLAM mode \u2014 target FC as a multiple of CYA"))
+mut("D4", "killed", "an en dash is back in the pH block reason",
+    ("is outside ${n2(loPh)} to ${n2(hiPh)}", "is outside ${n2(loPh)}\u2013${n2(hiPh)}"))
+mut("D5", "killed", "an em dash is back in the parent app's page text (parent 2.0.1)",
+    ("paragraph \"Complementary to the WaterGuru Integration app: it does not", "paragraph \"Complementary to the WaterGuru Integration app \u2014 it does not"),
+    target=PARENT)
 
 
 def build(name):
