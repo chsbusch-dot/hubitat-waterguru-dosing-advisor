@@ -496,7 +496,8 @@ Add the dosing tile device to a Hubitat dashboard with the **Attribute** templat
 section of the software guide lists every attribute. Notifications can report the calculated dose,
 the confirmed run, faults and the tank estimate.
 
-I also keep a history in InfluxDB and Grafana, but dosing works without it. If you build one,
+I also keep a history in InfluxDB and Grafana, but dosing works without it. My collector and
+dashboards are public as [waterguru-grafana](https://github.com/chsbusch-dot/waterguru-grafana). If you build your own,
 read the advisor's published attribute names (for example `lastDoseMl`, `lastDoseEpochMs`,
 `lastDoseRuntimeSeconds`, `tankRemainingMl`, `tankCapacityMl`, `freeChlorine` and
 `targetFreeChlorine`). Do not add up repeated readings as separate doses, because a correction can

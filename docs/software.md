@@ -194,7 +194,8 @@ to see what the pool needs. The device exposes:
 
 **Numeric telemetry (for external history)**
 
-An external historian (InfluxDB/Grafana, or Maker API) can use these attributes to store
+An external historian (InfluxDB/Grafana such as [waterguru-grafana](https://github.com/chsbusch-dot/waterguru-grafana), or Maker API)
+can use these attributes to store
 actual pump-started doses and compute durable usage totals. The app writes them alongside
 the human-readable attributes on every calculation. The dose values are recorded only after a start has been
 **confirmed** (a fresh ON, plus fresh power above the minimum for a power-capable switch), so
@@ -223,7 +224,7 @@ Behaviours an external reader has to know:
   record. A historian can poll as often as it likes without inflating usage totals.
 - **A correction keeps that timestamp.** When the observed run differs from the plan, `lastDoseMl`
   and `lastDoseRuntimeSeconds` are republished with the same `lastDoseEpochMs`, so a historian that
-  keys doses by that value (the Waterguru-Grafana-Chart collector does) overwrites the point rather
+  keys doses by that value (the waterguru-grafana collector does) overwrites the point rather
   than counting a second dose.
 - **Dose records are forced events.** At confirmation and at a correction the three `lastDose*`
   attributes are sent with `isStateChange: true`. The hub drops an event whose value did not
@@ -236,7 +237,7 @@ Behaviours an external reader has to know:
 - **An unknown value reads `-1`, never a stale number and never zero.** When the tank inventory is
   not initialized (or the container size changed and was not marked full), the FC reading or the
   target is missing, or the tank runway is still learning, the attribute is set to `-1`. The
-  Waterguru-Grafana-Chart collector drops it instead of storing it, and `-1` is not the same as a
+  waterguru-grafana collector drops it instead of storing it, and `-1` is not the same as a
   zero-day runway.
 
 **Colour key**
