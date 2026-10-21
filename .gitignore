@@ -14,3 +14,8 @@
 
 # Mutation check output (tests/mutation/run.sh)
 tests/mutation/out/
+
+# BOM and assembly staging folder (WOR-859): its zips and the full-resolution
+# copy of the guides stay out; docs/ carries the downscaled photos and the guides
+docs/Github BOM & Hardware Assembly Instructions/*.zip
+docs/Github BOM & Hardware Assembly Instructions/pool-chlorine-github (2)/
