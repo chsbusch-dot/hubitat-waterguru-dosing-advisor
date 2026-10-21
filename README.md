@@ -44,7 +44,8 @@ instead of a separate top-level app each.
 ### Via Hubitat Package Manager (recommended)
 
 Search HPM for **WaterGuru Dosing Advisor** and install — HPM installs the
-parent app, the child app, and the tile driver for you.
+parent app, the child app, and the tile driver for you, and offers the optional Pump Power
+Profiler (see below).
 
 ### Manually
 
@@ -74,7 +75,7 @@ without pinning it.
 | Setting | What it does |
 | --- | --- |
 | **Source** | The WaterGuru pool device to read. |
-| **SLAM mode** | When on, FC target = `SLAM factor × CYA` (default factor 0.40, the [TFP](https://www.troublefreepool.com/) SLAM level). Recommended while recovering. |
+| **SLAM mode** | When on, FC target = `SLAM factor × CYA` (default factor 0.40, the [TFP](https://www.troublefreepool.com/) SLAM level). Recommended while recovering. Off by default: only a saved "on" turns it on. |
 | **SLAM factor** | The multiplier used in SLAM mode. |
 | **Manual FC target override** | Pin the FC target directly (ppm); blank = compute it from CYA. |
 | **Pool volume / chlorine strength %** | Blank = read from the device (`poolVolume`, `chlorineProductPct`). |
@@ -126,9 +127,9 @@ pump may run; the others shape the dose.
 | **Limit AUTO mode to one completed dose per calendar day** | on | A second AUTO dose on the same day is blocked, whatever the reading says. A failed attempt counts too. | yes |
 | **Maximum WaterGuru sample age (hours)** | 18 | No dose on a reading older than this. | yes |
 | **Minimum dose to run (mL)** | 50 | A smaller calculated dose is not run. | no |
-| **Maximum single dose (mL)** | 3000 | A larger calculated dose is blocked, not capped (in SLAM mode it is capped to this; see the dosing model). At the default 185 mL/min a 14 minute run is about 2590 mL, so the maximum runtime, not this 3000 mL cap, bounds a single dose unless the pump is faster. | yes |
-| **Maximum total dose per day (mL)** | 3500 | Blocks a dose that would take the day's total (including reserved failed attempts) over this; in SLAM mode the dose is capped to what is left. | yes |
-| **Absolute maximum pump runtime (minutes)** | 14 | A dose whose runtime would exceed this is blocked; in SLAM mode it is capped to this runtime. | yes |
+| **Maximum single dose (mL)** | 3000 | A larger calculated dose is capped to this in APPROVAL or AUTO mode; outside SLAM only when the reading looks plausible, otherwise it is blocked (see the dosing model). At the default 185 mL/min a 14 minute run is about 2590 mL, so the maximum runtime, not this 3000 mL cap, bounds a single dose unless the pump is faster. | yes |
+| **Maximum total dose per day (mL)** | 3500 | Blocks a dose that would take the day's total (including reserved failed attempts) over this; in APPROVAL or AUTO mode the dose is capped to what is left instead (outside SLAM only when the reading looks plausible). | yes |
+| **Absolute maximum pump runtime (minutes)** | 14 | A dose whose runtime would exceed this is blocked; in APPROVAL or AUTO mode it is capped to this runtime instead (outside SLAM only when the reading looks plausible). | yes |
 | **Block dosing below pH / above pH** | 6.8 / 8.2 | No dose outside this pH range. | yes |
 | **Arm an independent emergency cutoff for every pump run** | on | A second, independent OFF timer for every pump start, retried until the switch freshly reports off. The last backstop. | yes |
 | **Independent emergency cutoff after this many minutes** | 15 | When the cutoff fires. It must be later than the maximum runtime, or no dose can start and the page shows the problem in red. | yes |
@@ -246,15 +247,22 @@ result is reported in fl oz, cups (÷8) and gallons (÷128). When FC is at or ab
 target the app advises holding (in SLAM mode, maintaining the SLAM level and
 retesting) rather than dosing.
 
-In SLAM mode with the pump in APPROVAL or AUTO mode, a dose larger than the pump limits is
-capped instead of blocked: the pump runs the smallest of the dose needed, the maximum single
-dose, what the maximum daily total leaves for today, what the maximum runtime pumps at your
-pump rate, and what is left in the tank, and the rest follows with the next samples. The
+With the pump in APPROVAL or AUTO mode, a dose larger than the pump limits is capped instead
+of blocked: the pump runs the smallest of the dose needed, the maximum single dose, what the
+maximum daily total leaves for today, what the maximum runtime pumps at your pump rate and, in
+SLAM mode, what is left in the tank, and the rest follows with the next samples. The
 summary and the notices say so, for example "SLAM: the pump dose is capped at 3000 mL of the
 6329 mL needed (single-dose limit); the rest follows with the next samples." Every other
 safety check still applies to the capped dose, and a cap under the minimum dose is blocked
-as before. Outside SLAM a dose over a limit is still blocked, since it usually means a bad
-reading.
+as before. In ADVISORY mode the whole amount is shown.
+
+Outside SLAM (since 2.5.1) the note reads "The pump dose is capped at ...", and the tank is not
+a cap: a capped dose larger than what is left in the tank is still blocked. The reading is
+checked before a dose is capped: a free chlorine reading of 0.0 ppm, or one more than 4 ppm below
+a previous sample at most 48 hours older, leaves the dose uncapped, so it is blocked whole with
+the same over-limit notice as before, and the FREE CHLORINE block adds a line such as "Not capped
+to the pump limits: FC read 0.0 ppm, which looks like a sensor or cassette fault; check the
+reading before dosing." A dose within the limits is not checked and runs as before.
 
 Because a capped SLAM dose is no longer stopped by those limits, SLAM checks the reading
 itself. With the pump in APPROVAL or AUTO mode, a free chlorine reading of 0.0 ppm, or one more
@@ -266,9 +274,8 @@ line giving the same reason. The daily summary, the only text sent when "Notify 
 on each new WaterGuru sample" is off, reads "Daily pool chlorine: not pumped." followed by the
 reason, and leaves out the cap note. The drop is measured against the newest earlier sample, and only
 when that sample is at most 48 hours older; without one, only the 0.0 check applies. A normal
-SLAM night, such as FC 6.0 one evening and 5.2 the next, still pumps the capped dose. SLAM mode
-is on by default, so an install in APPROVAL or AUTO mode that never changed it now pumps capped
-SLAM doses where large ones used to be blocked.
+SLAM night, such as FC 6.0 one evening and 5.2 the next, still pumps the capped dose. Since
+2.5.1 SLAM mode is off by default: only a saved "on" turns it on.
 
 ### Chlorine runway (algae forecast)
 
@@ -491,8 +498,9 @@ again, removes the one whose setting is off, and, as before, requests OFF for th
 
 ## Pump Power Profiler (optional)
 
-`apps/PumpPowerProfiler.groovy` is a separate app and not part of the Hubitat Package Manager
-package; install it by hand (*Apps Code > New App*) if you want power profiles of the pump. It is
+`apps/PumpPowerProfiler.groovy` is a separate app, shipped in the Hubitat Package Manager package
+as an optional app (since 2.5.1), or installed by hand (*Apps Code > New App*), if you want power
+profiles of the pump. Dosing does not need it. It is
 read-only toward the device: it sends `refresh()` and never switches it. Each run is saved to File
 Manager as `<prefix>-YYYYMMDD-HHMMSS.csv`, with one row per run in `<prefix>-summary.csv`.
 
@@ -502,8 +510,10 @@ Manager as `<prefix>-YYYYMMDD-HHMMSS.csv`, with one row per run in `<prefix>-sum
   included, and records a row for each. The subscription ends with the capture.
 - It sends one refresh 5 s after the ON and one 3 s after the OFF.
 - It polls only when no power report has arrived for *fallbackSecs* (default 90 s, 15 to 900). A
-  ZEN05 set to report power once a minute (parameter 10 = 1) and on a 5 W change is never polled,
-  and during a dose the dosing app's own refresh every 10 s brings a report anyway.
+  plug that reports power at least once a minute is never polled. The ZEN05 on this pool reports
+  power only on a 5 W change (parameter 9) or every 700 minutes (parameter 10); its once-a-minute
+  report (parameter 16) is voltage, so steady-run power comes from refresh answers. During a dose
+  the dosing app's own refresh every 10 s brings a report anyway.
 - A capture ends *tailSecs* after the OFF (default 15 s, at least 5) or after 60 minutes.
 
 Up to 1.1.1 the profiler refreshed the plug on every sample (*sampleSecs*, 5 s on the live
@@ -514,7 +524,7 @@ Gets per refresh, as the 2026-10-14 capture measured:
 | Run | 1.1.1 | 1.2.0 |
 |---|---|---|
 | Dose, the dosing app refreshing every 10 s | 166 refreshes (about 996 Gets) | 2 (12 Gets) |
-| No other app, the plug's 1 minute report | 166 (about 996 Gets) | 2 (12 Gets) |
+| No other app, a plug reporting power every minute | 166 (about 996 Gets) | 2 (12 Gets) |
 | A plug that reports only changes | 166 (about 996 Gets) | 10 (60 Gets) |
 
 The dosing app does not depend on the profiler's refreshes: its start is confirmed on the plug's

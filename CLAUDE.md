@@ -12,7 +12,7 @@ into a real pool: treat every pump-related change as safety critical.
 | `apps/WaterGuru-Dosing-Advisor.groovy` | Parent app (container) | yes |
 | `apps/WaterGuru-Dosing-Advisor-Child.groovy` | Child app "WaterGuru Dosing Advisor Pool": dosing model, pump control, stop lifecycle | yes |
 | `drivers/WaterGuru-Dosing-Tile.groovy` | Dashboard tile driver; attribute names are a contract with an external historian | yes |
-| `apps/PumpPowerProfiler.groovy` | Pump Power Profiler: samples the pump plug's meters during each run, saves CSVs to File Manager. Read-only toward the device | **no** (not in the manifest; add only if Chris asks) |
+| `apps/PumpPowerProfiler.groovy` | Pump Power Profiler: samples the pump plug's meters during each run, saves CSVs to File Manager. Read-only toward the device | yes (optional) |
 | `tools/zwave_capture.py` | Passive Z-Wave log capture and `--analyze` of a raw log (WOR-714, WOR-771). Reads both zwaveLogsocket formats: per-frame JSON (to 2026-10-09) and the plaintext dump (hub 2.5.2.135 on). The nightly LaunchAgent was removed 2026-10-14 | no |
 | `docs/handoff-2026-10-03.md` | Hub and Z-Wave context as of 2026-10-03 (ZEN05 pump plug, profiler, the missed 19:45 dose) | n/a |
 | `tests/` | Attribute contract check, Groovy execution tests against a stubbed hub, Z-Wave capture parser tests | n/a |
