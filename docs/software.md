@@ -591,7 +591,7 @@ in either direction, one alert goes to the *wearNotify* devices and to the log; 
 threshold ends the streak. The last 30 runs are kept in the app's state. *Clear the wear history*
 starts the baseline again, for example after the pump or its tube is replaced.
 
-The two baseline runs on plug 4680 (Oct 12 and 13, 814.6 s) give a steady phase of 6.86 W and
+The two baseline runs on the author's Zooz ZEN05 (Oct 12 and 13, 814.6 s) give a steady phase of 6.86 W and
 6.82 W. Short doses read a little higher than long ones, because the draw eases from about 7.1 W
 to 6.7 W over a run.
 
