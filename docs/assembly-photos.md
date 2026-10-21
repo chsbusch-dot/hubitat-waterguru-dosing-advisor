@@ -108,8 +108,7 @@ are molding features or damage, so inspect your own drum before you fill it.
 
 ## Earlier build stage
 
-Two smaller photos from September 2026, before the build was finished. They are kept for
-reference and do not show the final layout.
+Two smaller photos taken before the build was finished. They are kept for reference.
 
 ### Reservoir before final installation
 
@@ -118,11 +117,10 @@ reference and do not show the final layout.
 The drum with its original caps, an open bucket beside it and a clear tote behind it. Containment,
 chemical labels and the final cover are not in place yet, so do not copy this arrangement.
 
-### Suction parts before assembly
+### Pickup gland before assembly
 
-<img src="images/suction-parts-layout.jpg" alt="Suction parts before assembly" width="288">
+<img src="images/npt-gland-pass-through.jpg" alt="Black suction tube running unbroken through a white NPT cable gland" width="288">
 
-The black suction strainer, the black tube with a clear fitting on it, and a white bung cap seen
-from below. The strainer is a strainer, not a foot valve. The finished build passes the tube
-unbroken through a compression gland instead (see
-[Installed pickup pass-through](#installed-pickup-pass-through)).
+The black suction tube runs unbroken through the white NPT cable gland, before the gland goes into
+the bung cap. The tube is not cut or joined at the gland. See
+[Installed pickup pass-through](#installed-pickup-pass-through) for the gland mounted in the cap.

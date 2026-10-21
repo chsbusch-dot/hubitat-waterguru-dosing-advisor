@@ -22,7 +22,6 @@ against the stubbed hub (see Tests), and no test may touch a real hub or pump.
 | `drivers/WaterGuru-Dosing-Tile.groovy` | Dashboard tile driver; attribute names are a contract with an external historian | yes |
 | `apps/PumpPowerProfiler.groovy` | Pump Power Profiler: samples the pump plug's meters during each run, saves CSVs to File Manager. Read-only toward the device | yes (optional) |
 | `tools/zwave_capture.py` | Passive Z-Wave log capture and `--analyze` of a raw log. Reads both zwaveLogsocket formats: per-frame JSON (to 2026-10-09) and the plaintext dump (hub 2.5.2.135 on) | no |
-| `docs/handoff-2026-10-03.md` | Hub and Z-Wave context as of 2026-10-03 (ZEN05 pump plug, profiler, the missed 19:45 dose) | n/a |
 | `tests/` | Attribute contract check, Groovy execution tests against a stubbed hub, Z-Wave capture parser tests | n/a |
 | `waterguru-grafana/` | Optional InfluxDB collector (Python, Docker) and Grafana dashboard; reads the tile attributes. Own MIT license, own tests, CI workflow `waterguru-grafana.yml` | no |
 
