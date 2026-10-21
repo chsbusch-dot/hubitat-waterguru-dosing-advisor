@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1100" viewBox="0 0 1400 1100" role="img" aria-labelledby="title desc">
+<title id="title">Power, data and control</title>
+<desc id="desc">WaterGuru measurements reach the vendor cloud and the Hubitat integration and advisor. Hubitat sends ON and OFF commands to the Zooz ZEN05 and receives switch and power reports. Required protected AC runs through the plug to the matched 24 volt adapter and pump. Planned runtime and emergency cutoff are Hubitat software controls; the plug local timer is separate but all depend on the same outlet relay.</desc>
+<rect x="0" y="0" width="1400" height="1100" rx="0" fill="#FFFFFF" stroke="none" stroke-width="1.5"/>
+<rect x="0" y="0" width="1400" height="12" rx="0" fill="#007F79" stroke="none" stroke-width="1.5"/>
+<text x="48" y="54" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700" text-anchor="start" fill="#007F79">POOL CHLORINE DOSING  /  FIGURE 03</text>
+<text x="48" y="102" font-family="Arial, Helvetica, sans-serif" font-size="36" font-weight="700" text-anchor="start" fill="#142C3E">Power, data and control</text>
+<text x="48" y="140" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="400" text-anchor="start" fill="#526774">Functional connections only. The pump is powered through the Z-Wave plug.</text>
+<rect x="48" y="180" width="1304" height="279" rx="14" fill="#F0EBFA" stroke="none" stroke-width="1.5"/>
+<text x="71" y="217" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" text-anchor="start" fill="#6A4BB2">DATA AND COMMANDS</text>
+<rect x="73" y="242" width="267" height="136" rx="14" fill="#FFFFFF" stroke="none" stroke-width="1.5"/>
+<text x="206.5" y="275" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="700" text-anchor="middle" fill="#142C3E">WaterGuru</text>
+<text x="206.5" y="306" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400" text-anchor="middle" fill="#526774">Periodic chemistry</text>
+<text x="206.5" y="333" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400" text-anchor="middle" fill="#526774">measurements</text>
+<rect x="415" y="242" width="267" height="136" rx="14" fill="#FFFFFF" stroke="none" stroke-width="1.5"/>
+<text x="548.5" y="275" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="700" text-anchor="middle" fill="#142C3E">Vendor cloud</text>
+<text x="548.5" y="306" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400" text-anchor="middle" fill="#526774">Network / cloud</text>
+<text x="548.5" y="333" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400" text-anchor="middle" fill="#526774">connection required</text>
+<rect x="759" y="242" width="568" height="136" rx="14" fill="#FFFFFF" stroke="none" stroke-width="1.5"/>
+<text x="1043.0" y="275" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="700" text-anchor="middle" fill="#142C3E">Hubitat</text>
+<text x="1043.0" y="306" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400" text-anchor="middle" fill="#526774">WaterGuru Integration + Dosing Advisor</text>
+<text x="1043.0" y="333" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400" text-anchor="middle" fill="#526774">Calculations, limits, modes and notifications</text>
+<path d="M 340 309 L 415 309" fill="none" stroke="#6A4BB2" stroke-opacity="1" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="9 7"/>
+<polygon points="415,309 403.0,303.0 403.0,315.0" fill="#6A4BB2" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<path d="M 682 309 L 759 309" fill="none" stroke="#6A4BB2" stroke-opacity="1" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="9 7"/>
+<polygon points="759,309 747.0,303.0 747.0,315.0" fill="#6A4BB2" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<path d="M 860 378 L 860 427 L 555 427 L 555 555" fill="none" stroke="#6A4BB2" stroke-opacity="1" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="9 7"/>
+<polygon points="555,555 561.0,543.0 549.0,543.0" fill="#6A4BB2" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<text x="581" y="414" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" text-anchor="start" fill="#6A4BB2">Z-Wave ON / OFF</text>
+<path d="M 619 555 L 619 485 L 1179 485 L 1179 378" fill="none" stroke="#6A4BB2" stroke-opacity="1" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="9 7"/>
+<polygon points="1179,378 1173.0,390.0 1185.0,390.0" fill="#6A4BB2" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<text x="865" y="513" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" text-anchor="start" fill="#6A4BB2">Switch + measured-power reports</text>
+<text x="71" y="539" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" text-anchor="start" fill="#99620A">POWER PATH</text>
+<rect x="73" y="555" width="267" height="154" rx="14" fill="#FFF4DE" stroke="none" stroke-width="1.5"/>
+<text x="206.5" y="588" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="700" text-anchor="middle" fill="#142C3E">AC supply</text>
+<text x="206.5" y="619" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400" text-anchor="middle" fill="#526774">Required GFCI protection</text>
+<text x="206.5" y="646" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400" text-anchor="middle" fill="#526774">and outdoor provisions</text>
+<rect x="415" y="555" width="267" height="154" rx="14" fill="#FFF4DE" stroke="none" stroke-width="1.5"/>
+<text x="548.5" y="588" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="700" text-anchor="middle" fill="#142C3E">Zooz ZEN05</text>
+<text x="548.5" y="619" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400" text-anchor="middle" fill="#526774">800LR Z-Wave outlet</text>
+<text x="548.5" y="646" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400" text-anchor="middle" fill="#526774">One switched relay</text>
+<rect x="759" y="555" width="267" height="154" rx="14" fill="#FFF4DE" stroke="none" stroke-width="1.5"/>
+<text x="892.5" y="588" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="700" text-anchor="middle" fill="#142C3E">Matched adapter</text>
+<text x="892.5" y="619" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400" text-anchor="middle" fill="#526774">Switched AC input</text>
+<text x="892.5" y="646" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400" text-anchor="middle" fill="#526774">24 V DC output</text>
+<rect x="1101" y="555" width="226" height="154" rx="14" fill="#FFF4DE" stroke="none" stroke-width="1.5"/>
+<text x="1214.0" y="588" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="700" text-anchor="middle" fill="#142C3E">KCPA600</text>
+<text x="1214.0" y="619" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400" text-anchor="middle" fill="#526774">24 V DC pump</text>
+<text x="1214.0" y="646" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400" text-anchor="middle" fill="#526774">Local speed knob</text>
+<path d="M 340 628 L 415 628" fill="none" stroke="#99620A" stroke-opacity="1" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="415,628 403.0,622.0 403.0,634.0" fill="#99620A" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<path d="M 682 628 L 759 628" fill="none" stroke="#99620A" stroke-opacity="1" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="759,628 747.0,622.0 747.0,634.0" fill="#99620A" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<path d="M 1026 628 L 1101 628" fill="none" stroke="#99620A" stroke-opacity="1" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="1101,628 1089.0,622.0 1089.0,634.0" fill="#99620A" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<text x="377" y="609" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" text-anchor="middle" fill="#99620A">AC</text>
+<text x="719" y="609" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" text-anchor="middle" fill="#99620A">AC</text>
+<text x="1063" y="609" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" text-anchor="middle" fill="#99620A">DC</text>
+<text x="1214" y="744" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" text-anchor="middle" fill="#142C3E">No pump Wi-Fi setup</text>
+<text x="71" y="788" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" text-anchor="start" fill="#142C3E">REFERENCE RUNTIME LIMITS</text>
+<rect x="73" y="808" width="394" height="108" rx="14" fill="#F7FAFC" stroke="#CDD9DF" stroke-opacity="1" stroke-width="1.5"/>
+<text x="270.0" y="841" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" text-anchor="middle" fill="#142C3E">14 min maximum</text>
+<text x="270.0" y="872" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400" text-anchor="middle" fill="#526774">Planned dose limit in Hubitat</text>
+<rect x="489" y="808" width="394" height="108" rx="14" fill="#F7FAFC" stroke="#CDD9DF" stroke-opacity="1" stroke-width="1.5"/>
+<text x="686.0" y="841" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" text-anchor="middle" fill="#142C3E">15 min app cutoff</text>
+<text x="686.0" y="872" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400" text-anchor="middle" fill="#526774">Additional Hubitat OFF timer</text>
+<rect x="905" y="808" width="422" height="108" rx="14" fill="#F7FAFC" stroke="#CDD9DF" stroke-opacity="1" stroke-width="1.5"/>
+<text x="1116.0" y="841" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" text-anchor="middle" fill="#142C3E">20 min plug auto-off</text>
+<text x="1116.0" y="872" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400" text-anchor="middle" fill="#526774">Local timer; configure on ZEN05</text>
+<text x="73" y="957" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="400" text-anchor="start" fill="#142C3E">Hubitat timers share the hub. The local timer runs on the plug. All depend on the same outlet relay opening.</text>
+<text x="73" y="986" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="400" text-anchor="start" fill="#142C3E">Power reports do not prove liquid flow. A separate physical circulation cutoff is not documented in the photos.</text>
+<path d="M 48 1039 L 1352 1039" fill="none" stroke="#CDD9DF" stroke-opacity="1" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="48" y="1070" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="400" text-anchor="start" fill="#526774">Basis: README reference settings, Dosing Advisor 2.5.0 (3dd9a71) and Zooz ZEN05 advanced settings.</text>
+<text x="1352" y="1070" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="400" text-anchor="end" fill="#526774">21 OCT 2026</text>
+</svg>

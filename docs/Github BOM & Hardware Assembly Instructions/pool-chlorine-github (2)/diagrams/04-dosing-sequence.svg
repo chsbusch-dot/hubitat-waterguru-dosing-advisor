@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1700" viewBox="0 0 1400 1700" role="img" aria-labelledby="title desc">
+<title id="title">From measurement to confirmed shutdown</title>
+<desc id="desc">Advisory mode calculates only. Approval waits for the operator; Auto can authorize an eligible sample. Guards must pass before allowance is reserved, timers are armed and ON is requested. Fresh ON and adequate power confirm a start on this power-reporting plug. Failure causes OFF and a latched fault. A monitored run ends with an OFF request; without fresh OFF confirmation, retries and cutoff protection remain active. Usage is estimated, not metered.</desc>
+<rect x="0" y="0" width="1400" height="1700" rx="0" fill="#FFFFFF" stroke="none" stroke-width="1.5"/>
+<rect x="0" y="0" width="1400" height="12" rx="0" fill="#007F79" stroke="none" stroke-width="1.5"/>
+<text x="48" y="54" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700" text-anchor="start" fill="#007F79">POOL CHLORINE DOSING  /  FIGURE 04</text>
+<text x="48" y="102" font-family="Arial, Helvetica, sans-serif" font-size="36" font-weight="700" text-anchor="start" fill="#142C3E">From measurement to confirmed shutdown</text>
+<text x="48" y="140" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="400" text-anchor="start" fill="#526774">Normal dosing and fault recovery in WaterGuru Dosing Advisor 2.5.0.</text>
+<rect x="48" y="177" width="410" height="110" rx="14" fill="#F7FAFC" stroke="#CDD9DF" stroke-opacity="1" stroke-width="1.5"/>
+<text x="253.0" y="210" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" text-anchor="middle" fill="#142C3E">ADVISORY</text>
+<text x="253.0" y="241" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="400" text-anchor="middle" fill="#526774">Calculate and notify; no pump start</text>
+<rect x="480" y="177" width="410" height="110" rx="14" fill="#F0EBFA" stroke="none" stroke-width="1.5"/>
+<text x="685.0" y="210" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" text-anchor="middle" fill="#142C3E">APPROVAL</text>
+<text x="685.0" y="241" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="400" text-anchor="middle" fill="#526774">Operator authorizes the pending dose</text>
+<rect x="912" y="177" width="440" height="110" rx="14" fill="#F0EBFA" stroke="none" stroke-width="1.5"/>
+<text x="1132.0" y="210" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" text-anchor="middle" fill="#142C3E">AUTO</text>
+<text x="1132.0" y="241" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="400" text-anchor="middle" fill="#526774">Eligible sample may authorize a dose</text>
+<rect x="90" y="324" width="700" height="82" rx="14" fill="#F7FAFC" stroke="#CDD9DF" stroke-opacity="1" stroke-width="1.5"/>
+<text x="440.0" y="357" font-family="Arial, Helvetica, sans-serif" font-size="25" font-weight="700" text-anchor="middle" fill="#142C3E">New sample + run authorization</text>
+<path d="M 440 406 L 440 438" fill="none" stroke="#007F79" stroke-opacity="1" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="440,438 446.0,426.0 434.0,426.0" fill="#007F79" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="440,438.0 790.0,502 440,566.0 90.0,502" fill="#FFF4DE" stroke="#99620A" stroke-opacity="1" stroke-width="2" stroke-linejoin="round"/>
+<text x="440" y="495" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="700" text-anchor="middle" fill="#142C3E">All dosing guards pass?</text>
+<text x="440" y="526" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="400" text-anchor="middle" fill="#526774">Mode, sample, circulation, chemistry and limits</text>
+<path d="M 790 502 L 930 502" fill="none" stroke="#A74135" stroke-opacity="1" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="930,502 918.0,496.0 918.0,508.0" fill="#A74135" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<text x="842" y="486" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" text-anchor="start" fill="#A74135">NO</text>
+<rect x="930" y="454" width="422" height="105" rx="14" fill="#FCECE8" stroke="none" stroke-width="1.5"/>
+<text x="1141.0" y="487" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="700" text-anchor="middle" fill="#142C3E">Hold and report why</text>
+<text x="1141.0" y="518" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400" text-anchor="middle" fill="#526774">No ON request</text>
+<path d="M 440 566 L 440 600" fill="none" stroke="#007F79" stroke-opacity="1" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="440,600 446.0,588.0 434.0,588.0" fill="#007F79" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<text x="459" y="591" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" text-anchor="start" fill="#007F79">YES</text>
+<rect x="90" y="600" width="700" height="106" rx="14" fill="#E3F4F1" stroke="none" stroke-width="1.5"/>
+<text x="440.0" y="633" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" text-anchor="middle" fill="#142C3E">Reserve attempt; arm stop protection</text>
+<text x="440.0" y="664" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="400" text-anchor="middle" fill="#526774">Request ON once; sample and dose allowance are reserved</text>
+<path d="M 440 706 L 440 740" fill="none" stroke="#007F79" stroke-opacity="1" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="440,740 446.0,728.0 434.0,728.0" fill="#007F79" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="440,740.0 790.0,807 440,874.0 90.0,807" fill="#FFF4DE" stroke="#99620A" stroke-opacity="1" stroke-width="2" stroke-linejoin="round"/>
+<text x="440" y="800" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="700" text-anchor="middle" fill="#142C3E">Start confirmed in time?</text>
+<text x="440" y="831" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="400" text-anchor="middle" fill="#526774">Fresh ON + fresh adequate watts for this plug</text>
+<path d="M 790 807 L 930 807" fill="none" stroke="#A74135" stroke-opacity="1" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="930,807 918.0,801.0 918.0,813.0" fill="#A74135" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<text x="842" y="790" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" text-anchor="start" fill="#A74135">NO</text>
+<rect x="930" y="756" width="422" height="110" rx="14" fill="#FCECE8" stroke="none" stroke-width="1.5"/>
+<text x="1141.0" y="789" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" text-anchor="middle" fill="#142C3E">Latch fault; request OFF</text>
+<text x="1141.0" y="820" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="400" text-anchor="middle" fill="#526774">Keep reservation; no automatic retry</text>
+<path d="M 440 874 L 440 911" fill="none" stroke="#007F79" stroke-opacity="1" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="440,911 446.0,899.0 434.0,899.0" fill="#007F79" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<text x="459" y="899" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" text-anchor="start" fill="#007F79">YES</text>
+<rect x="90" y="911" width="700" height="106" rx="14" fill="#E3F4F1" stroke="none" stroke-width="1.5"/>
+<text x="440.0" y="944" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" text-anchor="middle" fill="#142C3E">Monitor the bounded run</text>
+<text x="440.0" y="975" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="400" text-anchor="middle" fill="#526774">Watch power evidence and runtime; usage remains estimated</text>
+<path d="M 440 1017 L 440 1052" fill="none" stroke="#007F79" stroke-opacity="1" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="440,1052 446.0,1040.0 434.0,1040.0" fill="#007F79" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<rect x="90" y="1052" width="700" height="106" rx="14" fill="#F7FAFC" stroke="#CDD9DF" stroke-opacity="1" stroke-width="1.5"/>
+<text x="440.0" y="1085" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" text-anchor="middle" fill="#142C3E">Request OFF</text>
+<text x="440.0" y="1116" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="400" text-anchor="middle" fill="#526774">Planned end, stop command or fault</text>
+<path d="M 440 1158 L 440 1194" fill="none" stroke="#007F79" stroke-opacity="1" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="440,1194 446.0,1182.0 434.0,1182.0" fill="#007F79" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="440,1194.0 790.0,1260 440,1326.0 90.0,1260" fill="#FFF4DE" stroke="#99620A" stroke-opacity="1" stroke-width="2" stroke-linejoin="round"/>
+<text x="440" y="1253" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="700" text-anchor="middle" fill="#142C3E">Fresh OFF confirmed?</text>
+<text x="440" y="1284" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="400" text-anchor="middle" fill="#526774">An old cached OFF is insufficient for this run</text>
+<path d="M 790 1260 L 930 1260" fill="none" stroke="#A74135" stroke-opacity="1" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="930,1260 918.0,1254.0 918.0,1266.0" fill="#A74135" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<text x="842" y="1243" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" text-anchor="start" fill="#A74135">NO</text>
+<rect x="930" y="1198" width="422" height="146" rx="14" fill="#FCECE8" stroke="none" stroke-width="1.5"/>
+<text x="1141.0" y="1231" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" text-anchor="middle" fill="#142C3E">Continue stop recovery</text>
+<text x="1141.0" y="1262" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="400" text-anchor="middle" fill="#526774">Retry OFF; keep cutoff protection</text>
+<text x="1141.0" y="1289" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="400" text-anchor="middle" fill="#526774">Escalate / notify as appropriate</text>
+<text x="1141.0" y="1316" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="400" text-anchor="middle" fill="#526774">Block another dose while recovering</text>
+<path d="M 1141 866 L 1141 1083 L 790 1083" fill="none" stroke="#A74135" stroke-opacity="1" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="790,1083 802.0,1089.0 802.0,1077.0" fill="#A74135" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<text x="952" y="949" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" text-anchor="start" fill="#A74135">Shared stop path</text>
+<path d="M 1352 1270 L 1372 1270 L 1372 1127 L 790 1127" fill="none" stroke="#A74135" stroke-opacity="1" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="790,1127 802.0,1133.0 802.0,1121.0" fill="#A74135" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<path d="M 440 1326 L 440 1420" fill="none" stroke="#007F79" stroke-opacity="1" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="440,1420 446.0,1408.0 434.0,1408.0" fill="#007F79" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<text x="459" y="1370" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" text-anchor="start" fill="#007F79">YES</text>
+<rect x="90" y="1420" width="700" height="108" rx="14" fill="#E3F4F1" stroke="none" stroke-width="1.5"/>
+<text x="440.0" y="1453" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" text-anchor="middle" fill="#142C3E">Close run; reconcile estimated usage</text>
+<text x="440.0" y="1484" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="400" text-anchor="middle" fill="#526774">Notify outcome; retained faults still require review</text>
+<rect x="930" y="600" width="422" height="105" rx="14" fill="#F7FAFC" stroke="none" stroke-width="1.5"/>
+<text x="953" y="633" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700" text-anchor="start" fill="#526774">RESERVATION IS DELIBERATE</text>
+<text x="953" y="663" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="400" text-anchor="start" fill="#526774">A failed start does not free its sample</text>
+<text x="953" y="687" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="400" text-anchor="start" fill="#526774">or reserved daily dose allowance.</text>
+<text x="48" y="1583" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400" text-anchor="start" fill="#142C3E">A fresh power report confirms electrical load, not chemical flow. Fault acknowledgement never starts the pump.</text>
+<text x="48" y="1610" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400" text-anchor="start" fill="#142C3E">This overview is for a dosing attempt; see the software documentation for idle-stop and recovery edge cases.</text>
+<path d="M 48 1639 L 1352 1639" fill="none" stroke="#CDD9DF" stroke-opacity="1" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="48" y="1670" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="400" text-anchor="start" fill="#526774">Basis: published Dosing Advisor README at commit 3dd9a71. Limits and device setup: Figure 03 / tutorial.</text>
+<text x="1352" y="1670" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="400" text-anchor="end" fill="#526774">21 OCT 2026</text>
+</svg>

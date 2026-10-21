@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1000" viewBox="0 0 1400 1000" role="img" aria-labelledby="title desc">
+<title id="title">The physical dosing path</title>
+<desc id="desc">Sodium hypochlorite travels from a 15 gallon reservoir through a suction strainer and continuous tube to the Kamoer pump, then through discharge tubing and a check valve into the pool. The valve is submerged near, but not connected to, the wall return. Power and control are shown separately in Figure 03. Internal pickup is schematic; elevations are not specified.</desc>
+<rect x="0" y="0" width="1400" height="1000" rx="0" fill="#FFFFFF" stroke="none" stroke-width="1.5"/>
+<rect x="0" y="0" width="1400" height="12" rx="0" fill="#007F79" stroke="none" stroke-width="1.5"/>
+<text x="48" y="54" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700" text-anchor="start" fill="#007F79">POOL CHLORINE DOSING  /  FIGURE 01</text>
+<text x="48" y="102" font-family="Arial, Helvetica, sans-serif" font-size="36" font-weight="700" text-anchor="start" fill="#142C3E">The physical dosing path</text>
+<text x="48" y="140" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="400" text-anchor="start" fill="#526774">Documented arrangement: direct discharge beside a pool return.</text>
+<rect x="48" y="181" width="1304" height="556" rx="14" fill="#F7FAFC" stroke="none" stroke-width="1.5"/>
+<text x="92" y="225" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" text-anchor="start" fill="#007F79">1  RESERVOIR</text>
+<text x="500" y="225" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" text-anchor="start" fill="#007F79">2  PERISTALTIC PUMP</text>
+<text x="974" y="225" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700" text-anchor="start" fill="#007F79">3  POOL OUTLET</text>
+<rect x="105" y="348" width="240" height="276" rx="32" fill="#EAF2F8" stroke="#2876AF" stroke-opacity="1" stroke-width="3"/>
+<ellipse cx="225" cy="348" rx="120" ry="32" fill="#D5E5F0" stroke="#2876AF" stroke-opacity="1" stroke-width="3"/>
+<rect x="113" y="446" width="224" height="146" rx="0" fill="#BAE1DA" stroke="none" stroke-width="1.5"/>
+<path d="M 113 446 C 160 432 190 460 225 446 C 270 433 300 458 337 446" fill="none" stroke="#007F79" stroke-opacity="1" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<ellipse cx="225" cy="594" rx="112" ry="24" fill="#BAE1DA" stroke="#007F79" stroke-opacity="1" stroke-width="1"/>
+<rect x="147" y="314" width="49" height="25" rx="5" fill="#FFFFFF" stroke="#2876AF" stroke-opacity="1" stroke-width="1.5"/>
+<rect x="254" y="314" width="49" height="25" rx="5" fill="#FFFFFF" stroke="#2876AF" stroke-opacity="1" stroke-width="1.5"/>
+<path d="M 279 563 L 279 285 L 510 285 L 510 435 L 570 435" fill="none" stroke="#142C3E" stroke-opacity="1" stroke-width="12" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M 279 520 L 279 472" fill="none" stroke="#007F79" stroke-opacity="1" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="279,472 273.0,484.0 285.0,484.0" fill="#007F79" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<path d="M 336 285 L 424 285" fill="none" stroke="#007F79" stroke-opacity="1" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="424,285 412.0,279.0 412.0,291.0" fill="#007F79" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<rect x="259" y="548" width="40" height="54" rx="5" fill="#435965" stroke="#142C3E" stroke-opacity="1" stroke-width="1.5"/>
+<path d="M 266 561 L 291 561" fill="none" stroke="#D7E3E8" stroke-opacity="1" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M 266 572 L 291 572" fill="none" stroke="#D7E3E8" stroke-opacity="1" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M 266 583 L 291 583" fill="none" stroke="#D7E3E8" stroke-opacity="1" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="190" y="400" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" text-anchor="middle" fill="#142C3E">15 US gal</text>
+<text x="190" y="429" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="400" text-anchor="middle" fill="#526774">nominal capacity</text>
+<text x="225" y="661" font-family="Arial, Helvetica, sans-serif" font-size="21" font-weight="700" text-anchor="middle" fill="#142C3E">Suction strainer</text>
+<text x="225" y="688" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="400" text-anchor="middle" fill="#526774">Internal pickup is schematic</text>
+<text x="364" y="326" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="700" text-anchor="start" fill="#007F79">Suction</text>
+<rect x="571" y="343" width="231" height="234" rx="22" fill="#FFFFFF" stroke="#142C3E" stroke-opacity="1" stroke-width="3"/>
+<text x="686" y="378" font-family="Arial, Helvetica, sans-serif" font-size="25" font-weight="700" text-anchor="middle" fill="#142C3E">Kamoer</text>
+<circle cx="686" cy="460" r="64" fill="#E4ECEF" stroke="#142C3E" stroke-opacity="1" stroke-width="3"/>
+<path d="M 576 435 L 626 435 C 626 395 747 395 747 435 L 747 483 L 801 483" fill="none" stroke="#007F79" stroke-opacity="1" stroke-width="10" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="669" cy="434" r="12" fill="#FFFFFF" stroke="#142C3E" stroke-opacity="1" stroke-width="2"/>
+<circle cx="714" cy="452" r="12" fill="#FFFFFF" stroke="#142C3E" stroke-opacity="1" stroke-width="2"/>
+<circle cx="671" cy="485" r="12" fill="#FFFFFF" stroke="#142C3E" stroke-opacity="1" stroke-width="2"/>
+<circle cx="757" cy="541" r="16" fill="#D8E2E8" stroke="#142C3E" stroke-opacity="1" stroke-width="2"/>
+<text x="686" y="613" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" text-anchor="middle" fill="#142C3E">KCPA600-N40 • 24 V DC</text>
+<text x="686" y="644" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="400" text-anchor="middle" fill="#526774">Norprene pump-head tube</text>
+<text x="686" y="672" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="400" text-anchor="middle" fill="#526774">Local speed knob; timed power</text>
+<text x="594" y="326" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" text-anchor="start" fill="#007F79">IN</text>
+<text x="809" y="468" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" text-anchor="start" fill="#007F79">OUT</text>
+<rect x="1005" y="393" width="305" height="275" rx="0" fill="#DEEFF9" stroke="none" stroke-width="1.5"/>
+<path d="M 1005 393 Q 1030 381 1055 393 T 1105 393 T 1155 393 T 1205 393 T 1255 393 T 1305 393" fill="none" stroke="#2876AF" stroke-opacity="1" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M 1309 342 L 1309 669 L 1005 669" fill="none" stroke="#9AACB7" stroke-opacity="1" stroke-width="9" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M 802 483 L 923 483 L 923 315 L 1085 315 L 1085 495" fill="none" stroke="#142C3E" stroke-opacity="1" stroke-width="12" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M 975 315 L 1045 315" fill="none" stroke="#007F79" stroke-opacity="1" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="1045,315 1033.0,309.0 1033.0,321.0" fill="#007F79" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<path d="M 1085 405 L 1085 455" fill="none" stroke="#007F79" stroke-opacity="1" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="1085,455 1091.0,443.0 1079.0,443.0" fill="#007F79" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<rect x="1067" y="493" width="36" height="56" rx="5" fill="#FDFDFC" stroke="#142C3E" stroke-opacity="1" stroke-width="2.5"/>
+<rect x="1077" y="549" width="16" height="21" rx="3" fill="#FDFDFC" stroke="#142C3E" stroke-opacity="1" stroke-width="1.5"/>
+<path d="M 1085 575 L 1085 620" fill="none" stroke="#007F79" stroke-opacity="1" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="1085,620 1091.0,608.0 1079.0,608.0" fill="#007F79" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<circle cx="1286" cy="530" r="25" fill="#FFFFFF" stroke="#2876AF" stroke-opacity="1" stroke-width="3"/>
+<circle cx="1286" cy="530" r="10" fill="#A9CEE3" stroke="#2876AF" stroke-opacity="1" stroke-width="2"/>
+<path d="M 1253 530 L 1179 530" fill="none" stroke="#2876AF" stroke-opacity="1" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="1179,530 1191.0,536.0 1191.0,524.0" fill="#2876AF" stroke="none" stroke-width="2" stroke-linejoin="round"/>
+<text x="1130" y="586" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="700" text-anchor="start" fill="#142C3E">Check valve</text>
+<text x="1146" y="625" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="400" text-anchor="middle" fill="#526774">Wall return</text>
+<text x="1146" y="648" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="400" text-anchor="middle" fill="#526774">separate from valve</text>
+<text x="997" y="289" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="700" text-anchor="start" fill="#007F79">Discharge tube</text>
+<text x="1157" y="713" font-family="Arial, Helvetica, sans-serif" font-size="19" font-weight="700" text-anchor="middle" fill="#142C3E">Submerged outlet; no air gap</text>
+<rect x="48" y="762" width="634" height="155" rx="14" fill="#E3F4F1" stroke="none" stroke-width="1.5"/>
+<text x="73" y="797" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" text-anchor="start" fill="#007F79">FOLLOW THE ARROWS</text>
+<text x="73" y="829" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="400" text-anchor="start" fill="#142C3E">Green: chlorine delivery direction. Blue: return water.</text>
+<text x="73" y="857" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="400" text-anchor="start" fill="#142C3E">Dark lines: nominal 1/4-inch OD external tubing.</text>
+<text x="73" y="885" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="400" text-anchor="start" fill="#142C3E">The check valve is not tapped into the return pipe.</text>
+<rect x="704" y="762" width="648" height="155" rx="14" fill="#FFF4DE" stroke="none" stroke-width="1.5"/>
+<text x="729" y="797" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" text-anchor="start" fill="#99620A">LAYOUT LIMITS</text>
+<text x="729" y="829" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="400" text-anchor="start" fill="#142C3E">Not to scale; tank/pool elevations are not established.</text>
+<text x="729" y="857" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="400" text-anchor="start" fill="#142C3E">Validate outlet support, siphon/backflow protection</text>
+<text x="729" y="885" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="400" text-anchor="start" fill="#142C3E">and a physical no-flow cutoff before operation.</text>
+<path d="M 48 939 L 1352 939" fill="none" stroke="#CDD9DF" stroke-opacity="1" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="48" y="970" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="400" text-anchor="start" fill="#526774">Basis: assembly photos IMG_0542 to IMG_0551 and README assembly section. Power/control: Figure 03.</text>
+<text x="1352" y="970" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="400" text-anchor="end" fill="#526774">21 OCT 2026</text>
+</svg>

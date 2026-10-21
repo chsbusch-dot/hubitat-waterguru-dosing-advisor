@@ -14,3 +14,6 @@
 
 # Mutation check output (tests/mutation/run.sh)
 tests/mutation/out/
+
+# Staging zips that duplicate the unzipped folders beside them (WOR-859)
+docs/Github BOM & Hardware Assembly Instructions/*.zip
