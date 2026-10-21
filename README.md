@@ -42,7 +42,7 @@ It adds two things the integration cannot do:
 | WaterGuru Integration (app + driver) | [bdwilson/hubitat, WaterGuru](https://github.com/bdwilson/hubitat/tree/master/WaterGuru) | No. Install it first, this app reads its device. |
 | WaterGuru Dosing Advisor (parent + one pool child per pool) | [`apps/`](apps/) | Yes |
 | WaterGuru Dosing Tile (dashboard driver) | [`drivers/`](drivers/) | Yes |
-| Pump Power Profiler (optional power and wear recorder) | [`apps/PumpPowerProfiler.groovy`](apps/PumpPowerProfiler.groovy) | Yes, as an optional app (since 2.5.1), or install it by hand. |
+| Pump Power Profiler (optional power and wear recorder) | [`apps/PumpPowerProfiler.groovy`](apps/PumpPowerProfiler.groovy) | No. Install by hand. |
 
 ## Quick start
 
@@ -80,8 +80,7 @@ readings and the tank level with what the app expected, and only then switch to 
 Three separate limits end a pump run, and each must allow more time than the one before it:
 
 1. **Absolute maximum pump runtime** (default 14 minutes). A dose that would run longer is blocked
-   (in APPROVAL or AUTO mode it is capped to this runtime instead, outside SLAM only when the
-   reading looks plausible).
+   (in SLAM mode it is capped to this runtime).
 2. **Independent emergency cutoff** (default 15 minutes). A second OFF timer armed for every pump
    start and retried until the switch reports off. No dose starts unless it is later than the
    maximum runtime.
