@@ -1,5 +1,10 @@
 # Hardware guide: pool chlorine dosing with Hubitat, WaterGuru and a Z-Wave plug
 
+> ⚠️ **You build and run this at your own risk.** Liquid chlorine can burn skin and eyes, and mixed
+> with acid or other pool chemicals it can release toxic chlorine gas. Read
+> [Chemical storage and PPE](#chemical-storage-and-ppe), the [Safety](../README.md#safety) section
+> and the [Disclaimer](../README.md#disclaimer) before you start.
+
 Build a liquid chlorine dosing system around a **Kamoer KCPA600 peristaltic pump**, a **Zooz ZEN05
 800LR outdoor Z-Wave plug** and **WaterGuru Dosing Advisor for Hubitat**. WaterGuru supplies periodic
 chemistry measurements. The advisor calculates a bounded dose, and the Z-Wave plug switches the
@@ -13,8 +18,8 @@ This guide documents my finished build. The photos show how the tubing is routed
 the caps and pump are arranged. They cannot certify material compatibility, an enclosure rating or a
 protective function. Those need the component specifications and your own commissioning tests.
 
-Read the [Safety](../README.md#safety) section before you start. The software side (install,
-settings, dosing model, faults) is in the [software guide](software.md). This guide was written
+The software side (install, settings, dosing model, faults) is in the
+[software guide](software.md). This guide was written
 against WaterGuru Dosing Advisor 2.5.0, with the SLAM default and the over-limit cap updated for
 2.5.1.
 
