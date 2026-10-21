@@ -1,9 +1,17 @@
 # CLAUDE.md
 
 Hubitat Elevation apps that turn WaterGuru pool readings into chemical dosing advice and,
-in AUTO mode, run a liquid chlorine pump. The repo is **public** and ships to other users
-through Hubitat Package Manager (`packageManifest.json`). The code here doses real chlorine
-into a real pool: treat every pump-related change as safety critical.
+in AUTO mode, run a liquid chlorine pump. The apps ship to other users through Hubitat
+Package Manager (`packageManifest.json`).
+
+Facts about one particular hub (device and app IDs, addresses, the operator's process) stay out
+of this public file. The maintainer keeps them in a git-ignored `CLAUDE.local.md` beside it.
+
+## Safety
+
+**The code here doses real chlorine into a real pool: treat every pump-related change as safety
+critical.** A change to how the pump starts, runs, stops or decides a dose comes with tests
+against the stubbed hub (see Tests), and no test may touch a real hub or pump.
 
 ## Layout
 
@@ -13,58 +21,9 @@ into a real pool: treat every pump-related change as safety critical.
 | `apps/WaterGuru-Dosing-Advisor-Child.groovy` | Child app "WaterGuru Dosing Advisor Pool": dosing model, pump control, stop lifecycle | yes |
 | `drivers/WaterGuru-Dosing-Tile.groovy` | Dashboard tile driver; attribute names are a contract with an external historian | yes |
 | `apps/PumpPowerProfiler.groovy` | Pump Power Profiler: samples the pump plug's meters during each run, saves CSVs to File Manager. Read-only toward the device | yes (optional) |
-| `tools/zwave_capture.py` | Passive Z-Wave log capture and `--analyze` of a raw log (WOR-714, WOR-771). Reads both zwaveLogsocket formats: per-frame JSON (to 2026-10-09) and the plaintext dump (hub 2.5.2.135 on). The nightly LaunchAgent was removed 2026-10-14 | no |
+| `tools/zwave_capture.py` | Passive Z-Wave log capture and `--analyze` of a raw log. Reads both zwaveLogsocket formats: per-frame JSON (to 2026-10-09) and the plaintext dump (hub 2.5.2.135 on) | no |
 | `docs/handoff-2026-10-03.md` | Hub and Z-Wave context as of 2026-10-03 (ZEN05 pump plug, profiler, the missed 19:45 dose) | n/a |
 | `tests/` | Attribute contract check, Groovy execution tests against a stubbed hub, Z-Wave capture parser tests | n/a |
-
-## Live hub
-
-| Thing | ID |
-|---|---|
-| Hub | Hubitat C8, 192.168.1.147 |
-| Parent app instance | 2198 (app code 1241) |
-| Child app instance | 2200 (app code 1242). 2199 was an orphaned clone and was deleted |
-| Tile device | 4658 (driver code 3046) |
-| Pump Power Profiler | instance 2214 (app code 1250), labelled "WaterGuru Pump Power Profiler", sampleSecs 5 since 2026-10-07 |
-| Pump plug | device 4680, Zooz ZEN05, Z-Wave node 72, plain mesh without security, Command Retry on. Re-joined 2026-10-12: the old long-range S2 device 4674 (node 259) stopped decoding after a hub reboot on 2026-10-11 and was removed |
-| Notifier for 2200 and 2195 | device 4679 "Pool Chlorine (Pushover)", its own Pushover app (token in BWS as `PUSHOVER_POOL_DOSING_APP_TOKEN`), since 2026-10-07. Device 1955 "PushOver" stays the hub's shared notifier for other apps |
-| RM rule "POOL 60 seconds" | rule 2207, triggered by virtual button 4609 |
-| Maker API | app 2142 |
-| ZEN20 power strip | device 150, outlets 151 to 155 (router and AV gear) |
-
-The WaterGuru Integration (app 2195, driver 3045) comes from Brian Wilson's HPM package. HPM (app
-546) auto-updates every package at 04:00 EXCEPT that one (excluded 2026-10-07): an upstream release
-reaches the hub only when someone installs it via HPM > Update, and a local build is not overwritten.
-
-Hub access is the `hubitat-rules` MCP server. Gateway tools (`hub_read_*`, `hub_manage_*`)
-list their sub-tools when called with no arguments.
-
-To check the hub against git (read only): `hub_read_apps_code` → `hub_get_source` for app
-code 1241/1242/1250 and driver 3046, or from the LAN
-`curl -s http://192.168.1.147/app/ajax/code?id=1242` (`/driver/ajax/code?id=3046` for the
-driver) and compare the `source` field byte for byte with the file at `origin/main`.
-
-## Safety rules (hard)
-
-- **Never switch the pump plug 4680 without Chris's explicit yes.** It doses real chlorine.
-- **`hub_create_backup` before ANY write** to devices, drivers, apps or the radio. From Claude Code
-  the tool refuses its own key (the key is dropped on the client path, upstream issue
-  kingpanther13/Hubitat-local-MCP-server#518). Chris approved (2026-10-07) taking the backup by a
-  direct JSON-RPC `tools/call` to the MCP server with its token from BWS; otherwise ask Chris for a
-  UI backup. Confirm with `hub_list_backups` (scope hub_local): the day's `~manual` file is replaced
-  by each new manual backup.
-- **Never toggle the ZEN20 outlets** (device 150, children 151 to 155): router and AV gear.
-- **Tank inventory corrections and profiler `sampleSecs` changes only after Chris confirms.**
-- **Never use `hub_set_native_app` to WRITE settings on the custom apps 2198/2200.** It
-  clones the child and orphans the original (that is how 2199 happened). Button presses are
-  fine, but on MCP Rule Server 4.5.5 a press (e.g. `btnPreview`) also fires `updated()` on 2200:
-  the routine OFF + refresh goes to plug 4680, and when the plug answers after the 4 s wait Chris
-  gets two notices. For a lifecycle refresh use `hub_update_app` with `triggerUpdated`.
-- The write-gate key (`bestPracticeKey`) comes from the guide section the refusal names (on
-  4.5.5 for example `backup`, `update_device`, `hub_admin_write_devices`); it rotates hourly.
-  Read it fresh; never hard-code or quote it.
-- Deploying code to the hub is Chris's call: open the PR, he approves anything that lands on
-  the hub.
 
 ## Tests
 
@@ -101,14 +60,21 @@ source tests against that (`liveWaterGuru`, `wgSample` in `run_tests.groovy`).
 Optional, not in CI (a few minutes): `tests/mutation/run.sh` reruns the 2.4.0 review's mutation set
 plus one mutant per 2.4.1 fix (F*), per 2.4.2 fix (R*), per 2.4.3 fix (W*), per 2.4.4 fix (X*) and per
 profiler 1.1.1 fix (XP*, declared with `mutp`), per profiler 1.2.0 sampling behaviour (E*) and wear rule
-(WM*), and PI1 (the dosing app's own refresh, WOR-716); each mutant runs the suite for its file, and the base
+(WM*), and PI1 (the dosing app's own refresh); each mutant runs the suite for its file, and the base
 runs both. The unmutated `base` must pass and every `[killed]` mutant must fail;
 anchors are exact strings, so re-anchor a mutant when the code under it changes.
+
+## No em or en dashes in what users read
+
+Text a user reads carries no em dash (U+2014) or en dash (U+2013): the app pages, notices and
+advice text, the tile HTML, `README.md` and `docs/`. Use a comma, period, colon or parentheses
+instead. Code, code comments, commit messages and PR bodies are exempt. The Groovy suite checks
+the notices and page text ("2.5.0 change 6"); for the docs run
+`rg '[\x{2014}\x{2013}]' README.md docs`, which must print nothing.
 
 ## Branches and PRs
 
 - Branch off `main` as `wgda/<type>/<slug>` (for example `wgda/fix/pump-start-confirmation`).
 - One feature per branch; never commit onto another feature's open-PR branch.
-- PR body carries `Closes WOR-<n>` (Linear team WOR).
 - A release bumps the versions in `packageManifest.json`, the child's `appVersion()` and its
   header changelog (see commit `3462639`, release 2.3.1).
