@@ -24,6 +24,13 @@ It adds two things the integration cannot do:
 > Read [Safety](#safety) before you connect a pump, and the [Disclaimer](#disclaimer)
 > before you use the app.
 
+<p>
+  <img src="docs/images/kamoer-pump-connections.jpg" alt="Kamoer KCPA600 pump with its suction and discharge tubing" width="300">
+  <img src="docs/images/assembled-reservoir.jpg" alt="Blue chlorine reservoir drum with its caps" width="300">
+</p>
+
+*The pump, and the chlorine reservoir it draws from.*
+
 ---
 
 ## Documentation
