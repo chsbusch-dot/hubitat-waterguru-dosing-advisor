@@ -42,13 +42,15 @@ It adds two things the integration cannot do:
 | WaterGuru Integration (app + driver) | [bdwilson/hubitat, WaterGuru](https://github.com/bdwilson/hubitat/tree/master/WaterGuru) | No. Install it first, this app reads its device. |
 | WaterGuru Dosing Advisor (parent + one pool child per pool) | [`apps/`](apps/) | Yes |
 | WaterGuru Dosing Tile (dashboard driver) | [`drivers/`](drivers/) | Yes |
-| Pump Power Profiler (optional power and wear recorder) | [`apps/PumpPowerProfiler.groovy`](apps/PumpPowerProfiler.groovy) | No. Install by hand. |
+| Pump Power Profiler (optional power and wear recorder) | [`apps/PumpPowerProfiler.groovy`](apps/PumpPowerProfiler.groovy) | Yes, as an optional app (since 2.5.1), or install it by hand. |
 
 ## Quick start
 
 1. Install and set up the [WaterGuru Integration](https://github.com/bdwilson/hubitat/tree/master/WaterGuru).
-2. In Hubitat Package Manager, search for **WaterGuru Dosing Advisor** and install it. The
-   [software guide](docs/software.md#install) has the manual install.
+2. In Hubitat Package Manager, choose **Install**, then **From a URL**, and enter
+   `https://raw.githubusercontent.com/chsbusch-dot/hubitat-waterguru-dosing-advisor/main/packageManifest.json`.
+   The package is not in HPM's keyword search. The [software guide](docs/software.md#install) has
+   the steps and the manual install.
 3. Go to **Apps > Add User App > WaterGuru Dosing Advisor** and use **Add a WaterGuru pool**. Select
    the WaterGuru device and a notification device.
 4. The pool starts in **ADVISORY** mode: it calculates and notifies, and never starts a pump. Before
@@ -79,8 +81,9 @@ readings and the tank level with what the app expected, and only then switch to 
 
 Three separate limits end a pump run, and each must allow more time than the one before it:
 
-1. **Absolute maximum pump runtime** (default 14 minutes). A dose that would run longer is blocked
-   (in SLAM mode it is capped to this runtime).
+1. **Absolute maximum pump runtime** (default 14 minutes). A dose that would run longer is capped
+   to this runtime: since 2.5.1 outside SLAM mode too, where up to 2.5.0 it was refused whole. A
+   0.0 reading or a drop over 4 ppm still blocks it whole.
 2. **Independent emergency cutoff** (default 15 minutes). A second OFF timer armed for every pump
    start and retried until the switch reports off. No dose starts unless it is later than the
    maximum runtime.
