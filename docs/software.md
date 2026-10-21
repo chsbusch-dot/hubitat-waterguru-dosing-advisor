@@ -67,9 +67,17 @@ instead of a separate top-level app each.
 
 ### Via Hubitat Package Manager (recommended)
 
-Search HPM for **WaterGuru Dosing Advisor** and install. HPM installs the
-parent app, the child app, and the tile driver for you, and offers the optional Pump Power
-Profiler (see below).
+The package is not in HPM's repository list, so **Search by Keywords** and **Browse by Tags** do
+not find it. Install it from its manifest URL:
+
+1. In Hubitat Package Manager, choose **Install**, then **From a URL**.
+2. Enter the package's manifest URL:
+   `https://raw.githubusercontent.com/chsbusch-dot/hubitat-waterguru-dosing-advisor/main/packageManifest.json`
+3. HPM installs the parent app, the child app and the tile driver for you. Under **Select the apps
+   to install** it offers the optional Pump Power Profiler (see below). To add or remove it later,
+   use **Modify**.
+
+HPM's **Update** then finds new releases from the same manifest.
 
 ### Manually
 
@@ -151,9 +159,9 @@ other settings shape the dose.
 | **Limit AUTO mode to one completed dose per calendar day** | on | A second AUTO dose on the same day is blocked, whatever the reading says. A failed attempt counts too. | yes |
 | **Maximum WaterGuru sample age (hours)** | 18 | No dose on a reading older than this. | yes |
 | **Minimum dose to run (mL)** | 50 | A smaller calculated dose is not run. | no |
-| **Maximum single dose (mL)** | 3000 | A larger calculated dose is capped to this in APPROVAL or AUTO mode; outside SLAM only when the reading looks plausible, otherwise it is blocked (see the dosing model). At the default 185 mL/min a 14 minute run is about 2590 mL, so the maximum runtime, not this 3000 mL cap, bounds a single dose unless the pump is faster. | yes |
-| **Maximum total dose per day (mL)** | 3500 | Blocks a dose that would take the day's total (including reserved failed attempts) over this; in APPROVAL or AUTO mode the dose is capped to what is left instead (outside SLAM only when the reading looks plausible). | yes |
-| **Absolute maximum pump runtime (minutes)** | 14 | A dose whose runtime would exceed this is blocked; in APPROVAL or AUTO mode it is capped to this runtime instead (outside SLAM only when the reading looks plausible). | yes |
+| **Maximum single dose (mL)** | 3000 | A larger calculated dose is capped to this in APPROVAL or AUTO mode. Outside SLAM that needs a plausible reading, otherwise the dose is blocked (see the dosing model). At the default 185 mL/min a 14 minute run is about 2590 mL, so the maximum runtime, not this 3000 mL cap, bounds a single dose unless the pump is faster. | yes |
+| **Maximum total dose per day (mL)** | 3500 | Blocks a dose that would take the day's total (including reserved failed attempts) over this. In APPROVAL or AUTO mode the dose is capped to what is left instead (outside SLAM only when the reading looks plausible). | yes |
+| **Absolute maximum pump runtime (minutes)** | 14 | A dose whose runtime would exceed this is blocked. In APPROVAL or AUTO mode it is capped to this runtime instead (outside SLAM only when the reading looks plausible). | yes |
 | **Block dosing below pH / above pH** | 6.8 / 8.2 | No dose outside this pH range. | yes |
 | **Arm an independent emergency cutoff for every pump run** | on | A second, independent OFF timer for every pump start, retried until the switch freshly reports off. The last backstop. | yes |
 | **Independent emergency cutoff after this many minutes** | 15 | When the cutoff fires. It must be later than the maximum runtime, or no dose can start and the page shows the problem in red. | yes |
