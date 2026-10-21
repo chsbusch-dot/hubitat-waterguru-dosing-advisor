@@ -1,0 +1,52 @@
+{
+  "rspType": "ManagePodRsp",
+  "code": "OK",
+  "queryDataHistoryRsp": {
+    "rspType": "QueryPodDataRsp",
+    "code": "OK",
+    "data": [
+      {
+        "recType": "PodDataRec",
+        "podId": 999001,
+        "waterBodyId": "wb-test-0001",
+        "time": "2026-08-18T14:34:18.000Z",
+        "waterTempFahr": 72.8,
+        "waterTempFahrDec": "72.8",
+        "battVolts": 5.64,
+        "freeCl": 7.6,
+        "freeClDec": "7.6",
+        "ph": 7.8,
+        "phDec": "7.8",
+        "freeClRgb": [5677, 9047, 8135],
+        "phRgb": [8155, 5722, 4375],
+        "padReadCnt": 6,
+        "cassettePadsRevision": 0,
+        "cloudTime": "2026-08-18T14:34:18.853Z"
+      },
+      {
+        "recType": "PodDataRec",
+        "podId": 999001,
+        "waterBodyId": "wb-test-0001",
+        "time": "2026-08-18T08:10:00.000Z",
+        "flowTempDeltaFahr": 10.4,
+        "flowTempDeltaFahrDec": "10.4",
+        "battLoadedVolts": 5.74,
+        "battLoadedVoltsDec": "5.74",
+        "intResist": 3.06,
+        "intResistDec": "3.06",
+        "mcuOrient": [0, 0, 0],
+        "remoteOrient": [1, -14, 68],
+        "rssi": -73,
+        "cloudTime": "2026-08-18T08:10:01.913Z"
+      },
+      {
+        "recType": "PodDataRec",
+        "podId": 999001,
+        "waterBodyId": "wb-test-0001",
+        "time": "2026-08-17T22:00:00.000Z",
+        "onlyAStringField": "no-numbers-here",
+        "cloudTime": "2026-08-17T22:00:01.000Z"
+      }
+    ]
+  }
+}

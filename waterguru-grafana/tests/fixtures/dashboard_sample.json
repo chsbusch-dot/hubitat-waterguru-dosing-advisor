@@ -1,0 +1,35 @@
+{
+  "rspType": "DashboardViewRsp",
+  "code": "OK",
+  "waterBodies": [
+    {
+      "waterBodyId": "wb-test-0001",
+      "name": "Test Pool",
+      "status": "YELLOW",
+      "waterTemp": 73,
+      "latestMeasureTime": "2026-08-18T14:34:18.000Z",
+      "freeClTargetEffective": 3.0,
+      "phTargetEffective": 7.6,
+      "flowGpmTargetEffective": 15,
+      "saltTargetEffective": 3200,
+      "pods": [
+        {
+          "podId": 999001,
+          "pod": {"podId": 999001, "product": "SENSE_2", "fwUpdateVersion": "1.2.3"},
+          "refillables": [
+            {"type": "BATT", "pctLeft": 82.0},
+            {"type": "LAB", "pctLeft": 45.0, "timeLeftText": "6 weeks left"}
+          ],
+          "rssiInfo": {"rssi": -70, "bars": 3}
+        }
+      ],
+      "measurements": [
+        {"type": "FREE_CL", "title": "Free Chlorine", "floatValue": 7.6, "measureTime": "2026-08-18T14:34:18.000Z", "status": "YELLOW", "target": 3.0, "firstAlertCondition": "HIGH"},
+        {"type": "PH", "title": "pH", "floatValue": 7.8, "measureTime": "2026-08-18T14:34:18.000Z", "status": "GREEN", "target": 7.6},
+        {"type": "TA", "title": "Total Alkalinity", "intValue": 77, "measureTime": "2026-08-18T14:34:18.758Z", "status": "GREEN"},
+        {"type": "SKIMMER_FLOW", "title": "Flow", "intValue": 15, "measureTime": "2026-08-18T14:34:17.000Z", "status": "GREEN"},
+        {"type": "PENDING", "title": "Not measured yet", "measureTime": "2026-08-18T14:34:18.000Z", "status": "GREEN"}
+      ]
+    }
+  ]
+}

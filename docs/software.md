@@ -194,7 +194,7 @@ to see what the pool needs. The device exposes:
 
 **Numeric telemetry (for external history)**
 
-An external historian (InfluxDB/Grafana such as [waterguru-grafana](https://github.com/chsbusch-dot/waterguru-grafana), or Maker API)
+An external historian (InfluxDB/Grafana such as the [waterguru-grafana](../waterguru-grafana/) collector in this repository, or Maker API)
 can use these attributes to store
 actual pump-started doses and compute durable usage totals. The app writes them alongside
 the human-readable attributes on every calculation. The dose values are recorded only after a start has been

@@ -34,6 +34,7 @@ It adds two things the integration cannot do:
 | [Hardware guide](docs/hardware.md) | One complete pump build: bill of materials, chemical storage and PPE, assembly, calibration, Hubitat setup, commissioning and troubleshooting. |
 | [Assembly photos](docs/assembly-photos.md) | The finished build, with what the photos show and what they cannot. |
 | [Diagrams](docs/diagrams.md) | The layout, reservoir, power and dosing-sequence diagrams, with their editable source. |
+| [Grafana collector](waterguru-grafana/README.md) | Optional history: a Python collector that writes WaterGuru readings and the advisor's doses and tank level to InfluxDB, plus the Grafana dashboard. |
 
 ## Components
 
@@ -43,6 +44,7 @@ It adds two things the integration cannot do:
 | WaterGuru Dosing Advisor (parent + one pool child per pool) | [`apps/`](apps/) | Yes |
 | WaterGuru Dosing Tile (dashboard driver) | [`drivers/`](drivers/) | Yes |
 | Pump Power Profiler (optional power and wear recorder) | [`apps/PumpPowerProfiler.groovy`](apps/PumpPowerProfiler.groovy) | Yes, as an optional app (since 2.5.1), or install it by hand. |
+| InfluxDB collector and Grafana dashboard (optional, runs in Docker, not on the hub) | [`waterguru-grafana/`](waterguru-grafana/) | No. Runs on any machine that reaches InfluxDB and, for the dose panels, the hub. |
 
 ## Quick start
 
@@ -148,5 +150,6 @@ This is a summary. The [license](LICENSE) is the binding text.
 
 ## License
 
-[Apache License 2.0](LICENSE), matching the WaterGuru Integration app's license. See the
+[Apache License 2.0](LICENSE), matching the WaterGuru Integration app's license. The collector in
+[`waterguru-grafana/`](waterguru-grafana/) keeps its own [MIT license](waterguru-grafana/LICENSE). See the
 [Disclaimer](#disclaimer) above.
