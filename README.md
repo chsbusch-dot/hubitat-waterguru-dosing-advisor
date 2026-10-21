@@ -145,8 +145,8 @@ This is a summary. The [license](LICENSE) is the binding text.
   and its wiring, and for following local law and the labels of the products you use.
 - **Building the hardware is at your own risk.** The hardware guide, photos and diagrams describe
   one person's build. They are not an engineered or certified design. Liquid chlorine can burn skin
-  and eyes, and mixed with acid or other pool chemicals it can release toxic chlorine gas. If you
-  build or run this system, you accept those risks and are responsible for choosing suitable parts,
+  and eyes. Mixing it with acid or other pool chemicals can release toxic chlorine gas. If you build
+  or run this system, you accept those risks and are responsible for choosing suitable parts,
   protective equipment and safe storage.
 - **Estimates, not professional advice.** The app's estimates and advice are not
   professional pool-service advice. Test your water independently before you add chemicals.
