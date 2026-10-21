@@ -15,7 +15,8 @@ protective function. Those need the component specifications and your own commis
 
 Read the [Safety](../README.md#safety) section before you start. The software side (install,
 settings, dosing model, faults) is in the [software guide](software.md). This guide was written
-against WaterGuru Dosing Advisor 2.5.0.
+against WaterGuru Dosing Advisor 2.5.0, with the SLAM default and the over-limit cap updated for
+2.5.1.
 
 ## Contents
 
@@ -417,8 +418,9 @@ changed. The advisor relies on those reports. A cached power value is not enough
 ### 3. Configure the pool advisor
 
 Start in **ADVISORY** mode. Enter the measured pump rate, the pool volume, the product strength and
-the actual reservoir contents. For routine dosing, check that **SLAM mode is off**: it defaults to
-on, and a routine setup should not inherit a recovery-treatment target.
+the actual reservoir contents. For routine dosing, check that **SLAM mode is off**: it is off by default
+since 2.5.1, but an install that saved it on keeps it, and a routine setup should not inherit a
+recovery-treatment target.
 
 | Setting | This build, or the action to take |
 |---|---|
@@ -442,8 +444,9 @@ on, and a routine setup should not inherit a recovery-treatment target.
 
 The runtime limits must rise in this order: **planned maximum < app emergency cutoff < plug local
 cutoff**. At 200 mL/min a 3,000 mL dose needs 15 minutes. With the shipped 14 minute maximum that
-dose is blocked: outside SLAM mode the app refuses an over-limit dose whole rather than shortening
-it, and 14 minutes covers only 2,800 mL. That is why this build runs 17, 18 and 19 minutes, which fits
+dose is shortened to the 2,800 mL that 14 minutes covers: since 2.5.1 the app caps an over-limit
+dose to the limits (a 0.0 reading or a drop over 4 ppm still blocks it whole), where up to 2.5.0 it
+refused such a dose whole outside SLAM mode. That is why this build runs 17, 18 and 19 minutes, which fits
 the 3,000 mL maximum with 2 minutes to spare. If your pump is slower, work out the effect rather than
 loosening every limit.
 

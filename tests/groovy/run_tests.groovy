@@ -4505,22 +4505,8 @@ check("2.4.8 (d): the tank binds: 1800 mL left gives an 1800 mL dose and says th
            "the notice names the tank: ${app.noticesMatching('start requested')}")
 }
 
-check("2.4.8 (e): outside SLAM the same 6329 mL deficit is still BLOCKED whole, while SLAM caps it") {
-    def app = newApp()
-    def d = slamApp(app)
-    app.slamMode = false
-    app.fcTargetOverride = 13.2G                                // the same 8.0 ppm gap, by a manual target
-    slamSample(app, d.wg)
-    expect(app.noticesMatching("Chlorine dose BLOCKED: ") == ["WaterGuru dosing: Chlorine dose BLOCKED: 6329 mL exceeds the 3000 mL single-dose limit; 28m 39s exceeds the 14.0 minute runtime limit; daily total would be 6329 mL, above the 3500 mL limit"],
-           "blocked with the existing reasons: ${app.noticesMatching('BLOCKED')}")
-    expect(d.pump.commands.isEmpty() && app.state.activeDose == null && !app.computeAdvice().text.contains("SLAM: the pump dose"),
-           "nothing runs and nothing says capped: ${d.pump.commands}")
-    // positive control, same deficit: SLAM on (the manual target would override it, so it goes)
-    def on = newApp()
-    def d2 = slamApp(on)
-    slamSample(on, d2.wg)
-    expect(d2.pump.commands == ["on"] && bd(on.state.activeDose?.mlRaw ?: 0) == 3000G, "SLAM caps it and runs: ${on.noticesMatching('BLOCKED')}")
-}
+// 2.4.8 (e) checked that outside SLAM the same deficit was still BLOCKED whole. Since 2.5.1 it is capped too: see
+// "2.5.1 (a)" below.
 
 check("2.4.8 (f): SLAM at pH 6.7 is still BLOCKED by pH, and only by pH (the capped dose is inside every limit)") {
     def app = newApp()
@@ -4601,8 +4587,10 @@ def nothingBooked = { app, d ->
 }
 
 def SLAM_ZERO = "FC read 0.0 ppm, which in SLAM looks like a sensor or cassette fault; check the reading before dosing"
-/** What c8716b6 sends for a 0.0 reading outside SLAM (TFP 0.115 x CYA 33 = 3.8 ppm needs 3002 mL); the guard leaves it alone. */
+/** What c8716b6 sends for a 0.0 reading outside SLAM (TFP 0.115 x CYA 33 = 3.8 ppm needs 3002 mL). Since 2.5.1 the reading
+ *  check keeps that over-limit dose uncapped, so it is still blocked whole with this notice. */
 def NON_SLAM_ZERO_NOTICE = "WaterGuru dosing: Chlorine dose BLOCKED: 3002 mL exceeds the 3000 mL single-dose limit"
+def NOT_CAPPED_ZERO = "  ⚠ Not capped to the pump limits: FC read 0.0 ppm, which looks like a sensor or cassette fault; check the reading before dosing."
 def SLAM_CAP_NOTE = "SLAM: the pump dose is capped at 3000 mL of the 6329 mL needed (single-dose limit); the rest follows with the next samples."
 
 check("2.4.8 guard (a): SLAM AUTO, FC reads 0.0: BLOCKED with the reading named, nothing pumps or is booked, the advice stays") {
@@ -4719,14 +4707,18 @@ check("2.4.8 guard (e): the Oct 10 sequence (previous 6.0, now 5.2) still runs 3
     nothingBooked(zero, dz)
 }
 
-check("2.4.8 guard (f): outside SLAM a 0.0 reading is handled exactly as on 2.4.8 before the guard; ADVISORY shows no guard line; SLAM AUTO blocks it") {
+check("2.4.8 guard (f), 2.5.1: outside SLAM a 0.0 reading over the limits is still BLOCKED whole with the c8716b6 notice and not capped; ADVISORY shows no guard line; SLAM AUTO blocks it") {
     def app = newApp()
     def d = slamApp(app)
     app.slamMode = false
     slamSample(app, d.wg, OCT10_SAMPLE + [freeChlorine: 0.0G])
     expect(app.noticesMatching("Chlorine dose BLOCKED: ") == [NON_SLAM_ZERO_NOTICE],
            "the notice c8716b6 sends: ${app.noticesMatching('BLOCKED')}")
-    expect(!app.computeAdvice().text.contains("Not pumped") && app.computeAdvice().doseSuspect == null, "and no guard line")
+    nothingBooked(app, d)
+    Map r0 = app.computeAdvice()
+    expect(!r0.text.contains("Not pumped") && r0.doseSuspect == null, "and no SLAM guard line")
+    expect(r0.doseCapped != true && app.n0(r0.doseMl) == "3002" && (r0.text.split("\n") as List).contains(NOT_CAPPED_ZERO) &&
+           !r0.text.contains("pump dose is capped"), "2.5.1: the whole 3002 mL, and the advice says why it was not capped: ${r0.text}")
     def adv = newApp()
     def da = slamApp(adv, "ADVISORY")
     slamSample(adv, da.wg, OCT10_SAMPLE + [freeChlorine: 0.0G])
@@ -4796,16 +4788,258 @@ check("2.4.8 guard (h): live notice settings (autoRun off, daily digest on): the
            "the capped dose: ${okDaily} / ${d2.pump.commands}")
 }
 
+// ----------------------------------------------------------------------- 2.5.1 (WOR-857): over-limit doses capped outside SLAM
+
+/** slamApp's pool with SLAM off and a manual 13.2 ppm target: the same 8.0 ppm gap and 6329 mL deficit, outside SLAM. */
+def tfpApp = { app, String mode = "AUTO" ->
+    def d = slamApp(app, mode)
+    app.slamMode = false
+    app.fcTargetOverride = 13.2G
+    return d
+}
+
+def CAP_NOTE = "The pump dose is capped at 3000 mL of the 6329 mL needed (single-dose limit); the rest follows with the next samples."
+
+check("2.5.1 (a): outside SLAM the 6329 mL deficit starts capped at 3000 mL for 13m 35s, the note without the SLAM prefix, and books 3000 mL") {
+    def app = newApp()
+    def d = tfpApp(app)
+    def pump = d.pump
+    wgSample(app, d.wg, OCT10_SAMPLE)
+    Map advice = app.computeAdvice()                            // the sample is in; processNewSample is 20 s away
+    expect(advice.doseCapped == true && app.n0(advice.doseDeficitMl) == "6329" && bd(advice.doseMl) == 3000G && advice.runSeconds == 815 &&
+           advice.doseSuspect == null,
+           "the result carries the cap and the whole deficit: ${advice.subMap(['doseMl', 'runSeconds', 'doseCapped', 'doseDeficitMl', 'doseSuspect'])}")
+    List lines = advice.text.split("\n") as List
+    int add = lines.findIndexOf { it.contains("mL of liquid chlorine") }
+    expect(add >= 0 && lines[add].endsWith("/ 6329 mL of liquid chlorine (12.5%) to raise FC 8.0 ppm to target.") &&
+           lines[add + 1] == "  ${CAP_NOTE}" && lines[add + 2] == "  ⏱ Pump plan: 13m 35s at 221 mL/min for 3000 mL.",
+           "the FREE CHLORINE block: ${add >= 0 ? lines.subList(add, Math.min(lines.size(), add + 3)) : lines}")
+    expect(!advice.text.contains("SLAM: ") && !advice.text.contains("SLAM MODE ACTIVE") && !advice.text.contains("Not capped") &&
+           !advice.text.contains("Not pumped"), "no SLAM wording and no reading warning: ${advice.text}")
+    String daily = app.dailyChlorineSummary(advice)
+    expect(daily.contains("add 3000 mL of 12.5% liquid chlorine; run ") && daily.contains(" for 13m 35s at 221.0 mL/min (dose). ${CAP_NOTE} FC 5.2 ppm; target 13.2 ppm; pH 6.90."),
+           "the daily summary line: ${daily}")
+
+    app.advance(20_000L)                                        // processNewSample
+    expect(app.noticesMatching("BLOCKED").isEmpty(), "not blocked (2.5.0: 6329 mL exceeds the 3000 mL single-dose limit): ${app.noticesMatching('BLOCKED')}")
+    def active = app.state.activeDose
+    expect(pump.commands == ["on"] && active != null && bd(active.mlRaw) == 3000G && active.seconds == 815,
+           "a 3000 mL, 815 s run starts: ${pump.commands} / ${active}")
+    expect(app.noticesMatching("Chlorine pump start requested: 3000 mL for 13m 35s at 221.0 mL/min (new WaterGuru sample). ${CAP_NOTE} Waiting").size() == 1,
+           "the start notice says it is capped: ${app.noticesMatching('start requested')}")
+    runToPlannedStop(app, pump)
+    expect(app.state.activeDose == null && app.state.startFault == null && bd(app.state.lastDose.mlRaw) == 3000G && app.state.lastDose.seconds == 815,
+           "the run completes as planned: ${app.state.lastDose} / ${app.state.startFault}")
+    expect(bd(app.state.doseMlToday) == 3000G && bd(app.state.tankRemainingMl) == 53544G,
+           "3000 mL is booked today and drawn from the tank: ${app.state.doseMlToday} / ${app.state.tankRemainingMl}")
+}
+
+check("2.5.1 (b): outside SLAM the daily limit binds: 1000 mL already dosed today leaves a 2500 mL dose") {
+    def app = newApp()
+    def d = tfpApp(app)
+    app.addDoseMlToday(1000G)
+    slamSample(app, d.wg)
+    def active = app.state.activeDose
+    expect(d.pump.commands == ["on"] && active != null && bd(active.mlRaw) == 2500G && active.seconds == 679,
+           "2500 mL, 679 s: ${d.pump.commands} / ${active} / ${app.noticesMatching('BLOCKED')}")
+    expect(app.noticesMatching("start requested: 2500 mL for 11m 19s").count {
+               it.contains(" The pump dose is capped at 2500 mL of the 6329 mL needed (daily limit, 1000 mL already dosed today); ${SLAM_REST}")
+           } == 1, "the notice names the daily limit: ${app.noticesMatching('start requested')}")
+    expect(bd(app.state.doseMlToday) == 3500G, "the day reaches its limit, not past it: ${app.state.doseMlToday}")
+}
+
+check("2.5.1 (c): outside SLAM the runtime limit binds: 10 minutes at 221 mL/min gives 2210 mL in exactly 600 s") {
+    def app = newApp()
+    def d = tfpApp(app)
+    app.maxPumpRunMinutes = 10
+    slamSample(app, d.wg)
+    def active = app.state.activeDose
+    expect(d.pump.commands == ["on"] && active != null && bd(active.mlRaw) == 2210G && active.seconds == 600,
+           "2210 mL, 600 s: ${d.pump.commands} / ${active} / ${app.noticesMatching('BLOCKED')}")
+    expect(app.noticesMatching("start requested: 2210 mL for 10m 0s").count {
+               it.contains(" The pump dose is capped at 2210 mL of the 6329 mL needed (runtime limit); ${SLAM_REST}")
+           } == 1, "the notice names the runtime limit: ${app.noticesMatching('start requested')}")
+}
+
+check("2.5.1 (d): outside SLAM the tank is not a cap: 1800 mL left BLOCKS the 3000 mL capped dose with the tank reason") {
+    def app = newApp()
+    def d = tfpApp(app)
+    app.state.tankRemainingMl = "1800"
+    slamSample(app, d.wg)
+    List blocked = app.noticesMatching("Chlorine dose BLOCKED: ")
+    expect(blocked.size() == 1 && blocked[0].contains("chlorine tank has only 1800 mL remaining; dose needs 3000 mL") &&
+           !blocked[0].contains("single-dose limit"), "the tank reason, for the capped dose: ${blocked}")
+    expect(d.pump.commands.isEmpty() && app.state.activeDose == null && app.state.doseMlToday == "0", "nothing runs or is reserved: ${d.pump.commands}")
+    Map r = app.computeAdvice()
+    expect(bd(r.doseMl) == 3000G && r.doseCapped == true && r.text.contains(CAP_NOTE) && !r.text.contains("chlorine left in the tank"),
+           "capped by the single-dose limit, not by the tank: ${r.doseMl} / ${r.text}")
+}
+
+check("2.5.1 (e): APPROVAL outside SLAM queues the capped dose and approving it runs 3000 mL; a 0.0 over the limits is queued whole as on 2.5.0 and blocked on approval") {
+    def app = newApp()
+    def d = tfpApp(app, "APPROVAL")
+    slamSample(app, d.wg)
+    expect(app.state.pendingDose?.ml == "3000" && app.state.pendingDose?.seconds == 815 && d.pump.commands.isEmpty(),
+           "queued, capped, not run: ${app.state.pendingDose}")
+    expect(app.noticesMatching("WaterGuru queued 3000 mL chlorine (13m 35s). ${CAP_NOTE} Open the dosing app to approve it.").size() == 1,
+           "the queue notice: ${app.noticesMatching('queued')}")
+    app.advance(60_000L)
+    app.appButtonHandler("btnRunPending")
+    expect(d.pump.commands == ["on"] && bd(app.state.activeDose?.mlRaw ?: 0) == 3000G && app.state.activeDose.seconds == 815,
+           "approved, it runs capped: ${app.state.activeDose} / ${app.noticesMatching('BLOCKED')}")
+    // A 0.0 reading: TFP 3.8 ppm needs 3002 mL, over the 3000 mL limit, and the reading check keeps it whole. Outside
+    // SLAM there is no doseSuspect, so APPROVAL queues it as 2.5.0 did and the safety checks refuse it on approval.
+    def zero = newApp()
+    def dz = slamApp(zero, "APPROVAL")
+    zero.slamMode = false
+    slamSample(zero, dz.wg, OCT10_SAMPLE + [freeChlorine: 0.0G])
+    List queued = zero.noticesMatching("WaterGuru queued ")
+    expect(zero.state.pendingDose?.ml == "3002" && queued.size() == 1 && queued[0].contains("WaterGuru queued 3002 mL chlorine") &&
+           !queued[0].contains("capped"), "queued whole, as 2.5.0 did: ${zero.state.pendingDose} / ${queued}")
+    zero.advance(60_000L)
+    zero.appButtonHandler("btnRunPending")
+    expect(zero.noticesMatching("Chlorine dose BLOCKED: ") == [NON_SLAM_ZERO_NOTICE], "approving it is blocked whole: ${zero.noticesMatching('BLOCKED')}")
+    expect(dz.pump.commands.isEmpty() && zero.state.activeDose == null && zero.state.doseMlToday == "0", "nothing runs: ${dz.pump.commands}")
+}
+
+check("2.5.1 (f): ADVISORY outside SLAM keeps the whole amount, with no cap and no reading check; AUTO on the same pool caps it") {
+    def app = newApp()
+    def d = tfpApp(app, "ADVISORY")
+    wgSample(app, d.wg, OCT10_SAMPLE)
+    Map r = app.computeAdvice()
+    expect(app.n0(r.doseMl) == "6329" && r.runSeconds == 1719 && r.doseCapped != true && !r.text.contains("pump dose is capped") &&
+           !r.text.contains("Not capped"), "the whole amount: ${r.doseMl} / ${r.runSeconds}")
+    app.dosingMode = "AUTO"
+    r = app.computeAdvice()
+    expect(bd(r.doseMl) == 3000G && r.doseCapped == true && r.text.contains(CAP_NOTE), "AUTO caps: ${r.doseMl}")
+    // a 0.0 reading in ADVISORY: the whole amount and no "Not capped" line (nothing would be capped)
+    def zero = newApp()
+    def dz = tfpApp(zero, "ADVISORY")
+    slamSample(zero, dz.wg, OCT10_SAMPLE + [freeChlorine: 0.0G])
+    Map rz = zero.computeAdvice()
+    expect(zero.n0(rz.doseMl) == "10442" && rz.doseCapped != true && !rz.text.contains("Not capped") && !rz.text.contains("Not pumped") &&
+           dz.pump.commands.isEmpty() && zero.noticesMatching("BLOCKED").isEmpty(), "ADVISORY 0.0: ${rz.doseMl} / ${rz.text}")
+}
+
+check("2.5.1 (g): outside SLAM a 4.1 ppm drop over the limits is BLOCKED whole with the over-limit reasons, not capped; 4.0 runs capped; a 72 h old sample is not compared") {
+    def app = newApp()
+    def d = tfpApp(app)
+    slamPrevious(app, d.wg, "2026-10-10T14:30:00.000Z", 12.6G)       // Oct 10, 07:30 PDT
+    slamSample(app, d.wg, OCT10_SAMPLE + [freeChlorine: 8.5G])     // 8.5 to 13.2: about 3718 mL
+    expect(app.state.fcHistory*.fc == ["12.6", "8.5"], "both samples are in the history: ${app.state.fcHistory}")
+    List blocked = app.noticesMatching("Chlorine dose BLOCKED: ")
+    expect(blocked.size() == 1 && blocked[0].contains(" mL exceeds the 3000 mL single-dose limit") && !blocked[0].contains("FC fell"),
+           "blocked whole with the over-limit reasons, as 2.5.0 did: ${blocked}")
+    nothingBooked(app, d)
+    Map r = app.computeAdvice()
+    String why = "FC fell 4.1 ppm since the previous sample (12.6 to 8.5 ppm), which looks like a bad reading; check it before dosing"
+    expect(r.doseCapped != true && bd(r.doseMl) > 3000G && (r.text.split("\n") as List).contains("  ⚠ Not capped to the pump limits: ${why}.".toString()) &&
+           !r.text.contains("Not pumped") && !r.text.contains("pump dose is capped") && r.doseSuspect == null,
+           "the advice keeps the whole amount and says why it was not capped: ${r.text}")
+
+    def ok = newApp()
+    def d2 = tfpApp(ok)
+    slamPrevious(ok, d2.wg, "2026-10-10T14:30:00.000Z", 12.6G)
+    slamSample(ok, d2.wg, OCT10_SAMPLE + [freeChlorine: 8.6G])
+    expect(ok.noticesMatching("BLOCKED").isEmpty() && d2.pump.commands == ["on"] && bd(ok.state.activeDose?.mlRaw ?: 0) == 3000G,
+           "a 4.0 ppm drop is not more than 4.0: it runs, capped: ${ok.noticesMatching('BLOCKED')} / ${ok.state.activeDose}")
+    expect(!ok.computeAdvice().text.contains("Not capped"), "and nothing says it was not capped")
+
+    def old = newApp()
+    def d3 = tfpApp(old)
+    slamPrevious(old, d3.wg, "2026-10-08T02:30:36.000Z", 11.2G)     // 72 h before the Oct 10 sample
+    slamSample(old, d3.wg)                                          // FC 5.2: 6.0 ppm down
+    expect(old.noticesMatching("BLOCKED").isEmpty() && d3.pump.commands == ["on"] && bd(old.state.activeDose?.mlRaw ?: 0) == 3000G,
+           "too old to compare: it runs capped: ${old.noticesMatching('BLOCKED')} / ${old.state.activeDose}")
+    // control: the same drop from a sample 24 h old is compared, and the dose is blocked whole
+    def near = newApp()
+    def dn = tfpApp(near)
+    slamPrevious(near, dn.wg, "2026-10-10T02:30:36.000Z", 11.2G)
+    slamSample(near, dn.wg)
+    expect(near.noticesMatching("Chlorine dose BLOCKED: ") == ["WaterGuru dosing: Chlorine dose BLOCKED: 6329 mL exceeds the 3000 mL single-dose limit; 28m 39s exceeds the 14.0 minute runtime limit; daily total would be 6329 mL, above the 3500 mL limit"],
+           "24 h is inside the window: blocked whole: ${near.noticesMatching('BLOCKED')}")
+    expect(near.computeAdvice().text.contains("  ⚠ Not capped to the pump limits: FC fell 6.0 ppm since the previous sample (11.2 to 5.2 ppm), which looks like a bad reading; check it before dosing."),
+           "and the advice says why")
+    nothingBooked(near, dn)
+}
+
+check("2.5.1 (h): a dose inside the limits outside SLAM is unchanged and not checked: after a 4.1 ppm drop, and at 0.0, it runs whole") {
+    def app = newApp()
+    def d = tfpApp(app)
+    app.fcTargetOverride = 10.0G                                    // 8.5 to 10.0: about 1187 mL
+    slamPrevious(app, d.wg, "2026-10-10T14:30:00.000Z", 12.6G)
+    wgSample(app, d.wg, OCT10_SAMPLE + [freeChlorine: 8.5G])
+    Map r = app.computeAdvice()
+    expect(bd(r.doseMl) < 3000G && r.doseCapped != true && !r.text.contains("Not capped") && !r.text.contains("pump dose is capped") && r.doseSuspect == null,
+           "inside the limits: whole, no note: ${r.doseMl} / ${r.text}")
+    app.advance(20_000L)
+    def active = app.state.activeDose
+    expect(app.noticesMatching("BLOCKED").isEmpty() && d.pump.commands == ["on"] && active != null && bd(active.mlRaw) == bd(r.doseMl) &&
+           active.seconds == r.runSeconds, "it runs as 2.5.0 did: ${app.noticesMatching('BLOCKED')} / ${active} / ${r.doseMl}")
+    expect(app.noticesMatching("start requested").every { !it.contains("capped") }, "the start notice claims no cap: ${app.noticesMatching('start requested')}")
+
+    def zero = newApp()
+    def dz = tfpApp(zero)
+    zero.fcTargetOverride = 3.0G                                    // 0.0 to 3.0: about 2373 mL
+    wgSample(zero, dz.wg, OCT10_SAMPLE + [freeChlorine: 0.0G])
+    Map rz = zero.computeAdvice()
+    expect(bd(rz.doseMl) < 3000G && rz.doseCapped != true && !rz.text.contains("Not capped") && rz.doseSuspect == null,
+           "a 0.0 reading inside the limits is not checked: ${rz.doseMl} / ${rz.text}")
+    zero.advance(20_000L)
+    expect(zero.noticesMatching("BLOCKED").isEmpty() && dz.pump.commands == ["on"] && bd(zero.state.activeDose?.mlRaw ?: 0) == bd(rz.doseMl),
+           "and runs whole, as 2.5.0 did: ${zero.noticesMatching('BLOCKED')} / ${zero.state.activeDose}")
+}
+
+check("2.5.1 (i): a slamMode never saved is SLAM off (TFP 0.115 x CYA); a saved false is the same; a saved true is SLAM") {
+    def app = newApp()
+    def d = slamApp(app)
+    app.settings.remove("slamMode")
+    expect(!app.settings.containsKey("slamMode") && app.slamMode == null, "never saved: ${app.slamMode}")
+    slamSample(app, d.wg)
+    Map r = app.computeAdvice()
+    expect(r.text.contains("FC 5.2 ppm  →  target 3.8 ppm  (TFP 0.115 x CYA 33; min 2.5)") && r.text.contains("✔ FC 5.2 ≥ target 3.8 ppm: hold, no chlorine needed.") &&
+           !r.text.contains("SLAM"), "TFP, hold: ${r.text}")
+    expect(d.pump.commands.isEmpty() && app.noticesMatching("BLOCKED").isEmpty() && app.noticesMatching("start requested").isEmpty(),
+           "nothing to dose: ${d.pump.commands}")
+
+    def off = newApp()
+    def doff = slamApp(off)
+    off.slamMode = false
+    slamSample(off, doff.wg)
+    expect(off.computeAdvice().text.contains("target 3.8 ppm  (TFP 0.115 x CYA 33; min 2.5)") && doff.pump.commands.isEmpty(), "a saved false: TFP")
+
+    def on = newApp()
+    def don = slamApp(on)
+    expect(on.slamMode == true, "a saved true: ${on.slamMode}")
+    slamSample(on, don.wg)
+    Map ron = on.computeAdvice()
+    expect(ron.text.contains("SLAM MODE ACTIVE") && ron.text.contains("target 13.2 ppm  (SLAM 0.40 x CYA 33)") && don.pump.commands == ["on"] &&
+           bd(on.state.activeDose?.mlRaw ?: 0) == 3000G, "SLAM, capped: ${ron.text}")
+}
+
+check("2.5.1 (j): the slamMode input defaults to off, and only a saved true reads as SLAM") {
+    String src = appFile.text
+    int at = src.indexOf('input "slamMode"')
+    int next = at < 0 ? -1 : src.indexOf("\n            ", src.indexOf("defaultValue", at))
+    String decl = (at < 0 || next < 0) ? "" : src.substring(at, next)
+    expect(decl.contains("defaultValue: false") && !decl.contains("defaultValue: true") && src.indexOf('input "slamMode"', at + 1) < 0,
+           "the one slamMode input: ${decl}")
+    expect(!src.contains("slamMode != false") && !src.contains("slamMode ?: true") && src.count("slamMode == true") == 3,
+           "every read is slamMode == true: ${src.readLines().findAll { it.contains('slamMode') && !it.trim().startsWith('*') && !it.trim().startsWith('//') }}")
+}
+
 // =========================================================================== WOR-716 (Pump Power Profiler 1.2.0)
 //
 // Profiler 1.2.0 stops polling the pump plug: it listens to the plug's reports and refreshes only after the
 // ON and the OFF. These checks show that this app's start and run power evidence never needed the profiler's
-// refreshes. The plug is 4680 as configured on 2026-10-14: it reports a change of 5 W or more on its own,
-// reports power once a minute (parameter 10) and answers a refresh. No other app is subscribed or polling.
+// refreshes. The plug is 4680 as configured on 2026-10-14 (it reports a change of 5 W or more on its own and
+// answers a refresh) plus a power report once a minute, which the real 4680 does not send: it reports power on its
+// own only on a 5 W change or every 700 minutes (parameters 9 and 10), and its once-a-minute report (parameter 16)
+// is voltage. The minute report only adds evidence. No other app is subscribed or polling.
 
 /**
  * A 13.5 minute dose (Oct 12 and 13: 814.6 s). The start gets only the plug's own change reports (no refresh
- * is answered); during the run the plug sends its once-a-minute report and, when `answerOwnRefresh`, answers
+ * is answered); during the run the plug sends the modelled once-a-minute power report and, when `answerOwnRefresh`, answers
  * this app's own refreshes. Returns the app, the plug and how many of this app's refreshes were answered.
  */
 def ownEvidenceDose = { boolean answerOwnRefresh ->

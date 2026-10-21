@@ -27,6 +27,19 @@
  * All doses are ESTIMATES. Always confirm with your own test kit before adding.
  *
  * Version history
+ *   2.5.1 - A dose over the pump limits is capped outside SLAM too, not blocked whole (WOR-857). On
+ *           2026-10-20 the app asked 3164 mL against the 3000 mL single-dose limit and nothing was pumped, so the
+ *           deficit grew. In APPROVAL and AUTO the dose is now the smallest of the deficit, the single-dose
+ *           limit, what the daily limit leaves today and what the runtime limit pumps (the 2.4.8 SLAM cap, now
+ *           doseCap); the next sample recomputes the rest. Outside SLAM the tank is not a cap limit: a dose over
+ *           what the tank holds is still blocked. Before capping outside SLAM the reading is checked with the
+ *           SLAM plausibility guard (now fcReadingProblem, FC_MAX_DROP_PPM 4.0, FC_PREVIOUS_SAMPLE_MAX_HOURS
+ *           48): a 0.0 reading, or a drop over 4 ppm against a previous sample at most 48 h older, leaves the
+ *           dose uncapped, so it is blocked whole with the same over-limit notice as before, and the advice says
+ *           "Not capped to the pump limits" and why. A dose inside the limits is unchanged and not checked.
+ *           ADVISORY still shows the whole amount. SLAM is now off by default (slamMode defaultValue false), and
+ *           only a saved true turns it on: an install that never saved the toggle now gets the TFP model. No em
+ *           or en dash left in a log line either. The subscribe set is unchanged (SUBSCRIPTION_SET 2).
  *   2.5.0 - The cleanup from the 2026-10-08 debt review (WOR-741). How the pump is started, watched and stopped
  *           is unchanged. (1) A save no longer clears the job queue: initialize() lost its blanket unschedule()
  *           and the ~60 lines that recreated what it had cleared. Jobs persist across a save and a hub restart,
@@ -304,7 +317,7 @@
 
 import groovy.transform.Field
 
-def appVersion() { "2.5.0" }
+def appVersion() { "2.5.1" }
 
 definition(
     name:        "WaterGuru Dosing Advisor Pool",
@@ -435,14 +448,16 @@ preferences {
 // status line share: fcLossIntervals needs two settled samples at least 0.25 day (6 h) apart, and skips an
 // interval where FC rose beyond this app's doses. Change the text with the gap.
 @Field static final String FC_LOSS_RULE_TEXT = "two samples at least 6 hours apart, with no rise in FC beyond this app's doses"
-// SLAM plausibility guard (2.4.8): a SLAM dose is capped, not blocked, so a bad reading would otherwise pump the
-// capped amount every night. In SLAM with the pump in APPROVAL or AUTO, a reading of 0.0 (under one reading step,
-// FC_READING_STEP_PPM) or one that fell MORE than this many ppm below the previous settled sample is held back
-// as implausible: doseSafetyBlocks refuses it and APPROVAL queues nothing. The drop rule only compares against a
-// previous sample at most SLAM_PREVIOUS_SAMPLE_MAX_HOURS older than the current one; past that, or with no
-// previous sample, only the 0.0 rule applies.
-@Field static final BigDecimal SLAM_MAX_FC_DROP_PPM = 4.0G
-@Field static final int        SLAM_PREVIOUS_SAMPLE_MAX_HOURS = 48
+// FC plausibility guard (2.4.8 SLAM, 2.5.1 outside SLAM): a dose over the pump limits is capped, not blocked, so
+// a bad reading would otherwise pump the capped amount every night. A reading of 0.0 (under one reading step,
+// FC_READING_STEP_PPM) or one that fell MORE than this many ppm below the previous settled sample is implausible.
+// In SLAM with the pump in APPROVAL or AUTO it is held back: doseSafetyBlocks refuses it and APPROVAL queues
+// nothing. Outside SLAM the guard runs only on a dose the limits would cap, and an implausible reading leaves it
+// uncapped, so doseSafetyBlocks refuses it whole with the over-limit reasons, as before 2.5.1. The drop rule only
+// compares against a previous sample at most FC_PREVIOUS_SAMPLE_MAX_HOURS older than the current one; past that,
+// or with no previous sample, only the 0.0 rule applies.
+@Field static final BigDecimal FC_MAX_DROP_PPM = 4.0G
+@Field static final int        FC_PREVIOUS_SAMPLE_MAX_HOURS = 48
 
 // ---------------------------------------------------------------------------
 // UI
@@ -482,8 +497,8 @@ def mainPage() {
         section("<b>Free chlorine target (this app's core value-add)</b>") {
             input "slamMode", "bool",
                 title: "SLAM mode: target FC as a multiple of CYA (recommended while recovering)",
-                defaultValue: true, submitOnChange: true
-            if (slamMode != false) {
+                defaultValue: false, submitOnChange: true
+            if (slamMode == true) {
                 paragraph slamPageBanner()
                 input "slamFactor", "decimal",
                     title: "SLAM factor (FC target = factor x CYA). TFP SLAM level is 0.40.",
@@ -1410,8 +1425,9 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
     String banner = null
     BigDecimal doseMl = null
     Integer runSeconds = null
-    Map cap = null             // SLAM: the dose the limits allow, when they are smaller than the deficit
+    Map cap = null             // APPROVAL/AUTO: the dose the limits allow, when they are smaller than the deficit
     String suspect = null      // SLAM: why this reading looks implausible; the dose is advice only, never pumped
+    String uncapped = null     // outside SLAM: why an over-limit dose was not capped; it is then blocked whole
 
     // Determine the FC target.
     BigDecimal target
@@ -1423,7 +1439,7 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
         basis = "manual target ${n1(target)} ppm"
     } else if (cya != null && cya > 0) {
         if (manualTarget != null) warnings << "Ignored invalid manual FC target ${manualTarget}; target must be greater than 0 and at most 50 ppm."
-        if (slamMode != false) {
+        if (slamMode == true) {
             BigDecimal factor = numSet(slamFactor) ? (slamFactor as BigDecimal) : 0.40G
             target = (cya * factor)
             basis = "SLAM ${n2(factor)} x CYA ${n0(cya)}"
@@ -1463,10 +1479,16 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
         BigDecimal pumpRate = firstNum(pumpRateMlPerMin, DEFAULT_PUMP_RATE_ML_MIN)
         if (pumpRate != null && pumpRate > 0) {
             runSeconds = Math.max(1, Math.ceil((doseMl / pumpRate * 60G).doubleValue()) as Integer)
-            // SLAM holds FC far above the everyday target on purpose, so a deficit over the pump limits is the
-            // owner's intent, not a suspect reading: the pump doses what the limits allow and the rest follows
-            // with the next samples. Outside SLAM a dose over a limit is still blocked whole.
-            if (slam && pumpDosingMode()) cap = slamDoseCap(doseMl, pumpRate)
+            // A deficit over the pump limits is dosed in steps: the pump doses what the limits allow and the rest
+            // follows with the next samples (SLAM since 2.4.8, outside SLAM since 2.5.1; Oct 20 asked 3164 mL
+            // against the 3000 mL limit and nothing was pumped).
+            if (pumpDosingMode()) cap = doseCap(doseMl, pumpRate, slam)
+        }
+        // Outside SLAM the reading is checked before a dose is capped: an implausible one keeps the whole amount,
+        // which doseSafetyBlocks refuses with the over-limit reasons. A dose inside the limits is not checked.
+        if (cap != null && !slam) {
+            uncapped = fcReadingProblem(fc, false)
+            if (uncapped != null) cap = null
         }
         lines << "  ➕ ${verb}: ${flozUnits(floz)} / ${n0(doseMl)} mL of liquid chlorine (${n1(chlorinePct)}%) to raise FC ${n1(ppmGap)} ppm to target."
         if (cap != null) {
@@ -1475,16 +1497,17 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
             runSeconds = cap.seconds as Integer
         }
         if (runSeconds != null) lines << "  ⏱ Pump plan: ${formatDuration(runSeconds)} at ${n0(pumpRate)} mL/min${cap != null ? ' for ' + n0(doseMl) + ' mL' : ''}."
+        if (uncapped != null) lines << "  ⚠ Not capped to the pump limits: ${uncapped}."
         // The cap removed the accidental guard the single-dose and runtime limits gave against a bad reading
         // (a stuck 0.0 would pump the capped amount every night), so SLAM checks the reading itself.
-        if (slam && pumpDosingMode()) suspect = slamReadingProblem(fc)
+        if (slam && pumpDosingMode()) suspect = fcReadingProblem(fc, true)
         if (suspect != null) lines << "  ⚠ Not pumped: ${suspect}."
         chip = "${optional ? 'Top up' : 'Add'} ${shortVol(floz)} chlorine"
         action = true
         if (ppmGap > 8G) warnings << "Large chlorine addition (+${n1(ppmGap)} ppm): add in stages and retest between doses."
         if (floz > 640G) warnings << "Very large chlorine dose (${n0(floz)} fl oz): double-check pool volume and the FC reading."
     } else {
-        if (slamMode != false && !numSet(fcTargetOverride)) {
+        if (slamMode == true && !numSet(fcTargetOverride)) {
             lines << "  ✔ FC ${n1(fc)} ≥ SLAM target ${n1(target)} ppm: maintain SLAM level, retest, do not add."
         } else {
             lines << "  ✔ FC ${n1(fc)} ≥ target ${n1(target)} ppm: hold, no chlorine needed."
@@ -1498,21 +1521,22 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
 }
 
 /**
- * SLAM: why this FC reading looks implausible, or null. Only computeFc calls it, and only in SLAM with the pump
- * in APPROVAL or AUTO.
+ * Why this FC reading looks implausible, or null. Only computeFc calls it: in SLAM with the pump in APPROVAL or
+ * AUTO, and outside SLAM before a dose over the pump limits is capped. `slam` only words the reason.
  *
- * Implausible is a reading of 0.0 (under one reading step), or one that fell more than SLAM_MAX_FC_DROP_PPM
+ * Implausible is a reading of 0.0 (under one reading step), or one that fell more than FC_MAX_DROP_PPM
  * below the previous sample. The previous sample is the newest settled fcHistory entry whose sample time is
  * strictly earlier than the current LastMeasurement: processNewSample records the current sample before the
  * dose runs, so the newest entry is usually this very sample. A previous sample more than
- * SLAM_PREVIOUS_SAMPLE_MAX_HOURS older than the current one, no previous sample or no current sample time
+ * FC_PREVIOUS_SAMPLE_MAX_HOURS older than the current one, no previous sample or no current sample time
  * leave only the 0.0 rule. Unsettled entries (stored before 2.4.3) mostly hold the sample before theirs and
  * are not used.
  */
-private String slamReadingProblem(BigDecimal fc) {
+private String fcReadingProblem(BigDecimal fc, boolean slam) {
     if (fc == null) return null
+    String where = slam ? "in SLAM " : ""
     if (fc < FC_READING_STEP_PPM) {
-        return "FC read ${n1(fc)} ppm, which in SLAM looks like a sensor or cassette fault; check the reading before dosing"
+        return "FC read ${n1(fc)} ppm, which ${where}looks like a sensor or cassette fault; check the reading before dosing"
     }
     Long current = toEpochMs(attrRaw("LastMeasurement"))
     if (current == null) return null
@@ -1525,10 +1549,10 @@ private String slamReadingProblem(BigDecimal fc) {
         if (t < current && (previousT == null || t > previousT)) { previousT = t; before = toBD(e.fc) }
     }
     if (previousT == null) return null
-    if (current - previousT > SLAM_PREVIOUS_SAMPLE_MAX_HOURS * 3600000L) return null
+    if (current - previousT > FC_PREVIOUS_SAMPLE_MAX_HOURS * 3600000L) return null
     BigDecimal drop = before - fc
-    if (drop > SLAM_MAX_FC_DROP_PPM) {
-        return "FC fell ${n1(drop)} ppm since the previous sample (${n1(before)} to ${n1(fc)} ppm), which in SLAM looks like a bad reading; check it before dosing"
+    if (drop > FC_MAX_DROP_PPM) {
+        return "FC fell ${n1(drop)} ppm since the previous sample (${n1(before)} to ${n1(fc)} ppm), which ${where}looks like a bad reading; check it before dosing"
     }
     return null
 }
@@ -1540,16 +1564,17 @@ private boolean pumpDosingMode() {
 }
 
 /**
- * SLAM: the largest pump dose the limits allow now, or null when no limit is below the deficit.
+ * The largest pump dose the limits allow now, or null when no limit is below the deficit.
  *
  * The dose is the smallest of the deficit, the single-dose limit, what the daily limit leaves today, what the
- * runtime limit pumps at this rate and what the tank holds. The runtime is recomputed from that volume and
- * never exceeds the runtime limit (rounded down to a whole second, the volume with it). Null as well when the
+ * runtime limit pumps at this rate and, in SLAM only, what the tank holds (outside SLAM a dose over the tank
+ * is blocked by doseSafetyBlocks as before 2.5.1). The runtime is recomputed from that volume and never
+ * exceeds the runtime limit (rounded down to a whole second, the volume with it). Null as well when the
  * capped dose would fall under the minimum dose: the full deficit then goes to doseSafetyBlocks and is
- * blocked with its own reasons, as outside SLAM. Every other guard in doseSafetyBlocks still judges the
- * capped dose; this only sizes it.
+ * blocked with its own reasons. Every other guard in doseSafetyBlocks still judges the capped dose; this
+ * only sizes it.
  */
-private Map slamDoseCap(BigDecimal deficit, BigDecimal rate) {
+private Map doseCap(BigDecimal deficit, BigDecimal rate, boolean slam) {
     if (deficit == null || deficit <= 0G || rate == null || rate <= 0G) return null
     List limits = []
     BigDecimal maxSingle = firstNum(maxSingleDoseMl, 3000G)
@@ -1561,7 +1586,7 @@ private Map slamDoseCap(BigDecimal deficit, BigDecimal rate) {
     }
     BigDecimal maxMinutes = maxRunMinutes()
     if (maxMinutes != null) limits << [maxMinutes * rate, "runtime limit"]
-    BigDecimal tank = tankRemainingMl()
+    BigDecimal tank = slam ? tankRemainingMl() : null
     if (tank != null) limits << [tank, "chlorine left in the tank"]
 
     BigDecimal ml = deficit
@@ -1579,7 +1604,7 @@ private Map slamDoseCap(BigDecimal deficit, BigDecimal rate) {
 
     String rest = why.contains("chlorine left in the tank") ? "the rest follows with the next samples once the tank is refilled" :
                                                               "the rest follows with the next samples"
-    String note = "SLAM: the pump dose is capped at ${n0(ml)} mL of the ${n0(deficit)} mL needed (${why.join(' and ')}); ${rest}."
+    String note = "${slam ? 'SLAM: the' : 'The'} pump dose is capped at ${n0(ml)} mL of the ${n0(deficit)} mL needed (${why.join(' and ')}); ${rest}."
     return [ml: ml, seconds: seconds, deficit: deficit, why: why, note: note]
 }
 
@@ -1701,7 +1726,7 @@ private void handleDoseDecision(Map result, String trigger) {
     String mode = (dosingMode ?: "ADVISORY").toString()
     if (mode == "ADVISORY") {
         state.remove("pendingDose")
-        log.info "WaterGuru Dosing Advisor: advisory mode — calculated ${n0(result.doseMl)} mL but pump is locked out"
+        log.info "WaterGuru Dosing Advisor: advisory mode, calculated ${n0(result.doseMl)} mL but pump is locked out"
         return
     }
     if (mode == "APPROVAL") {
@@ -1938,7 +1963,7 @@ private void requestPumpRefresh(Map active) {
         if (supported) pumpSwitch.refresh()
     } catch (e) {
         // A refresh that throws must not abort start verification or strand stop protection.
-        log.error "WaterGuru Dosing Advisor: pump refresh failed — ${e.message}"
+        log.error "WaterGuru Dosing Advisor: pump refresh failed: ${e.message}"
     }
 }
 
@@ -1968,7 +1993,7 @@ private void confirmDoseStart(Map active, String evidence, Long powerAt, Long on
         // Forced dose events, so a dose of the same volume as the last one still reaches the historian.
         publishTileTelemetry([fcVal: toBD(current.fcVal), fcTarget: toBD(current.fcTarget)], null, true)
     } catch (e) {
-        log.error "WaterGuru Dosing Advisor: start confirmed but dashboard telemetry failed — ${e.message}"
+        log.error "WaterGuru Dosing Advisor: start confirmed but dashboard telemetry failed: ${e.message}"
     }
     String msg = "Chlorine pump started: ${current.ml} mL for ${formatDuration((current.seconds ?: 0) as Integer)} " +
                  "at ${n1(firstNum(pumpRateMlPerMin, DEFAULT_PUMP_RATE_ML_MIN))} mL/min (${current.trigger}). " +
@@ -2404,7 +2429,7 @@ private void requestStopRefresh(Map active) {
         try { supported = pumpSwitch.hasCommand("refresh") } catch (Throwable ignored) { supported = false }
         if (supported) pumpSwitch.refresh()
     } catch (e) {
-        log.error "WaterGuru Dosing Advisor: pump refresh failed — ${e.message}"
+        log.error "WaterGuru Dosing Advisor: pump refresh failed: ${e.message}"
     }
 }
 
@@ -2472,7 +2497,7 @@ def verifyPumpOff() {
             return
         }
     } catch (e) {
-        log.error "WaterGuru Dosing Advisor: pump verification hit an unexpected error — ${e.message}; retrying"
+        log.error "WaterGuru Dosing Advisor: pump verification hit an unexpected error: ${e.message}; retrying"
     }
 
     log.warn "WaterGuru Dosing Advisor: chlorine pump OFF not freshly confirmed; retrying in ${STOP_RETRY_SECONDS}s"
@@ -3058,7 +3083,7 @@ private boolean autoDoseWindowOpen() {
         return startMs <= endMs ? (current >= startMs && current <= endMs) :
                                   (current >= startMs || current <= endMs)
     } catch (e) {
-        log.error "WaterGuru Dosing Advisor: invalid AUTO dosing window — ${e.message}"
+        log.error "WaterGuru Dosing Advisor: invalid AUTO dosing window: ${e.message}"
         return false
     }
 }
@@ -3678,12 +3703,12 @@ private Date nowDate() { new Date(now()) }
 
 private void sendNotice(String msg) {
     if (!notifyDevices) {
-        log.warn "WaterGuru Dosing Advisor: no notification device selected — ${msg}"
+        log.warn "WaterGuru Dosing Advisor: no notification device selected: ${msg}"
         return
     }
     notifyDevices.each { dev ->
         try { dev.deviceNotification(msg) }
-        catch (e) { log.error "WaterGuru Dosing Advisor: failed to notify ${dev?.displayName} — ${e.message}" }
+        catch (e) { log.error "WaterGuru Dosing Advisor: failed to notify ${dev?.displayName}: ${e.message}" }
     }
 }
 
@@ -3713,7 +3738,7 @@ private void ensureTileDevice() {
             [name: "WaterGuru Dosing Tile", label: tileLabel(), isComponent: false])
         log.info "WaterGuru Dosing Advisor: created tile device '${tileLabel()}'"
     } catch (e) {
-        log.error "WaterGuru Dosing Advisor: could not create the tile device — ${e.message}. " +
+        log.error "WaterGuru Dosing Advisor: could not create the tile device: ${e.message}. " +
                   "Install the 'WaterGuru Dosing Tile' driver under Drivers Code, then save this pool again."
     }
 }
@@ -3721,7 +3746,7 @@ private void ensureTileDevice() {
 private void removeTileDevice() {
     if (getTileDevice()) {
         try { deleteChildDevice(tileDni()); log.info "WaterGuru Dosing Advisor: removed tile device" }
-        catch (e) { log.warn "WaterGuru Dosing Advisor: could not remove the tile device — ${e.message}" }
+        catch (e) { log.warn "WaterGuru Dosing Advisor: could not remove the tile device: ${e.message}" }
     }
 }
 
@@ -3751,7 +3776,7 @@ private void updateTileDevice(Map r) {
         dev.sendEvent(name: "lastCalcEpochMs", value: now())
         publishTileTelemetry(r, dev)
     } catch (e) {
-        log.warn "WaterGuru Dosing Advisor: could not update the tile device — ${e.message}"
+        log.warn "WaterGuru Dosing Advisor: could not update the tile device: ${e.message}"
     }
 }
 

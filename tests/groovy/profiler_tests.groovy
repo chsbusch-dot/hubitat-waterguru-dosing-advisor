@@ -24,6 +24,8 @@
 
 import java.math.RoundingMode
 
+import groovy.json.JsonSlurper
+
 import org.codehaus.groovy.control.CompilerConfiguration
 
 int checks = 0
@@ -56,7 +58,7 @@ class FakeMeter {
     List<Long> refreshTimes = []
     /** When the plug answers each of the profiler's refreshes (runPlug delivers the answers). */
     List<Long> pendingAnswers = []
-    /** runPlug's next once-a-minute report. */
+    /** runPlug's next periodic power report. */
     Long nextPeriodic = null
     boolean refreshThrows = false
     Closure clock
@@ -135,10 +137,12 @@ def deliver = { app, meter, String attr, def v ->
 def switchTo = { app, meter, String v -> deliver(app, meter, "switch", v) }
 
 /**
- * Plug 4680 (Zooz ZEN05, mesh node 72) as configured on 2026-10-14: a power report on a change of 5 W or
- * more, one every `periodicSecs` (parameter 10 = 1 minute; null for none), and an answer to every refresh
- * about 0.5 s later with its switch, power, amperage and voltage. `watts` is the pump's draw as the meter
- * sees it at a time. `otherEverySecs` adds another app's refreshes from `otherFrom` until `otherTo`: the
+ * Plug 4680 (Zooz ZEN05, mesh node 72): a power report on a change of 5 W or more (parameter 9), one every
+ * `periodicSecs` (null for none), and an answer to every refresh
+ * about 0.5 s later with its switch, power, amperage and voltage. The tests mostly use periodicSecs 60, which
+ * sends more power reports than the real plug: its periodic power report (parameter 10) is every 700 minutes,
+ * and its once-a-minute report (parameter 16) is voltage (configuration read 2026-10-21). `watts` is the
+ * pump's draw as the meter sees it at a time. `otherEverySecs` adds another app's refreshes from `otherFrom` until `otherTo`: the
  * dosing app refreshes every 10 s during a dose. Returns how many refreshes that other app sent.
  */
 def runPlug = { app, meter, long untilMs, Map p ->
@@ -190,8 +194,8 @@ def steadyWatts = { BigDecimal level -> { long on, long off -> { long t -> (t < 
 
 /**
  * A run of `secs`: ON, pumping, OFF, 30 s more. By default the dosing app refreshes every 10 s from 2 s
- * after the ON to the OFF, as it does during a dose (dosingApp: false leaves it out), and the plug reports
- * once a minute (periodicSecs: null for a plug that reports only changes). `watts` is a factory
+ * after the ON to the OFF, as it does during a dose (dosingApp: false leaves it out), and the plug sends a
+ * power report every 60 s (periodicSecs: null for a plug that reports only changes; see runPlug). `watts` is a factory
  * { on, off -> { t -> W } }. Returns how many refreshes the dosing app sent.
  */
 def doseRun = { app, meter, BigDecimal secs, Map opts = [:] ->
@@ -352,6 +356,24 @@ check("profiler 1.1.1 fix 1: a summary file the listing leaves out, or that read
 check("profiler 1.1.1 fix 2: the profiler declares singleThreaded, so the OFF handler and a poll cannot overlap") {
     def (app, meter) = newProfiler()
     expect(app.definitionArgs?.singleThreaded == true, "definition(singleThreaded: true), as the dosing app has: ${app.definitionArgs}")
+}
+
+check("2.5.1: the package manifest ships the profiler as an optional app at its importUrl and version") {
+    def (app, meter) = newProfiler()
+    String url = "https://raw.githubusercontent.com/chsbusch-dot/hubitat-waterguru-dosing-advisor/main/apps/PumpPowerProfiler.groovy"
+    Map manifest = new JsonSlurper().parse(new File("packageManifest.json")) as Map
+    List entries = (manifest.apps ?: []) + (manifest.drivers ?: [])
+    List prof = entries.findAll { it.name == "Pump Power Profiler" }
+    expect(prof.size() == 1, "one profiler entry: ${entries*.name}")
+    Map e = prof[0] as Map
+    expect(e.required == false && e.oauth == false && e.primary == false, "optional, no OAuth, not the primary app: ${e}")
+    expect(e.namespace == "chsbusch-dot" && e.location == url && app.definitionArgs?.importUrl == url,
+           "the manifest and definition() point at the same raw main URL: ${e.location} / ${app.definitionArgs?.importUrl}")
+    String version = profilerFile.text.find(/PROFILER_VERSION = "([^"]+)"/) { all, v -> v }
+    expect(e.version == version && version == "1.2.0", "the manifest version is the profiler's: ${e.version} / ${version}")
+    expect(e.id ==~ /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/ && entries.count { it.id == e.id } == 1,
+           "its own UUID: ${entries*.id}")
+    expect(entries.findAll { it.name != "Pump Power Profiler" }.every { it.required == true }, "the other three stay required: ${entries}")
 }
 
 check("profiler 1.1.1 fix 3: a power report landing during a sample is never paired with the value from before it") {

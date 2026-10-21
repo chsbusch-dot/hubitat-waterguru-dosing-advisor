@@ -26,7 +26,7 @@
  *  v1.2.0  2026-10-14  Event-first sampling (WOR-716). A capture subscribes to the device's power reports,
  *                      unchanged ones included, and records a row for each; it sends one refresh 5 s after
  *                      the ON and one 3 s after the OFF, and polls only when no power report has arrived for
- *                      fallbackSecs (default 90 s, longer than the plug's 1 minute report). The fixed poll
+ *                      fallbackSecs (default 90 s). The fixed poll
  *                      (sampleSecs, about 6 Z-Wave Gets every 5 s, ~740 transmits per 13.5 min dose on the
  *                      Oct 14 capture) is gone; sampleSecs and tailSamples are no longer read. The tail is
  *                      tailSecs after the OFF, a capture ends after 60 minutes, and a fallback poll's answer
@@ -55,9 +55,10 @@ import groovy.transform.Field
 // Rows kept for a summary file that could not be read or written, until a later save succeeds.
 @Field static final int SUMMARY_BACKLOG_MAX = 60
 
-// 1.2.0 sampling. The plug reports power on its own (4680: on a 5 W change and once a minute), and the
-// dosing app refreshes it every 10 s during a dose; the profiler listens and refreshes only around the
-// switch changes, or when the device has gone quiet for fallbackSecs.
+// 1.2.0 sampling. The plug reports power on its own only on a change (4680: parameter 9, 5 W) or every 700
+// minutes (parameter 10); its once-a-minute report is voltage (parameter 16). Steady-run power therefore comes
+// from refresh answers: the dosing app refreshes the plug every 10 s during a dose, and the profiler listens and
+// refreshes only around the switch changes, or when the device has gone quiet for fallbackSecs.
 @Field static final int DEFAULT_FALLBACK_SECS = 90
 @Field static final int MIN_FALLBACK_SECS = 15
 @Field static final int MAX_FALLBACK_SECS = 900
@@ -89,7 +90,8 @@ definition(
     singleThreaded: true,
     iconUrl: "",
     iconX2Url: "",
-    singleInstance: false
+    singleInstance: false,
+    importUrl: "https://raw.githubusercontent.com/chsbusch-dot/hubitat-waterguru-dosing-advisor/main/apps/PumpPowerProfiler.groovy"
 )
 
 preferences {

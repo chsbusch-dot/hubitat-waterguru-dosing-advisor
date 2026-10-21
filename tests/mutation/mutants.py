@@ -16,11 +16,12 @@ each (WOR-731), Y1-Y2 one 2.4.5 change each (WOR-739), Z1-Z2 one 2.4.6 item each
 (WOR-755; TG, since T1-T4 were taken), for WOR-716 PI1 (the dosing app's own refresh), E1-E16 one
 Pump Power Profiler 1.2.0 sampling behaviour each and WM1-WM17 one wear-monitor rule each, and for WOR-741
 U1-U4 one 2.5.0 save rule each, N1-N6 one notice-slot or stopOpen() rule each and D1-D5 one dash put back each
-(D5 in the parent app); every one of those
-must be killed by the tests that guard it.
+(D5 in the parent app), and for WOR-857 C1-C13 one 2.5.1 behaviour each (caps outside SLAM, SLAM off by
+default, the profiler in the manifest; S1-S3, TG1-TG7 re-anchored to doseCap/fcReadingProblem, S2 retired);
+every one of those must be killed by the tests that guard it.
 
 A mutant edits the child app unless it is declared with mutp(), which edits the profiler, or with
-target=PARENT, which edits the parent app. Each mutant
+target=PARENT or target=MANIFEST, which edit the parent app or packageManifest.json. Each mutant
 runs the suite that covers its file (MUTATION.txt "suites:"); the base runs both.
 
   python3 tests/mutation/mutants.py              # build every mutant
@@ -39,7 +40,9 @@ OUT = ROOT / "tests" / "mutation" / "out"
 APP = "apps/WaterGuru-Dosing-Advisor-Child.groovy"
 PROFILER = "apps/PumpPowerProfiler.groovy"
 PARENT = "apps/WaterGuru-Dosing-Advisor.groovy"
-SUITES = {APP: ["run_tests.groovy"], PROFILER: ["profiler_tests.groovy"], PARENT: ["run_tests.groovy"]}
+MANIFEST = "packageManifest.json"
+SUITES = {APP: ["run_tests.groovy"], PROFILER: ["profiler_tests.groovy"], PARENT: ["run_tests.groovy"],
+          MANIFEST: ["profiler_tests.groovy"]}
 
 # name -> (expectation, description, [(old, new, count), ...], target file or None for the base)
 V = {}
@@ -368,15 +371,14 @@ mut("T4", "killed", "the runway claims no sample history unless an interval was 
 
 
 # ---- 2.4.8: SLAM doses capped to the limits instead of blocked (must be killed) ----
+# S1-S3 re-anchored in 2.5.1 (doseCap caps outside SLAM too). S2 ("the cap also applies outside SLAM") is retired:
+# that is 2.5.1's behaviour, and C1 asserts its reverse.
 mut("S1", "killed", "SLAM is never capped: a deficit over a limit is blocked whole again (the Oct 10 incident)",
-    ("            if (slam && pumpDosingMode()) cap = slamDoseCap(doseMl, pumpRate)\n",
-     "            if (false && slam && pumpDosingMode()) cap = slamDoseCap(doseMl, pumpRate)\n"))
-mut("S2", "killed", "the cap also applies outside SLAM",
-    ("            if (slam && pumpDosingMode()) cap = slamDoseCap(doseMl, pumpRate)\n",
-     "            if (pumpDosingMode()) cap = slamDoseCap(doseMl, pumpRate)\n"))
+    ("            if (pumpDosingMode()) cap = doseCap(doseMl, pumpRate, slam)\n",
+     "            if (!slam && pumpDosingMode()) cap = doseCap(doseMl, pumpRate, slam)\n"))
 mut("S3", "killed", "the cap also shrinks the ADVISORY advice",
-    ("            if (slam && pumpDosingMode()) cap = slamDoseCap(doseMl, pumpRate)\n",
-     "            if (slam) cap = slamDoseCap(doseMl, pumpRate)\n"))
+    ("            if (pumpDosingMode()) cap = doseCap(doseMl, pumpRate, slam)\n",
+     "            if (true) cap = doseCap(doseMl, pumpRate, slam)\n"))
 mut("S4", "killed", "the single-dose limit is left out of the cap",
     ("    if (maxSingle != null) limits << [maxSingle, \"single-dose limit\"]\n", ""))
 mut("S5", "killed", "the daily limit ignores what was dosed today",
@@ -406,22 +408,24 @@ mut("S16", "killed", "a tank-bound cap does not say the rest waits for a refill"
 
 
 # ---- 2.4.8: SLAM plausibility guard, a 0.0 reading or a drop of more than 4 ppm is not pumped (must be killed) ----
-mut("TG1", "killed", "the guard also applies outside SLAM",
-    ("        if (slam && pumpDosingMode()) suspect = slamReadingProblem(fc)\n",
-     "        if (pumpDosingMode()) suspect = slamReadingProblem(fc)\n"))
+# TG1, TG2, TG4, TG5 and TG7 re-anchored in 2.5.1: the check is fcReadingProblem(fc, slam), shared with the
+# outside-SLAM cap.
+mut("TG1", "killed", "the SLAM guard also applies outside SLAM (doseSuspect: an APPROVAL dose is not queued)",
+    ("        if (slam && pumpDosingMode()) suspect = fcReadingProblem(fc, true)\n",
+     "        if (pumpDosingMode()) suspect = fcReadingProblem(fc, true)\n"))
 mut("TG2", "killed", "the guard also applies in ADVISORY",
-    ("        if (slam && pumpDosingMode()) suspect = slamReadingProblem(fc)\n",
-     "        if (slam) suspect = slamReadingProblem(fc)\n"))
+    ("        if (slam && pumpDosingMode()) suspect = fcReadingProblem(fc, true)\n",
+     "        if (slam) suspect = fcReadingProblem(fc, true)\n"))
 mut("TG3", "killed", "a 0.0 reading is not implausible",
     ("    if (fc < FC_READING_STEP_PPM) {\n", "    if (false) {\n"))
 mut("TG4", "killed", "a drop of exactly 4.0 ppm is already implausible",
-    ("    if (drop > SLAM_MAX_FC_DROP_PPM) {\n", "    if (drop >= SLAM_MAX_FC_DROP_PPM) {\n"))
+    ("    if (drop > FC_MAX_DROP_PPM) {\n", "    if (drop >= FC_MAX_DROP_PPM) {\n"))
 mut("TG5", "killed", "the drop rule is gone",
-    ("    if (drop > SLAM_MAX_FC_DROP_PPM) {\n", "    if (false) {\n"))
+    ("    if (drop > FC_MAX_DROP_PPM) {\n", "    if (false) {\n"))
 mut("TG6", "killed", "the sample is compared with itself (processNewSample recorded it first)",
     ("        if (t < current && (previousT == null || t > previousT))", "        if (t <= current && (previousT == null || t > previousT))"))
 mut("TG7", "killed", "the drop rule also compares with a sample more than 48 h old",
-    ("    if (current - previousT > SLAM_PREVIOUS_SAMPLE_MAX_HOURS * 3600000L) return null\n", ""))
+    ("    if (current - previousT > FC_PREVIOUS_SAMPLE_MAX_HOURS * 3600000L) return null\n", ""))
 mut("TG8", "killed", "the oldest earlier sample is taken instead of the newest",
     ("        if (t < current && (previousT == null || t > previousT))", "        if (t < current && (previousT == null || t < previousT))"))
 mut("TG9", "killed", "doseSafetyBlocks does not refuse an implausible reading (AUTO pumps it)",
@@ -563,6 +567,39 @@ mut("D5", "killed", "an em dash is back in the parent app's page text (parent 2.
     target=PARENT)
 
 
+# ---- 2.5.1 (WOR-857): over-limit doses capped outside SLAM, SLAM off by default, the profiler shipped (must be killed) ----
+mut("C1", "killed", "outside SLAM an over-limit dose is blocked whole again (2.5.0; Oct 20: 3164 mL asked, nothing pumped)",
+    ("            if (pumpDosingMode()) cap = doseCap(doseMl, pumpRate, slam)\n",
+     "            if (slam && pumpDosingMode()) cap = doseCap(doseMl, pumpRate, slam)\n"))
+mut("C2", "killed", "outside SLAM the cap also shrinks the ADVISORY advice",
+    ("            if (pumpDosingMode()) cap = doseCap(doseMl, pumpRate, slam)\n",
+     "            if (pumpDosingMode() || !slam) cap = doseCap(doseMl, pumpRate, slam)\n"))
+mut("C3", "killed", "outside SLAM the tank also caps the dose (instead of blocking it with the tank reason)",
+    ("    BigDecimal tank = slam ? tankRemainingMl() : null\n", "    BigDecimal tank = tankRemainingMl()\n"))
+mut("C4", "killed", "outside SLAM the reading is not checked before capping (a 0.0 or a 4.1 ppm drop pumps the capped amount)",
+    ("        if (cap != null && !slam) {\n", "        if (false) {\n"))
+mut("C5", "killed", "outside SLAM a 0.0 reading is not implausible (the 0.0 rule only in SLAM)",
+    ("    if (fc < FC_READING_STEP_PPM) {\n", "    if (slam && fc < FC_READING_STEP_PPM) {\n"))
+mut("C6", "killed", "outside SLAM a drop of more than 4 ppm is not implausible (the drop rule only in SLAM)",
+    ("    if (drop > FC_MAX_DROP_PPM) {\n", "    if (slam && drop > FC_MAX_DROP_PPM) {\n"))
+mut("C7", "killed", "the outside-SLAM cap note says SLAM",
+    ("\"${slam ? 'SLAM: the' : 'The'} pump dose is capped at", "\"SLAM: the pump dose is capped at"))
+mut("C8", "killed", "the advice does not say why an over-limit dose was not capped",
+    ("        if (uncapped != null) lines << \"  ⚠ Not capped to the pump limits: ${uncapped}.\"\n", ""))
+mut("C9", "killed", "a dose inside the limits is checked too (the reading check is not tied to a cap)",
+    ("        if (cap != null && !slam) {\n", "        if (!slam) {\n"))
+mut("C10", "killed", "a slamMode never saved reads as SLAM on (slamMode != false, as before 2.5.1)",
+    ("        if (slamMode == true) {\n            BigDecimal factor", "        if (slamMode != false) {\n            BigDecimal factor"))
+mut("C11", "killed", "the slamMode input defaults to on (page text the stub never runs)",
+    ("(recommended while recovering)\",\n                defaultValue: false,", "(recommended while recovering)\",\n                defaultValue: true,"))
+mut("C12", "killed", "the manifest makes the profiler required",
+    ("            \"version\": \"1.2.0\",\n            \"required\": false,", "            \"version\": \"1.2.0\",\n            \"required\": true,"),
+    target=MANIFEST)
+mut("C13", "killed", "the manifest lists another profiler version than the code's",
+    ("            \"version\": \"1.2.0\",\n            \"required\": false,", "            \"version\": \"1.1.1\",\n            \"required\": false,"),
+    target=MANIFEST)
+
+
 def build(name):
     expect, desc, edits, target = V[name]
     dst = OUT / name
@@ -571,6 +608,7 @@ def build(name):
     (dst / "tests").mkdir(parents=True)
     shutil.copytree(ROOT / "apps", dst / "apps")
     shutil.copytree(ROOT / "tests" / "groovy", dst / "tests" / "groovy")
+    shutil.copy2(ROOT / MANIFEST, dst / MANIFEST)   # the profiler suite reads it (2.5.1)
     if target is not None:
         app = dst / target
         src = app.read_text()
