@@ -9,7 +9,7 @@ pump's 24 V power supply.
 the run time through Z-Wave. The WaterGuru integration has its own network and cloud requirements, so
 taking the pump off Wi-Fi does not make the measurement side offline.
 
-This guide documents the author's finished build. The photos show how the tubing is routed and how
+This guide documents my finished build. The photos show how the tubing is routed and how
 the caps and pump are arranged. They cannot certify material compatibility, an enclosure rating or a
 protective function. Those need the component specifications and your own commissioning tests.
 
@@ -76,7 +76,7 @@ opening, so they do not protect against every hardware failure.
 **Affiliate disclosure: As an Amazon Associate I earn from qualifying purchases.** The Amazon links in
 this BOM are affiliate links. I may receive a commission from qualifying purchases made through them.
 
-Quantities describe this build or the listing's pack size, not a verified purchase count.
+Quantities refer to this build or the listing's pack size. They do not confirm how many items I bought.
 
 | Item | Product and role | Quantity and fit note | Affiliate link |
 |---|---|---|---|
@@ -496,7 +496,7 @@ Add the dosing tile device to a Hubitat dashboard with the **Attribute** templat
 section of the software guide lists every attribute. Notifications can report the calculated dose,
 the confirmed run, faults and the tank estimate.
 
-The author also keeps a history in InfluxDB and Grafana. It is optional for dosing. If you build one,
+I also keep a history in InfluxDB and Grafana, but dosing works without it. If you build one,
 read the advisor's published attribute names (for example `lastDoseMl`, `lastDoseEpochMs`,
 `lastDoseRuntimeSeconds`, `tankRemainingMl`, `tankCapacityMl`, `freeChlorine` and
 `targetFreeChlorine`). Do not add up repeated readings as separate doses, because a correction can
@@ -572,5 +572,5 @@ editable diagrams, their PNG exports and the script that draws them are in the
 10. [NIOSH: User Seal Check](https://stacks.cdc.gov/view/cdc/53108).
 11. [3M Cartridge Change FAQs](https://multimedia.3m.com/mws/media/259820O/3m-cartridge-change.pdf).
 
-The build values come from the author's installation: photos taken in October 2026 and the pump
+The build values come from my installation: photos taken in October 2026 and the pump
 weighed on 2026-10-19.

@@ -4,11 +4,11 @@ A [Hubitat](https://hubitat.com/) app that reads a WaterGuru pool device and tel
 you **how much of which chemical to add**, then sends that recommendation to your
 notification device(s) (Pushover, Telegram, etc.).
 
-It is a **companion** to the
+This app works alongside the
 [WaterGuru Integration](https://github.com/bdwilson/hubitat/tree/master/WaterGuru)
-app, not a replacement. That app creates the device this one reads, and already
-handles change-driven alerts, quiet hours, pause switches, recovery messages and
-per-metric thresholds. This app does **not** duplicate those features.
+app, which creates the device it reads. The integration handles change-driven
+alerts, quiet hours, pause switches, recovery messages and per-metric thresholds.
+This app does not replace or duplicate those features.
 It adds two things the integration cannot do:
 
 1. **Free-chlorine dosing that is CYA-aware / SLAM-aware.** WaterGuru targets a

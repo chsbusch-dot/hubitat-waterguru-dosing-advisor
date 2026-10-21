@@ -28,7 +28,7 @@ side.
 | **WaterGuru Dosing Advisor Pool** (child) | One per pool: the dosing model, the notifications and the pump control. | This package, [`apps/WaterGuru-Dosing-Advisor-Child.groovy`](../apps/WaterGuru-Dosing-Advisor-Child.groovy) |
 | **WaterGuru Dosing Tile** (driver) | Optional dashboard tile and numeric telemetry for each pool. | This package, [`drivers/WaterGuru-Dosing-Tile.groovy`](../drivers/WaterGuru-Dosing-Tile.groovy) |
 | **Pump Power Profiler** | Optional: records the pump plug's power during each run to a CSV file and watches for wear. Never switches the plug. | This package as an optional app (since 2.5.1), or by hand, [`apps/PumpPowerProfiler.groovy`](../apps/PumpPowerProfiler.groovy). |
-| **A driver for the pump plug** | Must send fresh switch and power reports. | From the plug's maker or the community. The author's build uses *Zooz ZEN Plugs Advanced* by jtp10181 for a Zooz ZEN05, see the [hardware guide](hardware.md#1-install-the-software). |
+| **A driver for the pump plug** | Must send fresh switch and power reports. | From the plug's maker or the community. My build uses *Zooz ZEN Plugs Advanced* by jtp10181 for a Zooz ZEN05, see the [hardware guide](hardware.md#1-install-the-software). |
 
 ## WaterGuru Integration (driver)
 
@@ -91,18 +91,18 @@ Then install the tile driver under **Drivers Code → New Driver** and **Save** 
 
 3. Driver: [`drivers/WaterGuru-Dosing-Tile.groovy`](../drivers/WaterGuru-Dosing-Tile.groovy)
 
-The driver backs the optional dashboard tile (below). If you don't install it,
-the apps still work. Only the tile device can't be created.
+The driver is needed only for the optional dashboard tile described below.
+Without it, the apps still work, but they cannot create the tile device.
 
 Then go to **Apps → Add User App → WaterGuru Dosing Advisor** (the parent) and
 use **Add a WaterGuru pool** to create an advisor for each pool.
 
 ## Configure
 
-Each pool is one child app. Fields that read from the WaterGuru device show the
-current live value in their label (e.g. *"Pool volume (gallons); blank uses
-WaterGuru's value (currently 25000)"*), so you can see what "blank" will use
-without pinning it.
+Each pool has its own child app. Fields that read from the WaterGuru device show
+the current value in their label (e.g. *"Pool volume (gallons); blank uses
+WaterGuru's value (currently 25000)"*), so you can see which value a blank field
+will use without setting an override.
 
 | Setting | What it does |
 | --- | --- |
@@ -132,8 +132,8 @@ the acid type / strength settings.
 
 ## Dosing modes and pump settings
 
-The *Automated liquid-chlorine dosing* section decides whether this app can run a liquid
-chlorine pump at all, and under which limits. Three modes:
+In the *Automated liquid-chlorine dosing* section you choose whether the app can run a liquid
+chlorine pump at all, and under which limits. There are three modes:
 
 - **ADVISORY** (default): calculate and notify only. The pump is never started by this app.
 - **APPROVAL**: a valid new sample queues one dose; you start it yourself with *Run the pending
@@ -194,9 +194,9 @@ to see what the pool needs. The device exposes:
 
 **Numeric telemetry (for external history)**
 
-These exist so an external historian (InfluxDB/Grafana, or Maker API) can store actual
-pump-started doses and compute durable usage totals. They are written alongside the human
-attributes on every calculation. The dose values are recorded only after a start has been
+An external historian (InfluxDB/Grafana, or Maker API) can use these attributes to store
+actual pump-started doses and compute durable usage totals. The app writes them alongside
+the human-readable attributes on every calculation. The dose values are recorded only after a start has been
 **confirmed** (a fresh ON, plus fresh power above the minimum for a power-capable switch), so
 they represent pump runs this app actually observed running, not recommendations, previews, or a
 bare `on()` return. The volume is booked at confirmation as the planned estimate and, once OFF is
@@ -252,8 +252,8 @@ Behaviours an external reader has to know:
 1. Add the *Dosing Tile: …* device to the dashboard's device list.
 2. Add a tile, pick that device, and choose the **Attribute** template.
 3. Point it at one of:
-   - `recommendation`: a clean one-line summary, or
-   - `tileHtml`: the richer formatted layout (the Attribute template renders the HTML), or
+   - `recommendation`: a one-line summary, or
+   - `tileHtml`: a formatted layout (the Attribute template renders the HTML), or
    - `status`: just GREEN/YELLOW/RED (handy for driving tile colour with your own dashboard CSS, e.g. keying off the attribute value).
 
 The tile is per-pool: each child advisor creates and updates its own device. Turn
@@ -351,8 +351,8 @@ carries the same figure after the pH, for example `FC loss 0.2 ppm/day
 (measured).` The loss rate only feeds this text, the runway and the tile
 footer, never a dose amount.
 
-pH is not part of the clock. It modulates how *effective* a given FC is (high pH
-lowers the active-chlorine fraction) rather than how fast FC decays. The estimate
+pH is not used in the runway calculation. It changes how *effective* a given FC is
+(high pH lowers the active-chlorine fraction), rather than how fast FC decays. The estimate
 is a planning aid, not a guarantee; confirm with your own test kit.
 
 ### pH / TA / CH / CYA
@@ -532,8 +532,8 @@ again, removes the one whose setting is off, and, as before, requests OFF for th
 
 `apps/PumpPowerProfiler.groovy` is a separate app that records the pump plug's power during each
 run. Since 2.5.1 it ships in the Hubitat Package Manager package as an optional app, and dosing
-does not need it. It is read-only toward the device: it
-sends `refresh()` and never switches it. Each run is saved to File Manager as
+does not need it. It never switches the device: it only asks it for readings with
+`refresh()`. Each run is saved to File Manager as
 `<prefix>-YYYYMMDD-HHMMSS.csv`, with one row per run in `<prefix>-summary.csv`.
 
 ### Install
@@ -558,9 +558,9 @@ device.
 - It sends one refresh 5 s after the ON and one 3 s after the OFF.
 - It polls only when no power report has arrived for *fallbackSecs* (default 90 s, 15 to 900). A
   ZEN05 set to report power once a minute (parameter 10 = 1) and on a 5 W change is never polled,
-  and during a dose the dosing app's own refresh every 10 s brings a report anyway. The author's
-  ZEN05 keeps parameter 10 at 700 minutes, so when nothing else refreshes the plug the profiler does
-  poll, as in the last row of the table below.
+  and during a dose the dosing app's own refresh every 10 s brings a report anyway. I keep
+  parameter 10 at 700 minutes on my ZEN05, so the profiler polls when nothing else refreshes the
+  plug, as in the last row of the table below.
 - A capture ends *tailSecs* after the OFF (default 15 s, at least 5) or after 60 minutes.
 
 Up to 1.1.1 the profiler refreshed the plug on every sample (*sampleSecs*, 5 s on the live
