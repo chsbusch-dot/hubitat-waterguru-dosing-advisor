@@ -14,8 +14,8 @@ Updated: October 21, 2026. Software reference: [WaterGuru Dosing Advisor 2.5.0, 
 - [Bill of materials](#bill-of-materials)
 - [Chemical storage and PPE](#chemical-storage-and-ppe)
 - [Assembly](#assembly)
-- [Complete assembly photo gallery](docs/assembly-photos.md)
-- [Diagram gallery and editable sources](docs/diagrams.md)
+- [Complete assembly photo gallery](pool-chlorine-github%20%282%29/docs/assembly-photos.md)
+- [Diagram gallery and editable sources](pool-chlorine-github%20%282%29/docs/diagrams.md)
 - [Calibration](#calibration)
 - [Hubitat setup](#hubitat-setup)
 - [Commissioning and operation](#commissioning-and-operation)
@@ -42,15 +42,15 @@ Norprene is the correct tube name. It is not neoprene. The former draft's instru
 
 ### Physical dosing diagram
 
-![Physical dosing layout: reservoir and suction strainer to Kamoer pump to a submerged check valve near the pool return](diagrams/01-system-layout.svg)
+![Physical dosing layout: reservoir and suction strainer to Kamoer pump to a submerged check valve near the pool return](pool-chlorine-github%20%282%29/diagrams/01-system-layout.svg)
 
-*Figure 1. The valve discharges into the pool beside the return fitting. Internal pickup details are schematic; the figure does not establish tank/pool elevations, component dimensions or installed safety provisions. [PNG version](diagrams/01-system-layout.png).*
+*Figure 1. The valve discharges into the pool beside the return fitting. Internal pickup details are schematic; the figure does not establish tank/pool elevations, component dimensions or installed safety provisions. [PNG version](pool-chlorine-github%20%282%29/diagrams/01-system-layout.png).*
 
 ### Control and power diagram
 
-![Power and control diagram: WaterGuru and Hubitat command the ZEN05, which powers the adapter and pump](diagrams/03-power-and-control.svg)
+![Power and control diagram: WaterGuru and Hubitat command the ZEN05, which powers the adapter and pump](pool-chlorine-github%20%282%29/diagrams/03-power-and-control.svg)
 
-*Figure 3. Data, commands and power are separate paths. The three runtime limits are reference settings, not three independent hardware disconnects. [PNG version](diagrams/03-power-and-control.png).*
+*Figure 3. Data, commands and power are separate paths. The three runtime limits are reference settings, not three independent hardware disconnects. [PNG version](pool-chlorine-github%20%282%29/diagrams/03-power-and-control.png).*
 
 The diagram shows functional connections, not mains terminals. The ZEN05's local auto-off timer is separate from Hubitat's software timers. All of those controls ultimately depend on the same outlet relay opening; they do not provide protection against every hardware failure.
 
@@ -152,7 +152,7 @@ Respirators do not replace ventilation, spill prevention, suitable gloves or eye
 
 Keep the reservoir secure, shaded and in dedicated containment. Plan access for filling without reaching over live electrical equipment. Use manufacturer-approved closures and venting; the reservoir must not be made airtight if the container/chemical requires venting.
 
-<img src="images/assembled-reservoir.jpg" alt="Blue reservoir beside the covered pump equipment tote" width="400">
+<img src="pool-chlorine-github%20%282%29/images/assembled-reservoir.jpg" alt="Blue reservoir beside the covered pump equipment tote" width="400">
 
 *Completed-assembly photo, IMG_0546. The reservoir and adjacent covered equipment are visible. No secondary containment tray is visible in this frame; provide the dedicated containment described in the storage section.*
 
@@ -160,11 +160,11 @@ Keep the reservoir secure, shaded and in dedicated containment. Plan access for 
 
 The intended arrangement uses continuous external tubing through a suitable cap fitting down to the suction strainer. Keep the pickup positioned as the equipment instructions require and protect the tube from kinking or abrasion.
 
-![Reservoir cutaway showing a continuous suction tube through a gland, separate fill and vent cap, and internal suction strainer](diagrams/02-reservoir-cutaway.svg)
+![Reservoir cutaway showing a continuous suction tube through a gland, separate fill and vent cap, and internal suction strainer](pool-chlorine-github%20%282%29/diagrams/02-reservoir-cutaway.svg)
 
-*Figure 2. The cap roles match the documented build. Internal geometry and gland section are explanatory; use the actual component specifications for mounting holes, seals, venting and pickup placement. [PNG version](diagrams/02-reservoir-cutaway.png).*
+*Figure 2. The cap roles match the documented build. Internal geometry and gland section are explanatory; use the actual component specifications for mounting holes, seals, venting and pickup placement. [PNG version](pool-chlorine-github%20%282%29/diagrams/02-reservoir-cutaway.png).*
 
-<img src="images/npt-gland-pass-through.jpg" alt="Black tubing passing continuously through a white cable gland before cap installation" width="400">
+<img src="pool-chlorine-github%20%282%29/images/npt-gland-pass-through.jpg" alt="Black tubing passing continuously through a white cable gland before cap installation" width="400">
 
 *Tube pass-through detail. The continuous black tube passes through the white cable gland, shown here before installation in the reservoir cap.*
 
@@ -177,7 +177,7 @@ Two connection types must not be confused:
 
 The 5/32-inch barb listing does not mean it has a bore large enough for a 1/4-inch OD tube to pass through. Likewise, “1/4 NPT” describes a nominal pipe-thread size, not a 1/4-inch hole or a guaranteed grip range.
 
-<img src="images/reservoir-pickup-cap.jpg" alt="Suction tube through the installed compression gland in the reservoir cap" width="720">
+<img src="pool-chlorine-github%20%282%29/images/reservoir-pickup-cap.jpg" alt="Suction tube through the installed compression gland in the reservoir cap" width="720">
 
 *Installed pickup-cap assembly, IMG_0547. The black tube passes through the white gland. The photo now documents the finished cap penetration; exact seal materials and the internal pickup are not visible.*
 
@@ -189,7 +189,7 @@ Use the actual fitting manufacturer's mounting-hole specification and gasket arr
 
 The completed assembly uses one bung cap for the suction-tube pass-through and the other as the fill/vent position. IMG_0545 shows a small open hole in the latter cap. Identify each cap by its actual thread and gasket; the photos do not establish a universal left/right or fine/coarse-thread assignment.
 
-<img src="images/reservoir-fill-vent-cap.jpg" alt="Open hole in the center of the separate fill and vent cap" width="400">
+<img src="pool-chlorine-github%20%282%29/images/reservoir-fill-vent-cap.jpg" alt="Open hole in the center of the separate fill and vent cap" width="400">
 
 *Fill/vent cap, IMG_0545. This records the hole present in the build. No hole diameter, vent-flow capacity or chemical-service approval is inferred from the image.*
 
@@ -203,11 +203,11 @@ Set the manual speed knob, record its position and leave it fixed after calibrat
 
 The manufacturer's reference configuration uses a 24 V, 1 A adapter and quotes 180 to 520 mL/min. Those reference figures do not replace a measurement on the installed system. [1]
 
-<img src="images/kamoer-pump-connections.jpg" alt="Kamoer pump front, manual speed knob and connected tubing" width="400">
+<img src="pool-chlorine-github%20%282%29/images/kamoer-pump-connections.jpg" alt="Kamoer pump front, manual speed knob and connected tubing" width="400">
 
 *Pump connections, IMG_0549. The right-hand adapter has a metal-looking hex nut. It may be external retaining hardware; identify the fitting and actual wetted parts before making an all-plastic-path claim. Do not copy the visible cable tie as a specified pressure seal.*
 
-<img src="images/kamoer-direction-markings.jpg" alt="Owner markings on the pump showing OUT and 200 ml" width="720">
+<img src="pool-chlorine-github%20%282%29/images/kamoer-direction-markings.jpg" alt="Owner markings on the pump showing OUT and 200 ml" width="720">
 
 *Owner markings, IMG_0550. OUT identifies the intended outlet. Verify actual flow direction during safe commissioning. The handwritten 200 ml has no time unit and does not replace the 221 mL/min calibration record.*
 
@@ -215,11 +215,11 @@ The manufacturer's reference configuration uses a 24 V, 1 A adapter and quotes 1
 
 The completed assembly uses the UCDBINJ-style check valve at the end of the black discharge tube, immersed in the pool near a wall return fitting. The new photos resolve the earlier ambiguity: this build discharges directly into the pool and does not show a threaded connection into the pressurized return pipe.
 
-<img src="images/check-valve-tube-connection.jpg" alt="Check valve with discharge tip at left and tube compression connection at right" width="720">
+<img src="pool-chlorine-github%20%282%29/images/check-valve-tube-connection.jpg" alt="Check valve with discharge tip at left and tube compression connection at right" width="720">
 
 *Valve and tube connection, IMG_0543. The threaded valve body remains exposed. Liquid enters from the tubing side and leaves through the nozzle, subject to the valve's indicated flow direction.*
 
-<img src="images/check-valve-pool-outlet.jpg" alt="Tube-mounted check valve submerged beside a pool wall return fitting" width="400">
+<img src="pool-chlorine-github%20%282%29/images/check-valve-pool-outlet.jpg" alt="Tube-mounted check valve submerged beside a pool wall return fitting" width="400">
 
 *Pool outlet, IMG_0544. The valve is in the pool near the return; it is not attached to that return fitting. A permanent outlet support is not visible in the photo.*
 
@@ -235,7 +235,7 @@ Connect the pump's matched 24 V adapter to the ZEN05 outlet and the adapter's DC
 
 The pump has no network setup step. Include and configure the ZEN05 in Hubitat as described below. Keep pump power physically isolated during setup so a test command cannot dose chlorine unexpectedly.
 
-<img src="images/pump-adapter-inside-cover.jpg" alt="Kamoer pump and DC power adapter inside the open black equipment tote" width="720">
+<img src="pool-chlorine-github%20%282%29/images/pump-adapter-inside-cover.jpg" alt="Kamoer pump and DC power adapter inside the open black equipment tote" width="720">
 
 *Open equipment cover, IMG_0551. The pump and adapter sit inside a black storage tote; IMG_0548 in the gallery shows the yellow lid closed. The ZEN05 is not visible. This photo does not establish a weatherproof electrical-enclosure rating, sealed cable entries, strain relief or upstream GFCI protection. Specify those features rather than treating a closed storage lid as proof of them.*
 
@@ -340,9 +340,9 @@ After installation or an update, open the pool child app and press **Done** whil
 
 ### 5. Understand the dosing sequence
 
-![Dosing sequence: guards, reservation, start confirmation, monitored run, OFF confirmation and fault recovery](diagrams/04-dosing-sequence.svg)
+![Dosing sequence: guards, reservation, start confirmation, monitored run, OFF confirmation and fault recovery](pool-chlorine-github%20%282%29/diagrams/04-dosing-sequence.svg)
 
-*Figure 4. A dosing-attempt overview for the power-reporting ZEN05. Failed start and stop recovery paths are shown separately from normal operation. [PNG version](diagrams/04-dosing-sequence.png).*
+*Figure 4. A dosing-attempt overview for the power-reporting ZEN05. Failed start and stop recovery paths are shown separately from normal operation. [PNG version](pool-chlorine-github%20%282%29/diagrams/04-dosing-sequence.png).*
 
 This is an overview of the published controller, not replacement code. It distinguishes an ON request from evidence the pump is drawing power. Power evidence still does not measure chemical flow. Dose volume and tank level remain estimates derived from calibrated rate and observed run time.
 
@@ -393,7 +393,7 @@ Inspect the Norprene tube, connections, reservoir, vent, strainer and outlet for
 | Tank estimate drifts | Refill record, calibration, partial/uncertain runs and manual outlet operation. Reconcile against physical inventory. |
 | Liquid moves while power is off | Isolate safely and investigate siphon/backflow protection; do not rely on another software OFF. |
 
-The completed assembly is documented in the [ten-photo gallery](docs/assembly-photos.md). Image pixels are unchanged; location and camera metadata were removed from the publication copies. The old AI-generated diagrams have been replaced by four editable SVG diagrams, with matching PNG exports and a reproducible source script. See the [diagram gallery](docs/diagrams.md). See [image review](docs/image-review.md) for the image-by-image disposition and remaining verification items.
+The completed assembly is documented in the [ten-photo gallery](pool-chlorine-github%20%282%29/docs/assembly-photos.md). Image pixels are unchanged; location and camera metadata were removed from the publication copies. The old AI-generated diagrams have been replaced by four editable SVG diagrams, with matching PNG exports and a reproducible source script. See the [diagram gallery](pool-chlorine-github%20%282%29/docs/diagrams.md). See [image review](pool-chlorine-github%20%282%29/docs/image-review.md) for the image-by-image disposition and remaining verification items.
 
 ## Sources
 
