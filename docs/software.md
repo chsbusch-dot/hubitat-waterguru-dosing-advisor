@@ -539,7 +539,9 @@ device.
 - It sends one refresh 5 s after the ON and one 3 s after the OFF.
 - It polls only when no power report has arrived for *fallbackSecs* (default 90 s, 15 to 900). A
   ZEN05 set to report power once a minute (parameter 10 = 1) and on a 5 W change is never polled,
-  and during a dose the dosing app's own refresh every 10 s brings a report anyway.
+  and during a dose the dosing app's own refresh every 10 s brings a report anyway. The author's
+  ZEN05 keeps parameter 10 at 700 minutes, so when nothing else refreshes the plug the profiler does
+  poll, as in the last row of the table below.
 - A capture ends *tailSecs* after the OFF (default 15 s, at least 5) or after 60 minutes.
 
 Up to 1.1.1 the profiler refreshed the plug on every sample (*sampleSecs*, 5 s on the live

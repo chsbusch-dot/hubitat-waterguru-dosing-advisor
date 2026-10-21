@@ -404,6 +404,7 @@ returns.
 | 6: State after power failure | **Forced off** | The pump does not restart when power returns. |
 | 8: Physical button | **Disabled** | No accidental starts from the button. Provide an accessible physical power disconnect instead. |
 | 9: Power report threshold | **5 W** | A start and a stop each change the power by more than this, so each sends a report. |
+| 10: Power reporting frequency | **700 minutes** | Timed power reports are effectively off. During a run the app asks the plug for a report every 10 seconds instead (see below). |
 | 13: Power reports | **Enabled** | Lets the app confirm a start from the pump's power. |
 
 Zooz documents these parameters. Read the settings back from the device and test the local auto-off
