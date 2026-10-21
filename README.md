@@ -8,21 +8,21 @@ It is a **companion** to the
 [WaterGuru Integration](https://github.com/bdwilson/hubitat/tree/master/WaterGuru)
 app, not a replacement. That app creates the device this one reads, and already
 handles change-driven alerts, quiet hours, pause switches, recovery messages and
-per-metric thresholds. This app deliberately does **not** duplicate any of that.
-It adds the two things the integration cannot do:
+per-metric thresholds. This app does **not** duplicate those features.
+It adds two things the integration cannot do:
 
 1. **Free-chlorine dosing that is CYA-aware / SLAM-aware.** WaterGuru targets a
    fixed ~3 ppm free chlorine regardless of stabilizer. For a stabilized or a
    recovering (green) pool that is far too low. This app targets FC as a function
-   of cyanuric acid and converts the gap into a real volume of *your* liquid
-   chlorine.
-2. **Concrete dose amounts for pH / TA / CH / CYA** — passed through verbatim from
+   of cyanuric acid and converts the gap into a volume of the liquid
+   chlorine you use.
+2. **Dose amounts for pH / TA / CH / CYA**, passed through verbatim from
    WaterGuru's own product-specific advice, with generic fallback formulas when
    that advice is not available.
 
-> ⚠️ **All doses are estimates.** Always confirm with your own test kit before
-> adding chemicals. Add strong oxidizers and acids in stages and retest between
-> doses. You are responsible for what goes in your pool.
+> ⚠️ **This app can run a chlorine pump, and every dose it gives is an estimate.**
+> Read [Safety](#safety) before you connect a pump, and the [Disclaimer](#disclaimer)
+> before you use the app.
 
 ---
 
@@ -31,7 +31,7 @@ It adds the two things the integration cannot do:
 - A Hubitat hub running platform **2.3.0** or newer.
 - The **WaterGuru Integration** app + driver installed and working, exposing a
   child device (the *WaterGuru Integration Driver*). This app reads that device's
-  attributes — `freeChlorine`, `pH`, `cyanuricAcid`, `totalAlkalinity`,
+  attributes: `freeChlorine`, `pH`, `cyanuricAcid`, `totalAlkalinity`,
   `calciumHardness`, the matching `*Target` attributes, `poolVolume`,
   `chlorineProductPct`, `acidType`, and `doseAdvice`.
 - One or more `capability.notification` devices to receive the recommendation
@@ -43,7 +43,7 @@ instead of a separate top-level app each.
 
 ### Via Hubitat Package Manager (recommended)
 
-Search HPM for **WaterGuru Dosing Advisor** and install — HPM installs the
+Search HPM for **WaterGuru Dosing Advisor** and install. HPM installs the
 parent app, the child app, and the tile driver for you.
 
 ### Manually
@@ -51,15 +51,15 @@ parent app, the child app, and the tile driver for you.
 Install **both** app files under **Apps Code → New App** (or use the **Import**
 button with the raw file URL), and **Save** each:
 
-1. Parent — [`apps/WaterGuru-Dosing-Advisor.groovy`](apps/WaterGuru-Dosing-Advisor.groovy)
-2. Child — [`apps/WaterGuru-Dosing-Advisor-Child.groovy`](apps/WaterGuru-Dosing-Advisor-Child.groovy)
+1. Parent: [`apps/WaterGuru-Dosing-Advisor.groovy`](apps/WaterGuru-Dosing-Advisor.groovy)
+2. Child: [`apps/WaterGuru-Dosing-Advisor-Child.groovy`](apps/WaterGuru-Dosing-Advisor-Child.groovy)
 
 Then install the tile driver under **Drivers Code → New Driver** and **Save** it:
 
-3. Driver — [`drivers/WaterGuru-Dosing-Tile.groovy`](drivers/WaterGuru-Dosing-Tile.groovy)
+3. Driver: [`drivers/WaterGuru-Dosing-Tile.groovy`](drivers/WaterGuru-Dosing-Tile.groovy)
 
 The driver backs the optional dashboard tile (below). If you don't install it,
-the apps still work — only the tile device can't be created.
+the apps still work. Only the tile device can't be created.
 
 Then go to **Apps → Add User App → WaterGuru Dosing Advisor** (the parent) and
 use **Add a WaterGuru pool** to create an advisor for each pool.
@@ -80,7 +80,7 @@ without pinning it.
 | **Pool volume / chlorine strength %** | Blank = read from the device (`poolVolume`, `chlorineProductPct`). |
 | **Chlorine runway** | Show an estimate of the days until FC drops below the algae floor. Optional manual daily-loss override (ppm/day); blank = auto (measured from your samples, else a cover-aware estimate). |
 | **Use WaterGuru advice** | Pass through WaterGuru's own pH/TA/CH/CYA dose lines. |
-| **Also include WaterGuru's chlorine advice** | Off by default — this app computes FC, so WaterGuru's (CYA-blind) chlorine line is dropped to avoid a conflicting recommendation. |
+| **Also include WaterGuru's chlorine advice** | Off by default. This app computes FC, so WaterGuru's (CYA-blind) chlorine line is dropped to avoid a conflicting recommendation. |
 | **Target overrides** | pH / TA / CYA / CH targets; blank = read the device's targets. |
 | **Delivery** | The notification device(s) to send to, whether to notify automatically on each new sample, and an optional **daily summary** at a set time. |
 | **Refresh WaterGuru once daily** and **Daily WaterGuru fetch time** | Ask the source device to refresh at a set time, so the evening sample is imported promptly instead of waiting for the integration's next poll. Set the time to about 30 minutes after the measurement time configured in the WaterGuru app: the pod needs 12 to 15 minutes to read, and the dose starts as soon as the new reading arrives. The default is 19:45. If that fetch brings no new sample, the device is refreshed once more 45 minutes later (20:30 for a 19:45 fetch), only while the AUTO dosing window is open; a sample it brings in goes through every dosing guard as usual, and if it brings nothing either, one log line and nothing more. The app page shows the time of day WaterGuru has actually been measuring at, taken from the recent samples. |
@@ -108,8 +108,8 @@ chlorine pump at all, and under which limits. Three modes:
 - **AUTO**: a new, valid WaterGuru sample may start the pump unattended once every safety check
   passes. Daily summaries, previews and manual calculations never start it.
 
-The pump settings, one line each. *Safety* marks the ones that decide whether or how long the
-pump may run; the others shape the dose.
+In the table, *Safety* marks the settings that decide whether or how long the pump may run. The
+other settings shape the dose.
 
 | Setting | Default | What it does | Safety |
 | --- | --- | --- | --- |
@@ -144,16 +144,89 @@ Two checks run before every start and are reported like any other block:
   **Done**, every start is refused with *"the app's subscriptions are out of date after a code
   update; open the app and press Done"*, and the dosing status on the page says the same.
 
+## Safety
+
+This app can switch a pump that puts liquid chlorine into your pool. It checks a lot before and
+during every run (see *Dosing modes and pump settings* above and *Pump start confirmation and
+faults* below), but software can fail, and so can a relay, a radio link, a sensor or a pump. Set it
+up the way you would set up any pool equipment that handles chemicals and mains power.
+
+### Doses are estimates
+
+Always confirm with your own test kit before adding chemicals. Add strong oxidizers and acids in
+stages and retest between doses. You are responsible for what goes in your pool.
+
+### Before you use AUTO
+
+The dosing mode defaults to **ADVISORY**: the app calculates and notifies, and never starts the
+pump. Once the pump is connected, use **APPROVAL**: each dose waits until you press *Run the pending
+chlorine dose now*, so you can be there for it. Watch several doses that way, compare the next
+readings and the tank level with what the app expected, and only then switch to **AUTO**.
+
+### Layer the runtime limits
+
+Three separate limits end a pump run, and each must allow more time than the one before it:
+
+1. **Absolute maximum pump runtime** (default 14 minutes). A dose that would run longer is blocked
+   (in SLAM mode it is capped to this runtime).
+2. **Independent emergency cutoff** (default 15 minutes). A second OFF timer armed for every pump
+   start and retried until the switch reports off. No dose starts unless it is later than the
+   maximum runtime.
+3. **The smart plug's own auto-off timer.** This one lives in the plug, not in the app, so it still
+   turns the pump off when the hub is busy, restarting or has lost contact with the plug. The app
+   cannot set it: you have to, in the plug's settings (parameter 2 on a Zooz ZEN05, see the plug's
+   manual for its unit). Set it longer than the emergency cutoff. It is the last layer, so use a
+   plug that has one.
+
+Keep maximum runtime < emergency cutoff < plug auto-off. I run them at 17, 18 and 19 minutes. If
+you raise the maximum runtime, raise the other two with it.
+
+### Calibrate the pump rate
+
+**Pump delivery rate** turns a dose volume into a runtime, so a wrong rate gives a wrong dose. Do
+not rely on the pump's rating. Catch one real run in a container and weigh it:
+
+1. Weigh the empty container, catch a run of known length, and weigh it again.
+2. Convert the net weight to volume with the product's specific gravity (SG): mL = grams ÷ SG.
+   Liquid chlorine at 10 to 12.5% has an SG of about 1.16 to 1.21. The label or the safety data
+   sheet gives the exact figure. Never read grams as mL: that overstates the volume by 16 to 21%.
+3. Divide the volume by the run time in minutes, and enter that as the pump rate.
+
+Example: 2293 g net at an SG of about 1.19 is about 1930 mL. Over a 580 second run that is about
+200 mL/min.
+
+A run measured into an open bottle has no back pressure, so the rate in service can only be equal
+or lower. Treat the measured figure as an upper bound.
+
+### Check the plug's radio link
+
+The app only knows what the plug reports. On my install, a Z-Wave plug paired as Z-Wave
+Long Range with S2 security stopped decoding after a hub restart. The scheduled dose went
+unanswered and the app latched a fault. That is the safe outcome, but the dose was missed.
+Re-pairing the plug as a plain mesh device without security, and turning on Hubitat's **Command
+Retry** for it, fixed it there. That is one install's experience, not a rule. Whatever pairing you
+use, check after a hub restart that the plug still answers (press **Refresh** on its device page
+and look for a fresh event) before the next scheduled dose.
+
+### Chemicals and wiring
+
+- Liquid chlorine (sodium hypochlorite) must never be mixed with acid (pH down, muriatic acid) or
+  any other chemical. Store it and pump it separately, with its own container, tubing and pump.
+- Wear eye and skin protection when you handle it, fill the tank or catch a calibration run.
+- Follow the product label and your local codes.
+- Put an outdoor pump on a GFCI-protected circuit (an RCD outside North America), behind a plug
+  rated for the load.
+
 ## Dashboard tile
 
 Hubitat apps can't draw on a dashboard, so each pool advisor maintains its own
-small companion device — **"Dosing Tile: &lt;pool&gt;"** (driver *WaterGuru Dosing
-Tile*) — and refreshes it on every calculation. Add that device to a dashboard
-to see, at a glance, what the pool needs. The device exposes:
+small companion device, **"Dosing Tile: &lt;pool&gt;"** (driver *WaterGuru Dosing
+Tile*), and refreshes it on every calculation. Add that device to a dashboard
+to see what the pool needs. The device exposes:
 
 | Attribute | What it holds |
 | --- | --- |
-| `status` | `GREEN` / `YELLOW` / `RED` — see the colour key below. Use it to colour the tile. |
+| `status` | `GREEN` / `YELLOW` / `RED` (see the colour key below). Use it to colour the tile. |
 | `recommendation` | The concise one-liner, e.g. *"Add 4.8 gal chlorine · 1.2 lb baking soda"* or *"All in range"*. |
 | `detail` | The full multi-line recommendation (same text as the notification). |
 | `tileHtml` | A formatted HTML snippet (pool, status pill, FC current→target, one-liner, cassette type when reported, timestamp). |
@@ -161,11 +234,11 @@ to see, at a glance, what the pool needs. The device exposes:
 
 **Numeric telemetry (for external history)**
 
-These exist so an external historian — InfluxDB/Grafana, or Maker API — can store actual
+These exist so an external historian (InfluxDB/Grafana, or Maker API) can store actual
 pump-started doses and compute durable usage totals. They are written alongside the human
 attributes on every calculation. The dose values are recorded only after a start has been
 **confirmed** (a fresh ON, plus fresh power above the minimum for a power-capable switch), so
-they represent pump runs this app actually observed running — not recommendations, previews, or a
+they represent pump runs this app actually observed running, not recommendations, previews, or a
 bare `on()` return. The volume is booked at confirmation as the planned estimate and, once OFF is
 confirmed, corrected to the observed ON-to-OFF run time if the two differ by more than 3 s (see
 *Booking what actually ran* below). It is never a measurement of liquid. An attempt that is never
@@ -174,14 +247,14 @@ confirmed still reserves its sample and daily volume, but writes no `lastDose*` 
 | Attribute | Unit | What it holds |
 | --- | --- | --- |
 | `lastDoseMl` | mL | Estimated liquid volume of the last confirmed pump run: the plan at confirmation, the observed run once OFF is confirmed if they differ. |
-| `lastDoseEpochMs` | epoch ms | When that run was recorded — the dose's own time, not the time it was read. A correction keeps it. |
+| `lastDoseEpochMs` | epoch ms | When that run was recorded: the dose's own time, not the time it was read. A correction keeps it. |
 | `lastDoseRuntimeSeconds` | s | The pump runtime that volume corresponds to (planned, or observed after a correction). |
 | `tankCapacityMl` | mL | Configured container capacity. |
 | `tankRemainingMl` | mL | Estimated remaining inventory: capacity minus recorded app-controlled doses. |
 | `tankPercent` | % | `tankRemainingMl` as a percentage of capacity. |
 | `tankRunwayDays` | days | Estimated days until inventory reaches the configured low-tank threshold. `-1` while there is not yet enough dose history. |
 | `freeChlorine` | ppm | The reading this calculation used. |
-| `targetFreeChlorine` | ppm | The FC target this app computed — CYA-aware, or your manual override. |
+| `targetFreeChlorine` | ppm | The FC target this app computed: CYA-aware, or your manual override. |
 | `lastCalcEpochMs` | epoch ms | The same instant as `lastCalc`, as epoch milliseconds. `lastCalc` is a formatted date string that cannot be parsed reliably off the hub, so an external tool should use this one. |
 
 Behaviours an external reader has to know:
@@ -208,20 +281,20 @@ Behaviours an external reader has to know:
 
 **Colour key**
 
-- 🔴 **RED** — a chemical addition is indicated, or **SLAM mode** is active.
-- 🟡 **YELLOW** — only optional / advisory items (an optional top-up, a
+- 🔴 **RED**: a chemical addition is indicated, or **SLAM mode** is active.
+- 🟡 **YELLOW**: only optional / advisory items (an optional top-up, a
   "too-high, consider draining" note), or a reading is missing so the result is
   uncertain.
-- 🟢 **GREEN** — everything is in range; nothing to add.
+- 🟢 **GREEN**: everything is in range; nothing to add.
 
 **Adding it to a dashboard** (Hubitat's built-in dashboards):
 
 1. Add the *Dosing Tile: …* device to the dashboard's device list.
 2. Add a tile, pick that device, and choose the **Attribute** template.
 3. Point it at one of:
-   - `recommendation` — a clean one-line summary, or
-   - `tileHtml` — the richer formatted layout (the Attribute template renders the HTML), or
-   - `status` — just GREEN/YELLOW/RED (handy for driving tile colour with your own dashboard CSS, e.g. keying off the attribute value).
+   - `recommendation`: a clean one-line summary, or
+   - `tileHtml`: the richer formatted layout (the Attribute template renders the HTML), or
+   - `status`: just GREEN/YELLOW/RED (handy for driving tile colour with your own dashboard CSS, e.g. keying off the attribute value).
 
 The tile is per-pool: each child advisor creates and updates its own device. Turn
 the **Dashboard tile** toggle off to remove this pool's tile device.
@@ -272,7 +345,7 @@ SLAM doses where large ones used to be blocked.
 
 ### Chlorine runway (algae forecast)
 
-Algae is held off by keeping FC above a CYA-linked floor — the [TFP](https://www.troublefreepool.com/)
+Algae is held off by keeping FC above a CYA-linked floor: the [TFP](https://www.troublefreepool.com/)
 minimum, `floor = 0.075 × CYA`. The runway estimate is:
 
 ```
@@ -312,13 +385,13 @@ carries the same figure after the pH, for example `FC loss 0.2 ppm/day
 (measured).` The loss rate only feeds this text, the runway and the tile
 footer, never a dose amount.
 
-pH is not part of the clock — it modulates how *effective* a given FC is (high pH
+pH is not part of the clock. It modulates how *effective* a given FC is (high pH
 lowers the active-chlorine fraction) rather than how fast FC decays. The estimate
 is a planning aid, not a guarantee; confirm with your own test kit.
 
 ### pH / TA / CH / CYA
 
-By default these are passed through from WaterGuru's `doseAdvice` — amounts
+By default these are passed through from WaterGuru's `doseAdvice`: amounts
 already computed in the products you actually use. `doseAdvice` also carries
 WaterGuru's maintenance steps (replacing the cassette, the battery,
 calibration); those are left out, and the cassette line shows days left and
@@ -332,7 +405,7 @@ the app estimates generically:
   10,000 gal at TA ≈ 100), or the dry-acid equivalent if that is your acid type.
 - **CH up:** calcium chloride, ~1.84 oz per 1 ppm per 10,000 gal.
 - **CYA up:** cyanuric acid, 13 oz per 10 ppm per 10,000 gal.
-- **CYA / CH too high:** no additive lowers these — the app estimates a partial
+- **CYA / CH too high:** no additive lowers these, so the app estimates a partial
   drain/refill percentage instead.
 
 ## Pump start confirmation and faults
@@ -342,7 +415,7 @@ liquid. This app therefore separates "start requested" from "start confirmed":
 
 - **Power-capable switch** (reports a `power` attribute): a start is confirmed only by a **fresh
   ON** *and* **fresh measured power at or above the minimum** (default **3 W**). Both readings
-  must postdate the ON request — a cached value from before it never confirms a start. Null,
+  must postdate the ON request: a cached value from before it never confirms a start. Null,
   missing or throwing readings fail closed.
 - **Non-power switch**: a fresh ON confirms the start, with an explicit notice that **power and
   flow are unverified**.
@@ -379,7 +452,7 @@ If a start is not confirmed within the timeout (default **20 s**, never past the
   retried until the switch **freshly** reports off,
 - a **fault is latched** and stays visible until you press **Acknowledge pump fault**. Acknowledgement
   is refused while a stop is still being recovered or until the switch has freshly reported OFF; it
-  releases the fault lock for future eligible doses — it never energises the pump, refunds the
+  releases the fault lock for future eligible doses. It never energises the pump, refunds the
   reserved volume, or resets the sample/day limits. If nothing is being recovered and no OFF report
   has arrived since the fault (for example a fault carried over from 2.4.0), the refusal says so:
   press **STOP chlorine pump now** once, and the plug's answer to that OFF is enough.
@@ -434,7 +507,7 @@ completion. Optional dashboard failures cannot prevent the running-power monitor
 ### Attempt reservation vs. success telemetry
 
 Before the ON command, the app reserves the attempt: the sample cannot be dosed again, the
-planned volume counts against the daily cap, and the one-AUTO-dose-per-day guard is consumed —
+planned volume counts against the daily cap, and the one-AUTO-dose-per-day guard is consumed,
 even if the start is never confirmed. Only on confirmation does the app write the `lastDose*`
 telemetry and draw the planned volume from the tank estimate. Existing historical `lastDose` and
 tank history from earlier versions are preserved as-is.
@@ -476,7 +549,7 @@ once and clears the field.
 - **Automatically** on each new WaterGuru sample (it subscribes to the device's
   `LastMeasurement` change), if that toggle is on.
 - **As a daily summary** at a time you pick, if that toggle is on (independent of
-  new samples — you can run both).
+  new samples, so you can run both).
 - **On demand** with the *Calculate & send now* button.
 - **Preview** with the *Preview (log only)* button, which logs the message without
   sending it.
@@ -546,9 +619,21 @@ leaves `watts_date_ms` where it was). There is now one row per report instead of
 `steadySamples`, `wearMedianWatts`, `wearDeviationPct`, `profilerRefreshes` and `powerEvents` at
 its end; a summary file with a 1.0.x or 1.1.x header is extended in place.
 
+## Disclaimer
+
+This is a summary. The [license](LICENSE) is the binding text.
+
+- **No warranty.** As far as the law allows, this software is provided "as is", without
+  warranties or conditions of any kind. See sections 7 (Disclaimer of Warranty) and 8 (Limitation
+  of Liability) of the [Apache License 2.0](LICENSE). This summary does not change them.
+- **Your responsibility.** You are responsible for your pool's water chemistry, for your equipment
+  and its wiring, and for following local law and the labels of the products you use.
+- **Estimates, not professional advice.** The app's estimates and advice are not
+  professional pool-service advice. Test your water independently before you add chemicals.
+- **Not affiliated.** This project is not affiliated with or endorsed by WaterGuru, Hubitat or
+  Zooz. WaterGuru, Hubitat and Zooz are trademarks of their respective owners.
+
 ## License
 
-[Apache License 2.0](LICENSE) — matching the WaterGuru Integration app's license.
-
-WaterGuru is a trademark of its respective owner. This project is not affiliated
-with or endorsed by WaterGuru.
+[Apache License 2.0](LICENSE), matching the WaterGuru Integration app's license. See the
+[Disclaimer](#disclaimer) above.
