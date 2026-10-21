@@ -1,7 +1,7 @@
 # Hardware guide: pool chlorine dosing with Hubitat, WaterGuru and a Z-Wave plug
 
-> ⚠️ **You build and run this at your own risk.** Liquid chlorine can burn skin and eyes, and mixed
-> with acid or other pool chemicals it can release toxic chlorine gas. Read
+> ⚠️ **You build and run this at your own risk.** Liquid chlorine can burn skin and eyes. Mixing it
+> with acid or other pool chemicals can release toxic chlorine gas. Read
 > [Chemical storage and PPE](#chemical-storage-and-ppe), the [Safety](../README.md#safety) section
 > and the [Disclaimer](../README.md#disclaimer) before you start.
 
