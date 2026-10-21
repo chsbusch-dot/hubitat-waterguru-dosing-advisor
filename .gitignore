@@ -19,3 +19,6 @@ tests/mutation/out/
 # copy of the guides stay out; docs/ carries the downscaled photos and the guides
 docs/Github BOM & Hardware Assembly Instructions/*.zip
 docs/Github BOM & Hardware Assembly Instructions/pool-chlorine-github (2)/
+
+# Local Claude Code notes about one hub (IDs, addresses, process): never public
+CLAUDE.local.md
