@@ -1,0 +1,1830 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_INFLUXDB",
+      "label": "InfluxDB",
+      "description": "InfluxDB 2 datasource (Flux) that holds the collector's bucket",
+      "type": "datasource",
+      "pluginId": "influxdb",
+      "pluginName": "InfluxDB"
+    },
+    {
+      "name": "VAR_BUCKET",
+      "label": "Bucket",
+      "description": "InfluxDB bucket the collector writes (INFLUX_BUCKET)",
+      "type": "constant",
+      "value": "waterguru"
+    },
+    {
+      "name": "VAR_DOSING_DEVICE",
+      "label": "Dosing device id",
+      "description": "Hubitat device id of the WaterGuru Dosing Advisor tile (WG_DOSING_DEVICE_ID). Leave empty without the dosing collector: the chlorine panels stay empty.",
+      "type": "constant",
+      "value": ""
+    }
+  ],
+  "__elements": {},
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "11.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "influxdb",
+      "name": "InfluxDB",
+      "version": "1.0.0"
+    },
+    {
+      "type": "panel",
+      "id": "barchart",
+      "name": "Bar chart",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "stat",
+      "name": "Stat",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "text",
+      "name": "Text",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "timeseries",
+      "name": "Time series",
+      "version": ""
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "pH",
+      "description": "Full-resolution pH from the SmartPod (waterguru_pod). Green 7.4-7.7, acceptable 7.2-7.8 with yellow shoulders, red outside 7.2-7.8.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "always",
+            "pointSize": 6,
+            "spanNulls": true,
+            "gradientMode": "scheme",
+            "thresholdsStyle": {
+              "mode": "dashed+area"
+            }
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "red"
+              },
+              {
+                "value": 7.2,
+                "color": "yellow"
+              },
+              {
+                "value": 7.4,
+                "color": "green"
+              },
+              {
+                "value": 7.700001,
+                "color": "yellow"
+              },
+              {
+                "value": 7.800001,
+                "color": "red"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"waterguru_pod\" and r._field == \"ph\")\n  |> keep(columns: [\"_time\", \"_value\", \"pod_id\"])\n  |> sort(columns: [\"_time\"])"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Free Chlorine (ppm)",
+      "description": "Full-resolution free chlorine from the SmartPod (waterguru_pod). Interpret FC using the CYA-based comparison panel: optimal FC = 11.5% of CYA and minimum FC = 7.5% of CYA. Fixed ppm health bands are not used.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "always",
+            "pointSize": 6,
+            "spanNulls": true,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "unit": "ppm",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"waterguru_pod\" and r._field == \"freeCl\")\n  |> keep(columns: [\"_time\", \"_value\", \"pod_id\"])\n  |> sort(columns: [\"_time\"])"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Total Alkalinity (ppm)",
+      "description": "Total alkalinity from the lab cassette (waterguru_measure, type TA). Pulled out of the combined Lab balance panel so it isn't flattened by SALT's thousands-scale. Green 80-120 ppm; yellow shoulders; red <60 or >180.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "always",
+            "pointSize": 6,
+            "spanNulls": true,
+            "gradientMode": "scheme",
+            "thresholdsStyle": {
+              "mode": "dashed+area"
+            }
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "ppm",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "red"
+              },
+              {
+                "value": 60,
+                "color": "yellow"
+              },
+              {
+                "value": 80,
+                "color": "green"
+              },
+              {
+                "value": 120,
+                "color": "yellow"
+              },
+              {
+                "value": 180,
+                "color": "red"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"waterguru_measure\" and r._field == \"value\" and r.type == \"TA\")\n  |> keep(columns: [\"_time\", \"_value\", \"type\"])\n  |> sort(columns: [\"_time\"])"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Flow (gpm)",
+      "description": "Computed skimmer flow (waterguru_measure, SKIMMER_FLOW). Green ≥6 gpm; yellow 1-6; red 0 (no circulation). For the raw flow signal see waterguru_pod.flowTempDeltaFahr.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "always",
+            "pointSize": 6,
+            "spanNulls": true,
+            "gradientMode": "scheme",
+            "thresholdsStyle": {
+              "mode": "dashed+area"
+            }
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "flowgpm",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "red"
+              },
+              {
+                "value": 1,
+                "color": "yellow"
+              },
+              {
+                "value": 6,
+                "color": "green"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"waterguru_measure\" and r._field == \"value\" and r.type == \"SKIMMER_FLOW\")\n  |> keep(columns: [\"_time\", \"_value\", \"type\"])\n  |> sort(columns: [\"_time\"])"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Water Temperature (°F)",
+      "description": "Water temperature from the SmartPod (waterguru_pod). Informational: no health thresholds.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "always",
+            "pointSize": 5,
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "fahrenheit",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"waterguru_pod\" and r._field == \"waterTempFahr\")\n  |> keep(columns: [\"_time\", \"_value\", \"pod_id\"])\n  |> sort(columns: [\"_time\"])"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Lab balance (CH / CYA / SALT)",
+      "description": "Lab-cassette derived values (CH / CYA / SALT) from waterguru_measure. Total Alkalinity now has its own panel above. Note the differing scales (SALT is ppm in the thousands).",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "always",
+            "pointSize": 5,
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"waterguru_measure\" and r._field == \"value\")\n  |> filter(fn: (r) => contains(value: r.type, set: [\"CH\", \"CYA\", \"SALT\"]))\n  |> keep(columns: [\"_time\", \"_value\", \"type\"])\n  |> sort(columns: [\"_time\"])"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Battery (%)",
+      "description": "SmartPod battery (waterguru_status). Green >50%; yellow 20-50; red <20.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "always",
+            "pointSize": 6,
+            "spanNulls": true,
+            "gradientMode": "scheme",
+            "thresholdsStyle": {
+              "mode": "dashed+area"
+            }
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "percent",
+          "decimals": 0,
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "red"
+              },
+              {
+                "value": 20,
+                "color": "yellow"
+              },
+              {
+                "value": 50,
+                "color": "green"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"waterguru_status\" and r._field == \"battery_pct\")\n  |> keep(columns: [\"_time\", \"_value\", \"water_body_id\"])\n  |> sort(columns: [\"_time\"])"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Cassette (%)",
+      "description": "Lab cassette remaining (waterguru_status). Green >30%; yellow 15-30; red <15.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "always",
+            "pointSize": 6,
+            "spanNulls": true,
+            "gradientMode": "scheme",
+            "thresholdsStyle": {
+              "mode": "dashed+area"
+            }
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "percent",
+          "decimals": 0,
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "red"
+              },
+              {
+                "value": 15,
+                "color": "yellow"
+              },
+              {
+                "value": 30,
+                "color": "green"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"waterguru_status\" and r._field == \"cassette_pct\")\n  |> keep(columns: [\"_time\", \"_value\", \"water_body_id\"])\n  |> sort(columns: [\"_time\"])"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "WiFi RSSI (dBm)",
+      "description": "SmartPod WiFi signal (waterguru_pod). Green > −70 dBm; yellow −80..−70; red < −80.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "always",
+            "pointSize": 6,
+            "spanNulls": true,
+            "gradientMode": "scheme",
+            "thresholdsStyle": {
+              "mode": "dashed+area"
+            }
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "dBm",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "red"
+              },
+              {
+                "value": -80,
+                "color": "yellow"
+              },
+              {
+                "value": -70,
+                "color": "green"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"waterguru_pod\" and r._field == \"rssi\")\n  |> keep(columns: [\"_time\", \"_value\", \"pod_id\"])\n  |> sort(columns: [\"_time\"])"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Free Chlorine vs CYA-based optimal (ppm)",
+      "description": "Actual SmartPod free chlorine vs the CYA-appropriate FC band. Optimal = 11.5% x CYA and Min = 7.5% x CYA (Trouble-Free-Pool FC/CYA rule); WaterGuru target is the app's own CYA-adjusted goal. CYA is a sparse lab-cassette reading, so the reference lines are flat at the latest CYA and step when a new lab result arrives.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "auto",
+            "pointSize": 6,
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "ppm",
+          "decimals": 1
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "A"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "FC (actual)"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Optimal: 11.5% x CYA"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Min: 7.5% x CYA"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "D"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "WaterGuru target"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"waterguru_pod\" and r._field == \"freeCl\")\n  |> keep(columns: [\"_time\", \"_value\", \"pod_id\"])\n  |> sort(columns: [\"_time\"])"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "import \"array\"\ncya = (from(bucket: \"${bucket}\")\n  |> range(start: -365d)\n  |> filter(fn: (r) => r._measurement == \"waterguru_measure\" and r.type == \"CYA\" and r._field == \"value\")\n  |> last() |> findColumn(fn: (key) => true, column: \"_value\"))[0]\narray.from(rows: [\n  {_time: v.timeRangeStart, _value: cya * 0.115},\n  {_time: v.timeRangeStop, _value: cya * 0.115},\n])"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "import \"array\"\ncya = (from(bucket: \"${bucket}\")\n  |> range(start: -365d)\n  |> filter(fn: (r) => r._measurement == \"waterguru_measure\" and r.type == \"CYA\" and r._field == \"value\")\n  |> last() |> findColumn(fn: (key) => true, column: \"_value\"))[0]\narray.from(rows: [\n  {_time: v.timeRangeStart, _value: cya * 0.075},\n  {_time: v.timeRangeStop, _value: cya * 0.075},\n])"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "import \"array\"\ntgt = (from(bucket: \"${bucket}\")\n  |> range(start: -365d)\n  |> filter(fn: (r) => r._measurement == \"waterguru_measure\" and r.type == \"FREE_CL\" and r._field == \"target\")\n  |> last() |> findColumn(fn: (key) => true, column: \"_value\"))[0]\narray.from(rows: [\n  {_time: v.timeRangeStart, _value: tgt},\n  {_time: v.timeRangeStop, _value: tgt},\n])"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "row",
+      "title": "Liquid chlorine usage and tank",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "panels": []
+    },
+    {
+      "id": 12,
+      "type": "text",
+      "title": "About chlorine totals",
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 41
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**Totals cover recorded pump-commanded volume only**, in US gallons. Manual additions and missing history are excluded; tank inventory is estimated.\n\nMonth/year totals use the Pacific calendar. Missing records stay blank. Check **Tank data age** before relying on inventory. Calendar bars may include a partial final period. The two Recorded stats always run to now, while the calendar bars stop at the end of the selected time range, so the two disagree when that range ends in the past."
+      }
+    },
+    {
+      "id": 13,
+      "type": "stat",
+      "title": "Recorded this month",
+      "description": "Estimated commanded volume from the start of this Pacific calendar month to now. The dashboard time picker does not change this total.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 45
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix:US gal",
+          "decimals": 2,
+          "noValue": "No recorded data",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "import \"date\"\nimport \"timezone\"\noption location = timezone.location(name: \"America/Los_Angeles\")\n\nfrom(bucket: \"${bucket}\")\n  |> range(start: date.truncate(t: now(), unit: 1mo), stop: now())\n  |> filter(fn: (r) => r._measurement == \"chlorine_dose\" and r._field == \"volume_ml\")\n  |> filter(fn: (r) => r.device_id == \"${dosing_device}\")\n  |> filter(fn: (r) => exists r._value and r._value >= 0)\n  |> group(columns: [])\n  |> toFloat()\n  |> sum()\n  |> map(fn: (r) => ({_time: now(), _value: r._value / 3785.411784}))\n"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "stat",
+      "title": "Recorded this year",
+      "description": "Estimated commanded volume from January 1 in America/Los_Angeles to now. Earlier unrecorded doses are not included. The dashboard time picker does not change this total.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 45
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix:US gal",
+          "decimals": 2,
+          "noValue": "No recorded data",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "import \"date\"\nimport \"timezone\"\noption location = timezone.location(name: \"America/Los_Angeles\")\n\nfrom(bucket: \"${bucket}\")\n  |> range(start: date.truncate(t: now(), unit: 1y), stop: now())\n  |> filter(fn: (r) => r._measurement == \"chlorine_dose\" and r._field == \"volume_ml\")\n  |> filter(fn: (r) => r.device_id == \"${dosing_device}\")\n  |> filter(fn: (r) => exists r._value and r._value >= 0)\n  |> group(columns: [])\n  |> toFloat()\n  |> sum()\n  |> map(fn: (r) => ({_time: now(), _value: r._value / 3785.411784}))\n"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "stat",
+      "title": "Tank remaining",
+      "description": "Latest estimated inventory within 90 days. Check Tank data age before relying on this value.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 45
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix:US gal",
+          "decimals": 2,
+          "noValue": "No recorded data",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: -90d, stop: now())\n  |> filter(fn: (r) => r._measurement == \"chlorine_tank\" and r._field == \"remaining_ml\")\n  |> filter(fn: (r) => r.device_id == \"${dosing_device}\")\n  |> group(columns: [])\n  |> sort(columns: [\"_time\"])\n  |> last()\n  |> map(fn: (r) => ({_time: r._time, _value: float(v: r._value) / 3785.411784}))\n"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "type": "stat",
+      "title": "Tank remaining (%)",
+      "description": "Latest estimated percentage. Red below 20%, orange from 20% to 30%, green at 30% or more. Check Tank data age.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 12,
+        "y": 45
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 0,
+          "noValue": "No recorded data",
+          "color": {
+            "mode": "thresholds"
+          },
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 20
+              },
+              {
+                "color": "green",
+                "value": 30
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: -90d, stop: now())\n  |> filter(fn: (r) => r._measurement == \"chlorine_tank\" and r._field == \"remaining_percent\")\n  |> filter(fn: (r) => r.device_id == \"${dosing_device}\")\n  |> group(columns: [])\n  |> sort(columns: [\"_time\"])\n  |> last()\n  |> keep(columns: [\"_time\", \"_value\"])\n"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "stat",
+      "title": "Tank runway to low level",
+      "description": "Latest app estimate until its configured low-inventory threshold. No estimate is shown before the app has learned a consumption rate.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 16,
+        "y": 45
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix:days",
+          "decimals": 1,
+          "noValue": "No recorded data",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: -90d, stop: now())\n  |> filter(fn: (r) => r._measurement == \"chlorine_tank\" and r._field == \"runway_days\")\n  |> filter(fn: (r) => r.device_id == \"${dosing_device}\")\n  |> group(columns: [])\n  |> sort(columns: [\"_time\"])\n  |> last()\n  |> keep(columns: [\"_time\", \"_value\"])\n"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "stat",
+      "title": "Tank data age",
+      "description": "Elapsed time since the most recent remaining-volume snapshot. Orange after 48 hours and red after 72 hours for the daily collector.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 20,
+        "y": 45
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "noValue": "No recorded data",
+          "color": {
+            "mode": "thresholds"
+          },
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 172800
+              },
+              {
+                "color": "red",
+                "value": 259200
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: -90d, stop: now())\n  |> filter(fn: (r) => r._measurement == \"chlorine_tank\" and r._field == \"remaining_ml\")\n  |> filter(fn: (r) => r.device_id == \"${dosing_device}\")\n  |> group(columns: [])\n  |> sort(columns: [\"_time\"])\n  |> last()\n  |> map(fn: (r) => ({_time: now(), _value: float(v: int(v: now()) - int(v: r._time)) / 1000000000.0}))\n"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Chlorine per recorded dose",
+      "description": "Estimated liquid volume of each commanded pump run at its recorded dose timestamp. Repeated collection must not create extra dose events.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 50
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix:mL",
+          "decimals": 0,
+          "min": 0,
+          "noValue": "No recorded data",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 65,
+            "showPoints": "always",
+            "pointSize": 6,
+            "spanNulls": false,
+            "barAlignment": 0
+          },
+          "displayName": "Dose volume"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"chlorine_dose\" and r._field == \"volume_ml\")\n  |> filter(fn: (r) => r.device_id == \"${dosing_device}\")\n  |> filter(fn: (r) => exists r._value and r._value >= 0)\n  |> group(columns: [])\n  |> toFloat()\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> sort(columns: [\"_time\"])\n"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Tank inventory and full capacity",
+      "description": "Estimated remaining volume and configured full capacity at each collected snapshot. Refilling the tank changes inventory, not cumulative usage.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 50
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix:mL",
+          "decimals": 0,
+          "min": 0,
+          "noValue": "No recorded data",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "always",
+            "pointSize": 6,
+            "spanNulls": false,
+            "barAlignment": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "remaining_ml"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Remaining"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "capacity_ml"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Full capacity"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "gray"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"chlorine_tank\" and (r._field == \"remaining_ml\" or r._field == \"capacity_ml\"))\n  |> filter(fn: (r) => r.device_id == \"${dosing_device}\")\n  |> group(columns: [\"_field\"])\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])\n  |> sort(columns: [\"_time\"])\n"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "barchart",
+      "title": "Recorded usage by month",
+      "description": "Pacific calendar month totals, including the complete first month of the selected range. The last month ends at the selected end time. Missing months are not filled with zero.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 58
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix:US gal",
+          "decimals": 2,
+          "min": 0,
+          "noValue": "No recorded data",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "xField": "Period",
+        "orientation": "vertical",
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "showValue": "auto",
+        "stacking": "none",
+        "groupWidth": 0.7,
+        "barWidth": 0.85,
+        "barRadius": 0,
+        "fullHighlight": false,
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "import \"date\"\nimport \"timezone\"\noption location = timezone.location(name: \"America/Los_Angeles\")\n\nfrom(bucket: \"${bucket}\")\n  |> range(start: date.truncate(t: v.timeRangeStart, unit: 1mo), stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"chlorine_dose\" and r._field == \"volume_ml\")\n  |> filter(fn: (r) => r.device_id == \"${dosing_device}\")\n  |> filter(fn: (r) => exists r._value and r._value >= 0)\n  |> group(columns: [])\n  |> toFloat()\n  |> aggregateWindow(every: 1mo, fn: sum, createEmpty: false, timeSrc: \"_start\")\n  |> sort(columns: [\"_time\"])\n  |> map(fn: (r) => ({Period: string(v: date.year(t: r._time)) + \"-\" + (if date.month(t: r._time) < 10 then \"0\" else \"\") + string(v: date.month(t: r._time)), \"US gallons\": r._value / 3785.411784}))\n",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "barchart",
+      "title": "Recorded usage by year",
+      "description": "Pacific calendar year totals, including the complete first year of the selected range. The last year ends at the selected end time. Missing years are not filled with zero.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 58
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix:US gal",
+          "decimals": 2,
+          "min": 0,
+          "noValue": "No recorded data",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "xField": "Period",
+        "orientation": "vertical",
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "showValue": "auto",
+        "stacking": "none",
+        "groupWidth": 0.7,
+        "barWidth": 0.85,
+        "barRadius": 0,
+        "fullHighlight": false,
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "import \"date\"\nimport \"timezone\"\noption location = timezone.location(name: \"America/Los_Angeles\")\n\nfrom(bucket: \"${bucket}\")\n  |> range(start: date.truncate(t: v.timeRangeStart, unit: 1y), stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"chlorine_dose\" and r._field == \"volume_ml\")\n  |> filter(fn: (r) => r.device_id == \"${dosing_device}\")\n  |> filter(fn: (r) => exists r._value and r._value >= 0)\n  |> group(columns: [])\n  |> toFloat()\n  |> aggregateWindow(every: 1y, fn: sum, createEmpty: false, timeSrc: \"_start\")\n  |> sort(columns: [\"_time\"])\n  |> map(fn: (r) => ({Period: string(v: date.year(t: r._time)), \"US gallons\": r._value / 3785.411784}))\n",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Free chlorine vs advisor target (ppm)",
+      "description": "The dosing advisor's own FC target (CYA-aware, or a manual override) beside the reading it was computed from. WaterGuru targets a flat ~3 ppm regardless of stabilizer, which is too low for a stabilized or recovering pool, so these lines can legitimately disagree.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 66
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ppm",
+          "decimals": 1,
+          "min": 0,
+          "noValue": "No recorded data",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "always",
+            "pointSize": 5,
+            "spanNulls": false
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "target_ppm"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    10,
+                    10
+                  ],
+                  "fill": "dash"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"chlorine_target\")\n  |> filter(fn: (r) => r.device_id == \"${dosing_device}\")\n  |> filter(fn: (r) => r._field == \"measured_ppm\" or r._field == \"target_ppm\")\n  |> filter(fn: (r) => exists r._value and r._value >= 0)\n  |> group(columns: [\"_field\"])\n  |> toFloat()\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])\n  |> sort(columns: [\"_time\"])\n"
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Dose vs commanded pump runtime",
+      "description": "Volume and the pump runtime it was derived from, on separate axes (mL left, seconds right). Volume is runtime x the configured delivery rate, so a drift between the two means the configured rate no longer matches the pump.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "${DS_INFLUXDB}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 66
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix:mL",
+          "decimals": 0,
+          "min": 0,
+          "noValue": "No recorded data",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 55,
+            "showPoints": "always",
+            "pointSize": 6,
+            "spanNulls": false,
+            "barAlignment": 0
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "A"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Dose volume"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Commanded runtime"
+              },
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"chlorine_dose\" and r._field == \"volume_ml\")\n  |> filter(fn: (r) => r.device_id == \"${dosing_device}\")\n  |> filter(fn: (r) => exists r._value and r._value >= 0)\n  |> group(columns: [])\n  |> toFloat()\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> sort(columns: [\"_time\"])\n"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "${DS_INFLUXDB}"
+          },
+          "query": "from(bucket: \"${bucket}\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"chlorine_dose\" and r._field == \"runtime_seconds\")\n  |> filter(fn: (r) => r.device_id == \"${dosing_device}\")\n  |> filter(fn: (r) => exists r._value and r._value >= 0)\n  |> group(columns: [])\n  |> toFloat()\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> sort(columns: [\"_time\"])\n"
+        }
+      ]
+    }
+  ],
+  "refresh": "30m",
+  "schemaVersion": 39,
+  "tags": [
+    "waterguru",
+    "pool"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "bucket",
+        "type": "constant",
+        "label": "Bucket",
+        "hide": 2,
+        "query": "${VAR_BUCKET}",
+        "current": {
+          "selected": true,
+          "text": "${VAR_BUCKET}",
+          "value": "${VAR_BUCKET}"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "${VAR_BUCKET}",
+            "value": "${VAR_BUCKET}"
+          }
+        ]
+      },
+      {
+        "name": "dosing_device",
+        "type": "constant",
+        "label": "Dosing device",
+        "hide": 2,
+        "query": "${VAR_DOSING_DEVICE}",
+        "current": {
+          "selected": true,
+          "text": "${VAR_DOSING_DEVICE}",
+          "value": "${VAR_DOSING_DEVICE}"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "${VAR_DOSING_DEVICE}",
+            "value": "${VAR_DOSING_DEVICE}"
+          }
+        ]
+      }
+    ]
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "WaterGuru Pool",
+  "uid": "waterguru-pool",
+  "version": 5,
+  "weekStart": "",
+  "id": null
+}

@@ -1,0 +1,8 @@
+from(bucket: "waterguru")
+  |> range(start: -90d, stop: now())
+  |> filter(fn: (r) => r._measurement == "chlorine_tank" and r._field == "remaining_ml")
+  |> filter(fn: (r) => r.device_id == "${dosing_device}")
+  |> group(columns: [])
+  |> sort(columns: ["_time"])
+  |> last()
+  |> map(fn: (r) => ({_time: r._time, _value: float(v: r._value) / 3785.411784}))

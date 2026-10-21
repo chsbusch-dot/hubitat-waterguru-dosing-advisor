@@ -1,0 +1,7 @@
+from(bucket: "waterguru")
+  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)
+  |> filter(fn: (r) => r._measurement == "chlorine_tank" and (r._field == "remaining_ml" or r._field == "capacity_ml"))
+  |> filter(fn: (r) => r.device_id == "${dosing_device}")
+  |> group(columns: ["_field"])
+  |> keep(columns: ["_time", "_value", "_field"])
+  |> sort(columns: ["_time"])

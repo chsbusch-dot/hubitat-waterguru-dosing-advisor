@@ -1,0 +1,53 @@
+name: waterguru-grafana
+
+# The InfluxDB collector and Grafana dashboards in waterguru-grafana/ (Python). Same gate the
+# standalone repo ran: ruff, mypy, pytest, then the hash-locked production install and an import
+# check against it. Its attribute contract test fetches the published tile driver from this repo's
+# main (or reads WGDA_REPO) and fails in CI rather than skipping when it cannot.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: waterguru-grafana
+
+jobs:
+  collector:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            waterguru-grafana/pyproject.toml
+            waterguru-grafana/requirements.lock
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Ruff (lint)
+        run: ruff check .
+
+      - name: Mypy (typecheck)
+        run: mypy
+
+      - name: Pytest (tests)
+        run: pytest
+
+      # The production image installs exactly requirements.lock, hash-checked. Verify that
+      # lock is installable and that the app imports against it (no dev extras).
+      - name: Verify the pinned lock installs and the app imports
+        run: |
+          python -m venv /tmp/lockcheck
+          /tmp/lockcheck/bin/pip install --upgrade pip
+          /tmp/lockcheck/bin/pip install --require-hashes -r requirements.lock
+          PYTHONPATH=src /tmp/lockcheck/bin/python -c \
+            "import waterguru_poller.poller, waterguru_poller.dosing, waterguru_poller.mapping"

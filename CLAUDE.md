@@ -24,6 +24,7 @@ against the stubbed hub (see Tests), and no test may touch a real hub or pump.
 | `tools/zwave_capture.py` | Passive Z-Wave log capture and `--analyze` of a raw log. Reads both zwaveLogsocket formats: per-frame JSON (to 2026-10-09) and the plaintext dump (hub 2.5.2.135 on) | no |
 | `docs/handoff-2026-10-03.md` | Hub and Z-Wave context as of 2026-10-03 (ZEN05 pump plug, profiler, the missed 19:45 dose) | n/a |
 | `tests/` | Attribute contract check, Groovy execution tests against a stubbed hub, Z-Wave capture parser tests | n/a |
+| `waterguru-grafana/` | Optional InfluxDB collector (Python, Docker) and Grafana dashboard; reads the tile attributes. Own MIT license, own tests, CI workflow `waterguru-grafana.yml` | no |
 
 ## Tests
 
@@ -40,6 +41,13 @@ bash tests/groovy/run.sh                    # child app + Pump Power Profiler vs
 ```
 
 None touches a hub or a pump.
+
+The collector in `waterguru-grafana/` has its own gate (CI workflow `waterguru-grafana.yml`):
+
+```bash
+cd waterguru-grafana && python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+.venv/bin/ruff check . && .venv/bin/mypy && .venv/bin/pytest   # Python 3.11 or later (CI runs 3.12)
+```
 
 The stub models what was measured on the live hub (2026-10-04): a report whose value did not change
 reaches `filterEvents:false` subscribers as an event with a fresh date but never re-dates
@@ -67,10 +75,12 @@ anchors are exact strings, so re-anchor a mutant when the code under it changes.
 ## No em or en dashes in what users read
 
 Text a user reads carries no em dash (U+2014) or en dash (U+2013): the app pages, notices and
-advice text, the tile HTML, `README.md` and `docs/`. Use a comma, period, colon or parentheses
-instead. Code, code comments, commit messages and PR bodies are exempt. The Groovy suite checks
-the notices and page text ("2.5.0 change 6"); for the docs run
-`rg '[\x{2014}\x{2013}]' README.md docs`, which must print nothing.
+advice text, the tile HTML, `README.md`, `docs/`, and the collector's docs and dashboard in
+`waterguru-grafana/`. Use a comma, period, colon or parentheses instead. Code, code comments,
+commit messages and PR bodies are exempt. The Groovy suite checks the notices and page text
+("2.5.0 change 6"); for the docs run
+`rg '[\x{2014}\x{2013}]' README.md docs waterguru-grafana/README.md waterguru-grafana/docs waterguru-grafana/grafana`,
+which must print nothing (the collector's Python source is code and exempt).
 
 ## Branches and PRs
 

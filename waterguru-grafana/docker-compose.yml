@@ -1,0 +1,69 @@
+# WaterGuru daily poller: a one-shot compose project.
+#
+# It joins the SAME docker network as an existing InfluxDB 2 container, so it writes to
+# http://influxdb:8086 internally and InfluxDB never has to be exposed on the LAN. It publishes
+# no host port. It runs once and exits; schedule it daily (cron, a NAS task scheduler, a
+# systemd timer) with `docker compose run --rm waterguru-poll`.
+#
+# Secrets come from the environment: a `.env` file next to this file (copy .env.example), or a
+# container manager's environment editor. Nothing secret is committed.
+
+services:
+  waterguru-poll:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Build an immutable, versioned tag (set WATERGURU_IMAGE_TAG, e.g. 0.1.0-<git-sha>) so a
+    # rollback means pointing this back at the previous tag and recreating. Never delete the
+    # running image before its replacement has built and passed a dry run: that leaves
+    # nothing to roll back to.
+    image: waterguru-poller:${WATERGURU_IMAGE_TAG:-latest}
+    container_name: waterguru-poll
+    restart: "no"
+    environment:
+      # --- config (safe to keep in the file) ---
+      # Every one of these is a documented override: the value after `:-` is the documented
+      # default, and a value set on the host (.env or the environment editor) wins.
+      # Without the passthrough, a host value never reaches the container.
+      INFLUX_URL: ${INFLUX_URL:-http://influxdb:8086}
+      INFLUX_ORG: ${INFLUX_ORG:-home}
+      INFLUX_BUCKET: ${INFLUX_BUCKET:-waterguru}
+      WG_STATE_DIR: ${WG_STATE_DIR:-/state}
+      WG_BACKFILL_DAYS: ${WG_BACKFILL_DAYS:-365}
+      WG_WINDOW_DAYS: ${WG_WINDOW_DAYS:-14}
+      WG_OVERLAP_HOURS: ${WG_OVERLAP_HOURS:-48}
+      WG_MAX_RESULTS: ${WG_MAX_RESULTS:-500}
+      WG_ENSURE_BUCKET: ${WG_ENSURE_BUCKET:-true}
+      WG_DRY_RUN: ${WG_DRY_RUN:-false}
+      WG_LOG_LEVEL: ${WG_LOG_LEVEL:-INFO}
+      HUBITAT_TIMEOUT: ${HUBITAT_TIMEOUT:-30}
+      # --- secrets: set the VALUES in .env or the environment editor, never in this file ---
+      WATERGURU_EMAIL: ${WATERGURU_EMAIL}
+      WATERGURU_PASSWORD: ${WATERGURU_PASSWORD}
+      INFLUX_TOKEN: ${INFLUX_TOKEN}
+      # --- chlorine dose/tank inventory (optional; unset token = skip that step) ---
+      # The chlorine/tank dashboard panels need chlorine_dose and chlorine_tank, which
+      # the WaterGuru cloud does not expose. Those come from the WaterGuru Dosing Advisor
+      # tile on a Hubitat hub, read through the hub's MCP server. Leave the token unset to
+      # keep chemistry only (the collector logs why it skipped). With the token set, the
+      # URL and the tile's device id are required and have no default.
+      # NOTE: without this passthrough the variable never reaches the container, so the
+      # collector silently skips no matter what is in .env.
+      HUBITAT_MCP_TOKEN: ${HUBITAT_MCP_TOKEN:-}
+      HUBITAT_MCP_URL: ${HUBITAT_MCP_URL:-}
+      WG_DOSING_DEVICE_ID: ${WG_DOSING_DEVICE_ID:-}
+    volumes:
+      - waterguru-state:/state
+    networks:
+      - hubitat
+
+volumes:
+  waterguru-state:
+
+networks:
+  # The existing docker network your InfluxDB (and Grafana) containers are on. The default
+  # is the network of a compose project named `hubitat-stack`; set HUBITAT_NETWORK to yours
+  # (`docker network ls`).
+  hubitat:
+    external: true
+    name: ${HUBITAT_NETWORK:-hubitat-stack_hubitat-net}
