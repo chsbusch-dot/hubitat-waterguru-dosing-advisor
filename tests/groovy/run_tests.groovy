@@ -3225,9 +3225,10 @@ def LIVE_OCT5 = [CassettePercent: 12.0G, CassetteStatus: "YELLOW", CassetteTimeL
                  doseAdvice: "Follow these steps to replace cassette\nDecrease dosing of liquid chlorine product.\nMeasure again to see the advice",
                  chlorineProductPct: 12.5G, cassetteType: "C5", cassetteInfo: "C5 · installed Sep 12, 2026"]
 
-/** 2.5.2: WaterGuru signals that do not say FC is high. LIVE_OCT5's own doseAdvice ("Decrease dosing of liquid
- *  chlorine product.") holds the pump since the FC ceiling hold, so a fixture that should pump starts from
- *  LIVE_OCT5 + WG_FC_NOT_HIGH: the live advice without that line, no alert and a GREEN grade. */
+/** 2.5.2: WaterGuru signals that do not say FC is high: the live advice without LIVE_OCT5's "Decrease dosing of
+ *  liquid chlorine product." line, no alert and a GREEN grade. That advice does not hold the pump (the hold is
+ *  narrow, Chris 2026-10-23), but the fixtures that pump start from LIVE_OCT5 + WG_FC_NOT_HIGH so they keep testing
+ *  only what they tested before the FC ceiling hold. */
 def WG_FC_NOT_HIGH = [statusMsg: "None", freeChlorineStatus: "GREEN",
                       doseAdvice: "Follow these steps to replace cassette\nMeasure again to see the advice"]
 
@@ -5048,7 +5049,6 @@ def ceilingApp = { app, String mode = "AUTO", BigDecimal target = 14.0G ->
 def OCT22_SIGNALS = [statusMsg: "RED Alert (1): Free Chlorine very high\n", freeChlorineStatus: "RED",
                      doseAdvice: "Decrease dosing of liquid chlorine product."]
 def CEILING_10 = "FC read 10.0 ppm, and a WaterGuru reading of 10.0 or more can mean higher, so it cannot show FC is below the target; check the reading before dosing"
-def CEILING_DECREASE = "WaterGuru advises to decrease chlorine dosing; check the reading before dosing"
 def ceilingBlocked = { app, String why ->
     expect(app.noticesMatching("Chlorine dose BLOCKED: ") == ["WaterGuru dosing: Chlorine dose BLOCKED: ${why}".toString()],
            "the block notice, this reason alone: ${app.noticesMatching('BLOCKED')}")
@@ -5085,7 +5085,7 @@ check("2.5.2 (b): AUTO, target 14, FC reads 9.3 with no other signal: pumped as 
     expect(bd(app.state.activeDose.mlRaw) == 3000G, "the capped amount: ${app.state.activeDose}")
 }
 
-check("2.5.2 (c): target 9, FC 8.0 with a WaterGuru 'Free Chlorine very high' alert: BLOCKED; a pH alert does not hold") {
+check("2.5.2 (c): target 9, FC 8.0 with a WaterGuru 'Free Chlorine very high' alert: BLOCKED; a plain 'high' FC alert and a pH 'very high' alert do not hold") {
     def app = newApp()
     def d = ceilingApp(app, "AUTO", 9.0G)
     slamSample(app, d.wg, OCT10_SAMPLE + [freeChlorine: 8.0G, statusMsg: "RED Alert (1): Free Chlorine very high\n"])
@@ -5094,10 +5094,10 @@ check("2.5.2 (c): target 9, FC 8.0 with a WaterGuru 'Free Chlorine very high' al
     def high = newApp()
     def dh = ceilingApp(high, "AUTO", 9.0G)
     slamSample(high, dh.wg, OCT10_SAMPLE + [freeChlorine: 8.0G, statusMsg: "YELLOW Alert (1): pH high\nYELLOW Alert (2): Free Chlorine high\n"])
-    ceilingBlocked(high, "WaterGuru alerts that free chlorine is high; check the reading before dosing")
+    ceilingPumped(high, dh)
     def ph = newApp()
     def dp = ceilingApp(ph, "AUTO", 9.0G)
-    slamSample(ph, dp.wg, OCT10_SAMPLE + [freeChlorine: 8.0G, statusMsg: "YELLOW Alert (1): pH high\n"])
+    slamSample(ph, dp.wg, OCT10_SAMPLE + [freeChlorine: 8.0G, statusMsg: "RED Alert (1): pH very high\n"])
     ceilingPumped(ph, dp)
 }
 
@@ -5110,12 +5110,11 @@ check("2.5.2 (d): TFP target 3.8, FC 2.4 graded RED with a 'very low' alert and 
     ceilingPumped(app, d)
 }
 
-check("2.5.2 (e): target 9, FC 6.0 with WaterGuru's advice to decrease liquid chlorine: BLOCKED; a decrease of another product does not hold") {
+check("2.5.2 (e): target 9, FC 6.0 with WaterGuru's advice to decrease liquid chlorine or pH reducer: pumped (its advice does not hold)") {
     def app = newApp()
     def d = ceilingApp(app, "AUTO", 9.0G)
     slamSample(app, d.wg, OCT10_SAMPLE + [freeChlorine: 6.0G, doseAdvice: LIVE_OCT5.doseAdvice])
-    ceilingBlocked(app, CEILING_DECREASE)
-    nothingBooked(app, d)
+    ceilingPumped(app, d)
     def other = newApp()
     def dq = ceilingApp(other, "AUTO", 9.0G)
     slamSample(other, dq.wg, OCT10_SAMPLE + [freeChlorine: 6.0G, doseAdvice: "Decrease dosing of pH reducer product."])
@@ -5130,14 +5129,13 @@ check("2.5.2 (f): target 14, FC 8.0 graded RED (above WaterGuru's own 3.0 target
     nothingBooked(app, d)
 }
 
-check("2.5.2 (g): SLAM, FC 5.2 against 13.2, with the Oct 5 advice to decrease: held too (WaterGuru grades against its own 3.0 target)") {
-    // Visibility, not a wish: WaterGuru's advice and alerts are not CYA aware, so in SLAM, or with a manual target
-    // above about 5 ppm, they hold most doses. The brief asks for the fail-safe side; the PR names the cost.
+check("2.5.2 (g): SLAM, FC 5.2 against 13.2, with the Oct 5 advice to decrease: pumped (WaterGuru grades its advice against its own 3.0 target)") {
+    // WaterGuru's advice and plain high alert are not CYA aware, so holding on them would hold most doses in SLAM or
+    // with a manual target above about 5 ppm. Chris chose the narrow hold (2026-10-23): they do not hold.
     def app = newApp()
     def d = slamApp(app)
     slamSample(app, d.wg, OCT10_SAMPLE + [doseAdvice: LIVE_OCT5.doseAdvice])
-    ceilingBlocked(app, CEILING_DECREASE)
-    nothingBooked(app, d)
+    ceilingPumped(app, d)
 }
 
 check("2.5.2 (h): a target above 10 is kept and warned on the page and in the advice; 10 or below, TFP and no dose are quiet") {
@@ -5189,6 +5187,23 @@ check("2.5.2 (i): the Oct 22 replay (AUTO, target 14, FC 10.0, very high alert, 
     expect(r.doseSuspect == null && r.text.contains("  ⚠ ${CEILING_10}.") && !r.text.contains("Not pumped") &&
            !da.pump.commands.contains("on") && adv.noticesMatching("BLOCKED").isEmpty(),
            "ADVISORY shows the reason, starts nothing: ${r.doseSuspect} / ${da.pump.commands} / ${r.text}")
+}
+
+check("2.5.2 (j): target 14, FC 8.0 with a plain 'Free Chlorine high' YELLOW alert and the Oct 5 advice to decrease: pumped") {
+    // What a CYA aware target of 14 sees on most nights: WaterGuru calls FC 8 high against its own 3.0 target
+    def app = newApp()
+    def d = ceilingApp(app)
+    slamSample(app, d.wg, OCT10_SAMPLE + [freeChlorine: 8.0G, statusMsg: "YELLOW Alert (1): Free Chlorine high\n",
+                                         freeChlorineStatus: "YELLOW", doseAdvice: LIVE_OCT5.doseAdvice])
+    ceilingPumped(app, d)
+}
+
+check("2.5.2 (k): SLAM, FC 0.0 with a 'Free Chlorine very high' alert: the 0.0 reason wins over the ceiling") {
+    def app = newApp()
+    def d = slamApp(app)
+    slamSample(app, d.wg, OCT10_SAMPLE + [freeChlorine: 0.0G, statusMsg: "RED Alert (1): Free Chlorine very high\n"])
+    ceilingBlocked(app, SLAM_ZERO)
+    nothingBooked(app, d)
 }
 
 // =========================================================================== WOR-716 (Pump Power Profiler 1.2.0)

@@ -18,8 +18,9 @@ Pump Power Profiler 1.2.0 sampling behaviour each and WM1-WM17 one wear-monitor 
 U1-U4 one 2.5.0 save rule each, N1-N6 one notice-slot or stopOpen() rule each and D1-D5 one dash put back each
 (D5 in the parent app), and for WOR-857 C1-C13 one 2.5.1 behaviour each (caps outside SLAM, SLAM off by
 default, the profiler in the manifest; S1-S3, TG1-TG7 re-anchored to doseCap/fcReadingProblem, S2 retired),
-and for WOR-921 H1-H15 one 2.5.2 FC-ceiling rule each (the 10.0 reading, the WaterGuru high signals, the
-target warning, two dashes put back);
+and for WOR-921 H1-H16 one 2.5.2 FC-ceiling rule each (the 10.0 reading, the WaterGuru very high signals, the
+plain high alert and the decrease advice kept out, the target warning, two dashes put back, and the 0.0 / big
+drop reason winning over the ceiling);
 every one of those must be killed by the tests that guard it.
 
 A mutant edits the child app unless it is declared with mutp(), which edits the profiler, or with
@@ -607,18 +608,24 @@ mut("H1", "killed", "a reading of 10.0 or more pumps again (Oct 22: 10.0 stored,
     ("    if (fc >= FC_READING_CEILING_PPM) {\n", "    if (false) {\n"))
 mut("H2", "killed", "only a reading above 10.0 holds (the 10.0 the integration stores pumps)",
     ("    if (fc >= FC_READING_CEILING_PPM) {\n", "    if (fc > FC_READING_CEILING_PPM) {\n"))
-mut("H3", "killed", "a WaterGuru 'Free Chlorine high' alert no longer holds the pump",
-    ("        if (l.contains(\"free chlorine\") && l.contains(\"high\")) {\n", "        if (false) {\n"))
-mut("H4", "killed", "any 'high' alert holds the pump (a pH high alert blocks the chlorine dose)",
-    ("        if (l.contains(\"free chlorine\") && l.contains(\"high\")) {\n", "        if (l.contains(\"high\")) {\n"))
+mut("H3", "killed", "a WaterGuru 'Free Chlorine very high' alert no longer holds the pump",
+    ("        if (l.contains(\"free chlorine\") && l.contains(\"very high\")) {\n", "        if (false) {\n"))
+mut("H4", "killed", "a plain 'Free Chlorine high' alert holds again (graded against WaterGuru's own 3.0 target)",
+    ("        if (l.contains(\"free chlorine\") && l.contains(\"very high\")) {\n",
+     "        if (l.contains(\"free chlorine\") && l.contains(\"high\")) {\n"))
 mut("H5", "killed", "a RED grade holds the pump on either side (a very low FC is not dosed)",
     ("?.equalsIgnoreCase(\"RED\") && fc >= wgTarget) {\n", "?.equalsIgnoreCase(\"RED\")) {\n"))
 mut("H6", "killed", "a RED grade above WaterGuru's own target no longer holds the pump",
     ("?.equalsIgnoreCase(\"RED\") && fc >= wgTarget) {\n", "?.equalsIgnoreCase(\"RED\") && false) {\n"))
-mut("H7", "killed", "WaterGuru's advice to decrease chlorine no longer holds the pump",
-    ("        if (l.contains(\"decrease\") && l.contains(\"chlorine\")) {\n", "        if (false) {\n"))
-mut("H8", "killed", "advice to decrease any product holds the pump (a pH reducer line blocks the chlorine dose)",
-    ("        if (l.contains(\"decrease\") && l.contains(\"chlorine\")) {\n", "        if (l.contains(\"decrease\")) {\n"))
+mut("H7", "killed", "any 'very high' alert holds the pump (a pH very high alert blocks the chlorine dose)",
+    ("        if (l.contains(\"free chlorine\") && l.contains(\"very high\")) {\n", "        if (l.contains(\"very high\")) {\n"))
+mut("H8", "killed", "WaterGuru's advice to decrease chlorine holds the pump again (graded against its own 3.0 target)",
+    ("    return null\n}\n\n/** APPROVAL and AUTO run the pump",
+     "    for (String line : (attrRaw(\"doseAdvice\") ?: \"\").split(\"\\n\")) {\n"
+     "        String l = line.toLowerCase()\n"
+     "        if (l.contains(\"decrease\") && l.contains(\"chlorine\")) return \"WaterGuru advises to decrease chlorine dosing\"\n"
+     "    }\n"
+     "    return null\n}\n\n/** APPROVAL and AUTO run the pump"))
 mut("H9", "killed", "the ceiling check is computed but never holds the pump",
     ("        if (suspect == null && pumpDosingMode()) suspect = ceiling\n", "        if (false) suspect = ceiling\n"))
 mut("H10", "killed", "ADVISORY says 'Not pumped' too (the hold is not tied to a mode that pumps)",
@@ -633,6 +640,9 @@ mut("H14", "killed", "an em dash is back in the page warning",
     ("and that dose is advice only. \" +", "and that dose is advice only — \" +"))
 mut("H15", "killed", "an em dash is back in the advice warning",
     ("is never pumped; confirm FC", "is never pumped — confirm FC"))
+mut("H16", "killed", "the ceiling reason wins over the 0.0 / big drop reason when both apply",
+    ("        if (suspect == null && pumpDosingMode()) suspect = ceiling\n",
+     "        if (ceiling != null && pumpDosingMode()) suspect = ceiling\n"))
 
 def build(name):
     expect, desc, edits, target = V[name]
