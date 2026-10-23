@@ -27,6 +27,19 @@
  * All doses are ESTIMATES. Always confirm with your own test kit before adding.
  *
  * Version history
+ *   2.5.2 - FC ceiling hold (WOR-921). On 2026-10-22 the integration's 19:45 poll stored FC 10.0 while the
+ *           WaterGuru app showed 16.2; with a manual target of 14 in AUTO the app pumped 3000 mL. From 2026-10-15
+ *           that poll read exactly 10.0 (WaterGuru's FREE_CL RED_MAX) on every high night, so a 10.0 means "10 or
+ *           more" and cannot show FC is below a higher target. In APPROVAL and AUTO, in or out of SLAM, a dose is
+ *           now held (advice only, "Not pumped: ..." and the BLOCKED notice) when FC reads 10.0 or more, when
+ *           the same sample's statusMsg has a free chlorine high or very high alert, when freeChlorineStatus is
+ *           RED with FC at or above WaterGuru's own FC target (RED below it is very low FC, which still doses),
+ *           or when doseAdvice says to decrease chlorine (fcCeilingProblem, FC_READING_CEILING_PPM 10.0). The 0.0
+ *           and big drop guard runs first, unchanged. ADVISORY shows the same reason with its advice. A target
+ *           above 10 (manual, or SLAM from CYA) is kept, not refused, and warned in the advice and on the page:
+ *           refusing it would silently drop a deliberate target to the TFP one, and a reading below 10 still
+ *           shows FC is below it. The statusMsg, freeChlorineStatus and doseAdvice attributes are read, not
+ *           subscribed. The subscribe set is unchanged (SUBSCRIPTION_SET 2).
  *   2.5.1 - A dose over the pump limits is capped outside SLAM too, not blocked whole (WOR-857). On
  *           2026-10-20 the app asked 3164 mL against the 3000 mL single-dose limit and nothing was pumped, so the
  *           deficit grew. In APPROVAL and AUTO the dose is now the smallest of the deficit, the single-dose
@@ -317,7 +330,7 @@
 
 import groovy.transform.Field
 
-def appVersion() { "2.5.1" }
+def appVersion() { "2.5.2" }
 
 definition(
     name:        "WaterGuru Dosing Advisor Pool",
@@ -458,6 +471,12 @@ preferences {
 // or with no previous sample, only the 0.0 rule applies.
 @Field static final BigDecimal FC_MAX_DROP_PPM = 4.0G
 @Field static final int        FC_PREVIOUS_SAMPLE_MAX_HOURS = 48
+// FC ceiling hold (2.5.2, WOR-921): a WaterGuru FC reading cannot show that FC is still below a target above this.
+// 10.0 is WaterGuru's FREE_CL RED_MAX, and from 2026-10-15 to 10-22 the integration's 19:45 poll read exactly 10.0
+// whenever the real FC was 10.2 to 16.2 (Oct 22: target 14, 3000 mL pumped into 16.2). So a reading at or above
+// it, or a WaterGuru high FC signal of the same sample (statusMsg alert, freeChlorineStatus RED on the high side,
+// doseAdvice to decrease chlorine), holds the pump in APPROVAL and AUTO, in or out of SLAM: fcCeilingProblem.
+@Field static final BigDecimal FC_READING_CEILING_PPM = 10.0G
 
 // ---------------------------------------------------------------------------
 // UI
@@ -509,6 +528,8 @@ def mainPage() {
             input "fcTargetOverride", "decimal",
                 title: "Manual FC target override (ppm); blank = compute from CYA above",
                 required: false
+            String ceilingWarning = fcCeilingPageWarning()
+            if (ceilingWarning) paragraph ceilingWarning
         }
 
         section("<b>Chlorine runway (algae forecast)</b>") {
@@ -763,6 +784,27 @@ private String slamPageBanner() {
     return "<div style='background:#c0392b;color:#ffffff;padding:10px;border-radius:6px;font-weight:bold'>" +
            "&#128680; SLAM MODE IS ON: the free-chlorine target is deliberately elevated to clear algae.${tgt} " +
            "Switch it off once the pool is clear and holds chlorine overnight.</div>"
+}
+
+/**
+ * Red page banner when the FC target is above FC_READING_CEILING_PPM, or null (2.5.2, WOR-921). The target is chosen
+ * as computeFc chooses it (a valid manual target, else SLAM or TFP from CYA); with neither it is WaterGuru's own,
+ * which is never above 10. The target is kept: the banner says what the ceiling hold does to it.
+ */
+private String fcCeilingPageWarning() {
+    BigDecimal manual = numSet(fcTargetOverride) ? toBD(fcTargetOverride) : null
+    BigDecimal cya = attrNum("cyanuricAcid")
+    BigDecimal target = null
+    if (manual != null && manual > 0 && manual <= 50G) target = manual
+    else if (cya != null && cya > 0) {
+        target = cya * (slamMode == true ? (numSet(slamFactor) ? (slamFactor as BigDecimal) : 0.40G) : TFP_TARGET_FACTOR)
+    }
+    if (target == null || target <= FC_READING_CEILING_PPM) return null
+    return "<div style='background:#c0392b;color:#ffffff;padding:10px;border-radius:6px;font-weight:bold'>" +
+           "&#9888; FC target ${n1(target)} ppm is above ${n0(FC_READING_CEILING_PPM)} ppm: a WaterGuru reading of " +
+           "${n1(FC_READING_CEILING_PPM)} can mean ${n0(FC_READING_CEILING_PPM)} or more. The pump holds whenever FC reads " +
+           "${n1(FC_READING_CEILING_PPM)} or more or WaterGuru signals high free chlorine, and that dose is advice only. " +
+           "Confirm FC with your own test kit.</div>"
 }
 
 private String dosingModeHelp() {
@@ -1220,8 +1262,8 @@ private String dailyChlorineSummary(Map result) {
     String loss = safeFcLossText("daily summary") { fcLossDigestText() } ?: ""
     String readings = "FC ${n1(result?.fcVal)} ppm; target ${n1(result?.fcTarget)} ppm; pH ${n2(result?.pH)}.${loss}"
     String tank = tankSummaryPlain()
-    // A SLAM reading the guard refused pumps nothing, so the summary (sent before the BLOCKED notice) must not
-    // read as a dose or promise the rest of a capped one.
+    // A SLAM reading the guard refused, or one the 2.5.2 FC ceiling hold refused, pumps nothing, so the summary
+    // (sent before the BLOCKED notice) must not read as a dose or promise the rest of a capped one.
     if (result?.doseSuspect) return "Daily pool chlorine: not pumped. ${result.doseSuspect}. ${readings} ${tank}${sampled}"
     if (result?.doseMl != null && result?.runSeconds != null) {
         BigDecimal rate = firstNum(pumpRateMlPerMin, DEFAULT_PUMP_RATE_ML_MIN)
@@ -1426,7 +1468,7 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
     BigDecimal doseMl = null
     Integer runSeconds = null
     Map cap = null             // APPROVAL/AUTO: the dose the limits allow, when they are smaller than the deficit
-    String suspect = null      // SLAM: why this reading looks implausible; the dose is advice only, never pumped
+    String suspect = null      // why this reading is not pumped (SLAM plausibility, 2.5.2 ceiling hold); advice only
     String uncapped = null     // outside SLAM: why an over-limit dose was not capped; it is then blocked whole
 
     // Determine the FC target.
@@ -1455,6 +1497,11 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
         target = attrNum("freeChlorineTarget") ?: 3G
         basis = "CYA unavailable; using WaterGuru FC target ${n1(target)} ppm (not CYA-aware)"
         warnings << "CYA reading unavailable; FC target is not CYA-aware. Add a manual FC target or check the sensor."
+    }
+    // 2.5.2: a target above the reading ceiling is kept (a deliberate SLAM or manual target), but the reading cannot
+    // confirm FC near it, so the advice says so. The hold itself is fcCeilingProblem, on the reading.
+    if (target > FC_READING_CEILING_PPM) {
+        warnings << "FC target ${n1(target)} ppm is above ${n0(FC_READING_CEILING_PPM)} ppm: a WaterGuru reading of ${n1(FC_READING_CEILING_PPM)} can mean ${n0(FC_READING_CEILING_PPM)} or more, so it cannot confirm FC is still below this target. A reading of ${n1(FC_READING_CEILING_PPM)} or a WaterGuru high FC signal is never pumped; confirm FC with your own test kit."
     }
 
     if (fc == null) {
@@ -1501,7 +1548,12 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
         // The cap removed the accidental guard the single-dose and runtime limits gave against a bad reading
         // (a stuck 0.0 would pump the capped amount every night), so SLAM checks the reading itself.
         if (slam && pumpDosingMode()) suspect = fcReadingProblem(fc, true)
+        // 2.5.2: a reading WaterGuru cannot confirm below the target, or one it grades as high, is never pumped, in or
+        // out of SLAM. ADVISORY pumps nothing but shows the same reason with its advice.
+        String ceiling = fcCeilingProblem(fc)
+        if (suspect == null && pumpDosingMode()) suspect = ceiling
         if (suspect != null) lines << "  ⚠ Not pumped: ${suspect}."
+        else if (ceiling != null) lines << "  ⚠ ${ceiling}."
         chip = "${optional ? 'Top up' : 'Add'} ${shortVol(floz)} chlorine"
         action = true
         if (ppmGap > 8G) warnings << "Large chlorine addition (+${n1(ppmGap)} ppm): add in stages and retest between doses."
@@ -1553,6 +1605,41 @@ private String fcReadingProblem(BigDecimal fc, boolean slam) {
     BigDecimal drop = before - fc
     if (drop > FC_MAX_DROP_PPM) {
         return "FC fell ${n1(drop)} ppm since the previous sample (${n1(before)} to ${n1(fc)} ppm), which ${where}looks like a bad reading; check it before dosing"
+    }
+    return null
+}
+
+/**
+ * Why this FC reading cannot be trusted as below the target, or null (2.5.2, WOR-921). Only computeFc calls it, on
+ * a dose: the reason holds the pump in APPROVAL and AUTO, in or out of SLAM, and ADVISORY shows it with its advice.
+ *
+ * A reading at or above FC_READING_CEILING_PPM (a WaterGuru 10.0 can mean 10 or more), or a high FC signal from
+ * WaterGuru on the same sample: a statusMsg alert line on free chlorine that says high, freeChlorineStatus RED with
+ * FC at or above WaterGuru's own target (RED below it is very low FC, which still doses), or doseAdvice telling to
+ * decrease chlorine. The integration writes these with the sample, before LastMeasurement since its 2.4.2, and
+ * processNewSample runs 20 s after LastMeasurement, so they belong to this reading. Plain contains() checks, no
+ * regex. A signal left over from an older sample also holds: a held dose is the safe side.
+ */
+private String fcCeilingProblem(BigDecimal fc) {
+    if (fc == null) return null
+    if (fc >= FC_READING_CEILING_PPM) {
+        return "FC read ${n1(fc)} ppm, and a WaterGuru reading of ${n1(FC_READING_CEILING_PPM)} or more can mean higher, so it cannot show FC is below the target; check the reading before dosing"
+    }
+    for (String line : (attrRaw("statusMsg") ?: "").split("\n")) {
+        String l = line.toLowerCase()
+        if (l.contains("free chlorine") && l.contains("high")) {
+            return "WaterGuru alerts that free chlorine is ${l.contains('very high') ? 'very high' : 'high'}; check the reading before dosing"
+        }
+    }
+    BigDecimal wgTarget = attrNum("freeChlorineTarget") ?: 3G
+    if (attrRaw("freeChlorineStatus")?.trim()?.equalsIgnoreCase("RED") && fc >= wgTarget) {
+        return "WaterGuru grades FC ${n1(fc)} ppm RED, above its own target of ${n1(wgTarget)} ppm, so it reads as too high; check the reading before dosing"
+    }
+    for (String line : (attrRaw("doseAdvice") ?: "").split("\n")) {
+        String l = line.toLowerCase()
+        if (l.contains("decrease") && l.contains("chlorine")) {
+            return "WaterGuru advises to decrease chlorine dosing; check the reading before dosing"
+        }
     }
     return null
 }
@@ -1730,7 +1817,8 @@ private void handleDoseDecision(Map result, String trigger) {
         return
     }
     if (mode == "APPROVAL") {
-        // An implausible SLAM reading is not offered for approval: the same block notice as in AUTO, nothing queued.
+        // An implausible SLAM reading, or one the 2.5.2 FC ceiling hold refuses, is not offered for approval: the same
+        // block notice as in AUTO, nothing queued.
         if (result.doseSuspect) {
             state.remove("pendingDose")
             String msg = "Chlorine dose BLOCKED: ${result.doseSuspect}"
@@ -3004,7 +3092,8 @@ def emergencyPumpOff() {
 
 private List doseSafetyBlocks(Map result) {
     def blocks = []
-    // SLAM plausibility (computeFc): a 0.0 reading or a drop of more than 4 ppm is checked before it is dosed.
+    // SLAM plausibility (computeFc): a 0.0 reading or a drop of more than 4 ppm is checked before it is dosed. The
+    // 2.5.2 FC ceiling hold (fcCeilingProblem) arrives the same way, in or out of SLAM.
     if (result?.doseSuspect) blocks << result.doseSuspect.toString()
     if (!pumpSwitch) blocks << "no dedicated pump switch selected"
     // A code update runs no updated(): the subscriptions may be the previous code's until Done is pressed.

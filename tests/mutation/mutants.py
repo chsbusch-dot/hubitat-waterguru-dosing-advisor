@@ -17,7 +17,9 @@ each (WOR-731), Y1-Y2 one 2.4.5 change each (WOR-739), Z1-Z2 one 2.4.6 item each
 Pump Power Profiler 1.2.0 sampling behaviour each and WM1-WM17 one wear-monitor rule each, and for WOR-741
 U1-U4 one 2.5.0 save rule each, N1-N6 one notice-slot or stopOpen() rule each and D1-D5 one dash put back each
 (D5 in the parent app), and for WOR-857 C1-C13 one 2.5.1 behaviour each (caps outside SLAM, SLAM off by
-default, the profiler in the manifest; S1-S3, TG1-TG7 re-anchored to doseCap/fcReadingProblem, S2 retired);
+default, the profiler in the manifest; S1-S3, TG1-TG7 re-anchored to doseCap/fcReadingProblem, S2 retired),
+and for WOR-921 H1-H15 one 2.5.2 FC-ceiling rule each (the 10.0 reading, the WaterGuru high signals, the
+target warning, two dashes put back);
 every one of those must be killed by the tests that guard it.
 
 A mutant edits the child app unless it is declared with mutp(), which edits the profiler, or with
@@ -599,6 +601,38 @@ mut("C13", "killed", "the manifest lists another profiler version than the code'
     ("            \"version\": \"1.2.0\",\n            \"required\": false,", "            \"version\": \"1.1.1\",\n            \"required\": false,"),
     target=MANIFEST)
 
+
+# ---- 2.5.2 (WOR-921): no pump on an FC reading WaterGuru cannot confirm below the target (must be killed) ----
+mut("H1", "killed", "a reading of 10.0 or more pumps again (Oct 22: 10.0 stored, 16.2 real, 3000 mL pumped)",
+    ("    if (fc >= FC_READING_CEILING_PPM) {\n", "    if (false) {\n"))
+mut("H2", "killed", "only a reading above 10.0 holds (the 10.0 the integration stores pumps)",
+    ("    if (fc >= FC_READING_CEILING_PPM) {\n", "    if (fc > FC_READING_CEILING_PPM) {\n"))
+mut("H3", "killed", "a WaterGuru 'Free Chlorine high' alert no longer holds the pump",
+    ("        if (l.contains(\"free chlorine\") && l.contains(\"high\")) {\n", "        if (false) {\n"))
+mut("H4", "killed", "any 'high' alert holds the pump (a pH high alert blocks the chlorine dose)",
+    ("        if (l.contains(\"free chlorine\") && l.contains(\"high\")) {\n", "        if (l.contains(\"high\")) {\n"))
+mut("H5", "killed", "a RED grade holds the pump on either side (a very low FC is not dosed)",
+    ("?.equalsIgnoreCase(\"RED\") && fc >= wgTarget) {\n", "?.equalsIgnoreCase(\"RED\")) {\n"))
+mut("H6", "killed", "a RED grade above WaterGuru's own target no longer holds the pump",
+    ("?.equalsIgnoreCase(\"RED\") && fc >= wgTarget) {\n", "?.equalsIgnoreCase(\"RED\") && false) {\n"))
+mut("H7", "killed", "WaterGuru's advice to decrease chlorine no longer holds the pump",
+    ("        if (l.contains(\"decrease\") && l.contains(\"chlorine\")) {\n", "        if (false) {\n"))
+mut("H8", "killed", "advice to decrease any product holds the pump (a pH reducer line blocks the chlorine dose)",
+    ("        if (l.contains(\"decrease\") && l.contains(\"chlorine\")) {\n", "        if (l.contains(\"decrease\")) {\n"))
+mut("H9", "killed", "the ceiling check is computed but never holds the pump",
+    ("        if (suspect == null && pumpDosingMode()) suspect = ceiling\n", "        if (false) suspect = ceiling\n"))
+mut("H10", "killed", "ADVISORY says 'Not pumped' too (the hold is not tied to a mode that pumps)",
+    ("        if (suspect == null && pumpDosingMode()) suspect = ceiling\n", "        if (suspect == null) suspect = ceiling\n"))
+mut("H11", "killed", "ADVISORY does not show why the dose could not be confirmed",
+    ("        else if (ceiling != null) lines << \"  ⚠ ${ceiling}.\"\n", ""))
+mut("H12", "killed", "a target above 10 is not warned in the advice",
+    ("    if (target > FC_READING_CEILING_PPM) {\n", "    if (false) {\n"))
+mut("H13", "killed", "a target above 10 is not warned on the page",
+    ("    if (target == null || target <= FC_READING_CEILING_PPM) return null\n", "    return null\n"))
+mut("H14", "killed", "an em dash is back in the page warning",
+    ("and that dose is advice only. \" +", "and that dose is advice only — \" +"))
+mut("H15", "killed", "an em dash is back in the advice warning",
+    ("is never pumped; confirm FC", "is never pumped — confirm FC"))
 
 def build(name):
     expect, desc, edits, target = V[name]
