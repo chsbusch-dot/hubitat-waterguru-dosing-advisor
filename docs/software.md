@@ -310,6 +310,19 @@ when that sample is at most 48 hours older; without one, only the 0.0 check appl
 SLAM night, such as FC 6.0 one evening and 5.2 the next, still pumps the capped dose. Since
 2.5.1 SLAM mode is off by default: only a saved "on" turns it on.
 
+WaterGuru can report a high free chlorine reading as 10.0 ppm, so a 10.0 can mean 10 or more.
+Since 2.5.2, with the pump in APPROVAL or AUTO mode, in or out of SLAM, a dose is not pumped when
+free chlorine reads 10.0 ppm or more, when a WaterGuru alert says free chlorine is very high, or
+when WaterGuru grades free chlorine RED above its own target (RED below that target means very
+low, and it still doses). The dose is held the same way as above: a "Not pumped" line in the FREE
+CHLORINE block, a "Chlorine dose BLOCKED" notice with the reason, and "Daily pool chlorine: not
+pumped." in the daily summary. In ADVISORY mode the reason shows as a warning line. When the 0.0
+or big drop check also applies, its reason is the one shown. WaterGuru's plain "high" alert and
+its advice to decrease chlorine do not hold the pump, because WaterGuru grades them against its
+own 3 ppm target, not the CYA based target used here. An FC target above 10 ppm is kept, and the
+page and the advice warn that a 10.0 reading cannot show FC is below it. Confirm FC with your own
+test kit before relying on such a target.
+
 ### Chlorine runway (algae forecast)
 
 Algae is held off by keeping FC above a CYA-linked floor: the [TFP](https://www.troublefreepool.com/)
