@@ -605,9 +605,9 @@ mut("C13", "killed", "the manifest lists another profiler version than the code'
 
 # ---- 2.5.2 (WOR-921): no pump on an FC reading WaterGuru cannot confirm below the target (must be killed) ----
 mut("H1", "killed", "a reading of 10.0 or more pumps again (Oct 22: 10.0 stored, 16.2 real, 3000 mL pumped)",
-    ("    if (fc >= FC_READING_CEILING_PPM) {\n", "    if (false) {\n"))
-mut("H2", "killed", "only a reading above 10.0 holds (the 10.0 the integration stores pumps)",
-    ("    if (fc >= FC_READING_CEILING_PPM) {\n", "    if (fc > FC_READING_CEILING_PPM) {\n"))
+    ("    if (slam ? fc.compareTo(FC_READING_CEILING_PPM) == 0 : fc >= FC_READING_CEILING_PPM) {\n", "    if (false) {\n"))
+mut("H2", "?", "outside SLAM only a reading above 10.0 holds (since 2.5.3 the target is capped at 10, so 10.0 is no dose anyway)",
+    (": fc >= FC_READING_CEILING_PPM) {\n", ": fc > FC_READING_CEILING_PPM) {\n"))
 mut("H3", "killed", "a WaterGuru 'Free Chlorine very high' alert no longer holds the pump",
     ("        if (l.contains(\"free chlorine\") && l.contains(\"very high\")) {\n", "        if (false) {\n"))
 mut("H4", "killed", "a plain 'Free Chlorine high' alert holds again (graded against WaterGuru's own 3.0 target)",
@@ -632,17 +632,57 @@ mut("H10", "killed", "ADVISORY says 'Not pumped' too (the hold is not tied to a 
     ("        if (suspect == null && pumpDosingMode()) suspect = ceiling\n", "        if (suspect == null) suspect = ceiling\n"))
 mut("H11", "killed", "ADVISORY does not show why the dose could not be confirmed",
     ("        else if (ceiling != null) lines << \"  ⚠ ${ceiling}.\"\n", ""))
-mut("H12", "killed", "a target above 10 is not warned in the advice",
-    ("    if (target > FC_READING_CEILING_PPM) {\n", "    if (false) {\n"))
 mut("H13", "killed", "a target above 10 is not warned on the page",
-    ("    if (target == null || target <= FC_READING_CEILING_PPM) return null\n", "    return null\n"))
+    ("    if (target == null || target <= FC_TARGET_CAP_PPM) return null\n", "    return null\n"))
 mut("H14", "killed", "an em dash is back in the page warning",
-    ("and that dose is advice only. \" +", "and that dose is advice only — \" +"))
+    ("Outside SLAM no dose aims above \" +", "Outside SLAM no dose aims above \u2014 \" +"))
 mut("H15", "killed", "an em dash is back in the advice warning",
-    ("is never pumped; confirm FC", "is never pumped — confirm FC"))
+    ("ppm: outside SLAM no dose aims above", "ppm \u2014 outside SLAM no dose aims above"))
 mut("H16", "killed", "the ceiling reason wins over the 0.0 / big drop reason when both apply",
     ("        if (suspect == null && pumpDosingMode()) suspect = ceiling\n",
      "        if (ceiling != null && pumpDosingMode()) suspect = ceiling\n"))
+
+
+# ---- 2.5.3 (WOR-939): FC 10 or more doses only in SLAM (must be killed) ----
+# H12 (the advice warning on a target above 10) retired: Q9 removes the same warning at its new place.
+mut("Q1", "killed", "outside SLAM a target above 10 is not capped (a saved 14 doses toward 14 again)",
+    ("    if (!slam && target > FC_TARGET_CAP_PPM) {\n", "    if (false) {\n"))
+mut("Q2", "killed", "the SLAM target is capped too (SLAM 13.2 becomes 10, FC 12.0 is not dosed)",
+    ("    if (!slam && target > FC_TARGET_CAP_PPM) {\n", "    if (target > FC_TARGET_CAP_PPM) {\n"))
+mut("Q3", "killed", "in SLAM any reading of 10 or more holds again (12.0 under 13.2 is not dosed)",
+    ("fc.compareTo(FC_READING_CEILING_PPM) == 0 :", "fc.compareTo(FC_READING_CEILING_PPM) >= 0 :"))
+mut("Q4", "killed", "in SLAM an exact 10.0 doses (the clipped value can mean more)",
+    ("slam ? fc.compareTo(FC_READING_CEILING_PPM) == 0 :", "slam ? false :"))
+mut("Q5", "killed", "in SLAM the very high alert and RED hold the pump again",
+    ("    if (slam) return null\n", ""))
+mut("Q6", "killed", "the daily summary does not say the target was capped",
+    ("\" (capped from ${n1(result.fcTargetAsked)} ppm outside SLAM)\" : \"\"", "\"\" : \"\""))
+mut("Q7", "killed", "the page warns in SLAM (the TFP target at CYA 100 is 11.5)",
+    ("    else if (slamMode == true) return null\n", ""))
+mut("Q8", "killed", "the page warns on a target of exactly 10",
+    ("target == null || target <= FC_TARGET_CAP_PPM) return null", "target == null || target < FC_TARGET_CAP_PPM) return null"))
+mut("Q9", "killed", "the advice does not warn that the target was capped",
+    ("        warnings << \"FC target ${n1(targetAsked)} ppm is capped to ${n1(target)} ppm: outside SLAM no dose aims above ${n0(FC_TARGET_CAP_PPM)} ppm.\"\n", ""))
+mut("Q10", "killed", "a target of exactly 10 counts as capped",
+    ("    if (!slam && target > FC_TARGET_CAP_PPM) {\n", "    if (!slam && target >= FC_TARGET_CAP_PPM) {\n"))
+mut("Q11", "killed", "slamMode on with a manual target counts as SLAM (a saved 14 is not capped)",
+    ("    if (!slam && target > FC_TARGET_CAP_PPM) {\n", "    if (slamMode != true && target > FC_TARGET_CAP_PPM) {\n"))
+mut("Q12", "killed", "in SLAM the very high alert holds the pump again (RED alone still does not)",
+    ("    if (slam) return null\n    for (String line", "    for (String line"),
+    ("    BigDecimal wgTarget = attrNum(\"freeChlorineTarget\") ?: 3G\n",
+     "    if (slam) return null\n    BigDecimal wgTarget = attrNum(\"freeChlorineTarget\") ?: 3G\n"))
+mut("Q13", "killed", "in SLAM a RED grade holds the pump again",
+    ("    if (slam) return null\n",
+     "    if (slam && !attrRaw(\"freeChlorineStatus\")?.trim()?.equalsIgnoreCase(\"RED\")) return null\n"))
+mut("Q14", "killed", "the tile's freeChlorine attribute is clamped to 10",
+    ("value: r.fcVal as BigDecimal, unit: \"ppm\")", "value: (r.fcVal as BigDecimal).min(FC_TARGET_CAP_PPM), unit: \"ppm\")"))
+mut("Q15", "killed", "the advice, page and notice FC line is clamped to 10",
+    ("lines << \"  FC ${n1(fc)} ppm  →  target", "lines << \"  FC ${n1(fc.min(FC_TARGET_CAP_PPM))} ppm  →  target"))
+mut("Q16", "killed", "the tile card's FC number is clamped to 10",
+    ("Free chlorine <b>${n1(r.fcVal)}</b>", "Free chlorine <b>${n1((r.fcVal as BigDecimal).min(FC_TARGET_CAP_PPM))}</b>"))
+mut("Q17", "killed", "the daily summary's FC is clamped to 10",
+    ("\"FC ${n1(result?.fcVal)} ppm; target", "\"FC ${n1((result?.fcVal as BigDecimal)?.min(FC_TARGET_CAP_PPM))} ppm; target"))
+
 
 def build(name):
     expect, desc, edits, target = V[name]
