@@ -27,13 +27,24 @@
  * All doses are ESTIMATES. Always confirm with your own test kit before adding.
  *
  * Version history
+ *   2.5.4 - SLAM on with a manual FC target is SLAM (WOR-1149, Chris 2026-11-08: "slam is on. fc is set to 12 ppm but
+ *           it's not dosing"). computeFc's manual branch never set slam, so with 2.5.3 a manual target of 12 was capped
+ *           to 10.0 and the outside-SLAM holds applied: the very high alert held every 19:45 dose from Nov 2 to Nov 8
+ *           (FC 9.7 down to 8.6). With SLAM on and a valid manual target (above 0, at most 50) the manual value is now
+ *           the SLAM target: no cap, and only the SLAM guards apply (the 0.0 and big drop guard, the exact 10.0 hold,
+ *           the pump limits including the tank). It is not limited to the computed SLAM level (factor x CYA). The advice
+ *           basis, the SLAM banner and the page banner name the manual target, and the page no longer shows the
+ *           outside-SLAM warning with SLAM on. An invalid manual target still falls through to factor x CYA, and the page
+ *           banner now shows that target. "Maintain SLAM level" follows computeFc's slam, so SLAM on with no CYA and no
+ *           manual target (not SLAM, WaterGuru's own target applies) says hold. SLAM off is unchanged. The subscribe set
+ *           is unchanged (SUBSCRIPTION_SET), so no Done press is needed.
  *   2.5.3 - FC 10 or more doses only in SLAM (WOR-939, Chris 2026-10-24: "always show real level, but outside
  *           slam do not dose beyong 10 fc"). Outside SLAM the target is capped at FC_TARGET_CAP_PPM 10.0 at run
  *           time: a manual target above 10, or TFP from a CYA of 87 or more, doses toward 10.0, so a target saved
  *           before 2.5.3 (e.g. 14) is capped too. The advice basis and a warning line say "capped", the daily
  *           summary says "capped from N ppm outside SLAM", and the page warns (no longer about the ceiling hold)
  *           when the target is above 10 outside SLAM. A target of exactly 10 is not warned. Outside SLAM the three
- *           2.5.2 holds stay as they were. In SLAM (computeFc's slam: SLAM on and no valid manual target) only an
+ *           2.5.2 holds stay as they were. In SLAM (computeFc's slam: until 2.5.4 SLAM on and no valid manual target) only an
  *           exact 10.0, the value the integration clips a higher reading to, still holds; a reading above 10.0
  *           doses toward the SLAM target, and the very high alert and RED no longer hold on their own. A SLAM
  *           target above 10 is kept and not warned. The 0.0 and big drop guard runs first in SLAM, unchanged.
@@ -345,7 +356,7 @@
 
 import groovy.transform.Field
 
-def appVersion() { "2.5.3" }
+def appVersion() { "2.5.4" }
 
 definition(
     name:        "WaterGuru Dosing Advisor Pool",
@@ -495,7 +506,7 @@ preferences {
 @Field static final BigDecimal FC_READING_CEILING_PPM = 10.0G
 // FC target cap outside SLAM (2.5.3, WOR-939): outside SLAM no dose aims above this (Chris, 2026-10-24). computeFc
 // caps a higher target, manual or TFP from CYA, at run time, so a target saved before 2.5.3 is capped as well. A
-// SLAM target is not capped. Kept apart from FC_READING_CEILING_PPM (same value) because it is a policy, not a
+// SLAM target, computed or (2.5.4) manual, is not capped. Kept apart from FC_READING_CEILING_PPM (same value) because it is a policy, not a
 // property of the reading.
 @Field static final BigDecimal FC_TARGET_CAP_PPM = 10.0G
 
@@ -536,18 +547,18 @@ def mainPage() {
 
         section("<b>Free chlorine target (this app's core value-add)</b>") {
             input "slamMode", "bool",
-                title: "SLAM mode: target FC as a multiple of CYA (recommended while recovering)",
+                title: "SLAM mode: target FC as a multiple of CYA, or the manual FC target below when one is set (recommended while recovering)",
                 defaultValue: false, submitOnChange: true
             if (slamMode == true) {
                 paragraph slamPageBanner()
                 input "slamFactor", "decimal",
-                    title: "SLAM factor (FC target = factor x CYA). TFP SLAM level is 0.40.",
+                    title: "SLAM factor (FC target = factor x CYA). TFP SLAM level is 0.40. Not used while a manual FC target is set.",
                     defaultValue: 0.40, required: false
             } else {
                 paragraph "SLAM off: FC min = ${TFP_MIN_FACTOR} x CYA, target = ${TFP_TARGET_FACTOR} x CYA (TFP model)."
             }
             input "fcTargetOverride", "decimal",
-                title: "Manual FC target override (ppm); blank = compute from CYA above",
+                title: "Manual FC target override (ppm); blank = compute from CYA above. With SLAM on this is the SLAM target. With SLAM off a target above 10 is capped to 10.",
                 required: false
             String ceilingWarning = fcCeilingPageWarning()
             if (ceilingWarning) paragraph ceilingWarning
@@ -798,8 +809,11 @@ private String hint(String attr, String fallback = null) {
 private String slamPageBanner() {
     def cyaNow = sourceDevice?.currentValue("cyanuricAcid")
     BigDecimal fac = numSet(slamFactor) ? (slamFactor as BigDecimal) : 0.40G
+    BigDecimal manual = numSet(fcTargetOverride) ? toBD(fcTargetOverride) : null
     String tgt = ""
-    if (!numSet(fcTargetOverride) && cyaNow != null) {
+    if (manual != null && manual > 0 && manual <= 50G) {
+        tgt = " Current target ${n1(manual)} ppm (manual target)."
+    } else if (cyaNow != null) {
         tgt = " Current target &asymp; ${n1((cyaNow as BigDecimal) * fac)} ppm (${n2(fac)} &times; CYA ${n0(cyaNow as BigDecimal)})."
     }
     return "<div style='background:#c0392b;color:#ffffff;padding:10px;border-radius:6px;font-weight:bold'>" +
@@ -810,15 +824,15 @@ private String slamPageBanner() {
 /**
  * Red page banner when a target outside SLAM is above FC_TARGET_CAP_PPM, or null (2.5.3, WOR-939). The target is
  * chosen as computeFc chooses it (a valid manual target, else TFP from CYA); with neither it is WaterGuru's own,
- * which is never above 10. A SLAM target is not capped and not warned. The target is saved as entered: computeFc
- * caps it at run time and the banner says so.
+ * which is never above 10. A SLAM target, computed or manual (2.5.4), is not capped and not warned. The target is
+ * saved as entered: computeFc caps it at run time and the banner says so.
  */
 private String fcCeilingPageWarning() {
+    if (slamMode == true) return null
     BigDecimal manual = numSet(fcTargetOverride) ? toBD(fcTargetOverride) : null
     BigDecimal cya = attrNum("cyanuricAcid")
     BigDecimal target = null
     if (manual != null && manual > 0 && manual <= 50G) target = manual
-    else if (slamMode == true) return null
     else if (cya != null && cya > 0) target = cya * TFP_TARGET_FACTOR
     if (target == null || target <= FC_TARGET_CAP_PPM) return null
     return "<div style='background:#c0392b;color:#ffffff;padding:10px;border-radius:6px;font-weight:bold'>" +
@@ -1500,7 +1514,14 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
     BigDecimal manualTarget = numSet(fcTargetOverride) ? toBD(fcTargetOverride) : null
     if (manualTarget != null && manualTarget > 0 && manualTarget <= 50G) {
         target = manualTarget
-        basis = "manual target ${n1(target)} ppm"
+        // 2.5.4 (WOR-1149): SLAM on with a valid manual target is SLAM, and the manual value is its target.
+        if (slamMode == true) {
+            basis = "SLAM, manual target ${n1(target)} ppm"
+            slam = true
+            banner = "🚨 SLAM MODE ACTIVE. Free chlorine is held high on purpose: target ${n1(target)} ppm (manual target). Maintain it and retest often; turn SLAM off once the pool is clear and holds chlorine overnight."
+        } else {
+            basis = "manual target ${n1(target)} ppm"
+        }
     } else if (cya != null && cya > 0) {
         if (manualTarget != null) warnings << "Ignored invalid manual FC target ${manualTarget}; target must be greater than 0 and at most 50 ppm."
         if (slamMode == true) {
@@ -1586,7 +1607,7 @@ private Map computeFc(BigDecimal fc, BigDecimal cya, BigDecimal volume, BigDecim
         if (ppmGap > 8G) warnings << "Large chlorine addition (+${n1(ppmGap)} ppm): add in stages and retest between doses."
         if (floz > 640G) warnings << "Very large chlorine dose (${n0(floz)} fl oz): double-check pool volume and the FC reading."
     } else {
-        if (slamMode == true && !numSet(fcTargetOverride)) {
+        if (slam) {
             lines << "  ✔ FC ${n1(fc)} ≥ SLAM target ${n1(target)} ppm: maintain SLAM level, retest, do not add."
         } else {
             lines << "  ✔ FC ${n1(fc)} ≥ target ${n1(target)} ppm: hold, no chlorine needed."
@@ -1648,8 +1669,8 @@ private String fcReadingProblem(BigDecimal fc, boolean slam) {
  * from an older sample also holds: a held dose is the safe side. Since 2.5.3 the target outside SLAM is at most
  * FC_TARGET_CAP_PPM, so a reading of 10 or more is already at the target and the first rule is a second line only.
  *
- * In SLAM (2.5.3, WOR-939): only an exact FC_READING_CEILING_PPM holds, the value the integration clips a higher
- * reading to. A reading above it is unclipped (integration 2.4.5 sends clip:false) and doses toward the SLAM target,
+ * In SLAM (2.5.3, WOR-939; computeFc's slam, which since 2.5.4 includes SLAM on with a valid manual target): only an
+ * exact FC_READING_CEILING_PPM holds, the value the integration clips a higher reading to. A reading above it is unclipped (integration 2.4.5 sends clip:false) and doses toward the SLAM target,
  * and the very high alert and RED do not hold: WaterGuru grades them against its own target, and SLAM holds FC above
  * it on purpose. The 0.0 and big drop guard (fcReadingProblem) still runs first in SLAM.
  *
