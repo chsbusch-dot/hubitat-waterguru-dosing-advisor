@@ -2,10 +2,10 @@
 """
 Nightly passive capture of the hub's Z-Wave transmit log around the 19:45 dose (WOR-714).
 
-The Oct 3 dose was lost because one Z-Wave frame to the pump plug (then device 4674, Long Range
-node 0x0103) never took effect, and the hub keeps only about 2.5 hours of its Z-Wave log. This
-script records that log while the dose happens, so a recurrence can be read at frame level. Since
-2026-10-12 the plug is device 4680, classic mesh node 72 (0x48), without security.
+The Oct 3 dose was lost because one Z-Wave frame to the pump plug (then a Long Range node) never
+took effect, and the hub keeps only about 2.5 hours of its Z-Wave log. This script records that
+log while the dose happens, so a recurrence can be read at frame level. Since 2026-10-12 the plug
+is a classic mesh node, without security.
 
 What it does
   * Subscribes, read-only, to two hub websockets until --until (default 20:05, so the OFF of a
@@ -22,10 +22,10 @@ What it does
 
 Two zwaveLogsocket formats, detected per record (a log may hold both):
   json       up to 2026-10-09: one record per transmission with "imeReport" (key "3" = ACK RSSI,
-             key "10" = noise on Long Range frames) and "id" = node in hex ("48", "0103")
+             key "10" = noise on Long Range frames) and "id" = node in hex ("2A", "0105")
   plaintext  from 2026-10-10 (hub 2.5.2.135): the SERIAL / DRIVER / CNTRLR dump, one record per
              log line with "plainTextMessage" and deviceId -999. Nodes appear in decimal
-             ("[Node 072]"); --node stays hex and is matched by value.
+             ("[Node 042]"); --node stays hex and is matched by value.
 
 Definitions, json (match the 2026-10-06 baseline: 477 frames, 37 without ACK RSSI):
   frame          a transmit record to the device that carries the ACK report (imeReport key "3")
@@ -63,10 +63,13 @@ Definitions, plaintext (the 2026-10-14 wrap-up's reading, WOR-771):
 
 Python 3.9+ standard library only (runs under /usr/bin/python3 from launchd).
 
-  zwave_capture.py                         nightly run, 19:40 start from launchd
-  zwave_capture.py --duration-min 30 --mode test --stop-on-first-frame
-  zwave_capture.py --analyze RAW_LOG       recompute a summary row from a raw log, print only
-  zwave_capture.py --analyze RAW_LOG --device 4674 --node 0103    a night before the Oct 12 re-join
+  zwave_capture.py --hub HUB PLUG          nightly run, 19:40 start from launchd
+  zwave_capture.py --hub HUB PLUG --duration-min 30 --mode test --stop-on-first-frame
+  zwave_capture.py --analyze RAW_LOG PLUG  recompute a summary row from a raw log, print only
+
+PLUG stands for --device DEV --node NODE --app APP, all three required: DEV and APP are the
+Hubitat ids of the pump plug and the dosing app (each is in its page's URL), NODE is the plug's
+Z-Wave node id in hex. HUB is the hub's IP address or host name, needed only to capture.
 """
 
 import argparse
@@ -306,7 +309,7 @@ def record_format(record):
 
 
 def node_number(text):
-    """A node id as the json format prints it, hex ("48", "0103"), as a number; None if not hex."""
+    """A node id as the json format prints it, hex ("2A", "0105"), as a number; None if not hex."""
     try:
         return int(str(text), 16)
     except ValueError:
@@ -607,12 +610,12 @@ def append_summary(path, row):
 
 def build_parser():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--hub", default="192.168.1.147")
-    p.add_argument("--device", default="4680", help="Hubitat device id of the pump plug (4674 before 2026-10-12)")
-    p.add_argument("--node", default="48",
+    p.add_argument("--hub", help="the hub's IP address or host name (required to capture, not for --analyze)")
+    p.add_argument("--device", required=True, help="Hubitat device id of the pump plug")
+    p.add_argument("--node", required=True,
                    help="Z-Wave node id of the pump plug in hex, as the json log prints it: classic nodes two "
-                        "uppercase digits (48 = node 72), Long Range four (0103 = node 259, before 2026-10-12)")
-    p.add_argument("--app", default="2200", help="Hubitat app id of the dosing app")
+                        "uppercase digits (2A = node 42), Long Range four (0105 = node 261)")
+    p.add_argument("--app", required=True, help="Hubitat app id of the dosing app")
     p.add_argument("--until", default="20:05",
                    help="local HH:MM to stop capturing (20:05: a 13m 35s dose started at 19:45 turns off at about 19:59)")
     p.add_argument("--duration-min", type=float, help="capture for N minutes instead of --until")
@@ -628,7 +631,10 @@ def build_parser():
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not args.analyze and not args.hub:
+        parser.error("--hub is required to capture (the hub's IP address or host name)")
 
     if args.analyze:
         zwave, logs = read_raw(args.analyze)

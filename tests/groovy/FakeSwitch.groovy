@@ -242,7 +242,7 @@ class FakeSwitch {
 }
 
 /**
- * The WaterGuru Integration's pool device (live: device 4656), as the app reads it (2.4.3).
+ * The WaterGuru Integration's pool device, as the app reads it (2.4.3).
  *
  * Each attribute keeps its value and the date that value was set. Like the hub, the stored date moves
  * only when the value changes. The integration writes a whole sample as one batch of events, which

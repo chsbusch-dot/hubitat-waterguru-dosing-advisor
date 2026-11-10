@@ -3207,8 +3207,8 @@ check("2.4.2 fix 9b: a void is refused while a dose or a stop is open, and for a
 
 // ----------------------------------------------------------------------- 2.4.3 (WOR-724): the WaterGuru source
 
-/** The order the WaterGuru Integration writes a sample in (processWaterGuruData, as the hub runs it in app
- *  1238, plus the cassetteDaysLeft a later upstream change adds), cut to what this app reads. Device 4656's
+/** The order the WaterGuru Integration writes a sample in (processWaterGuruData, as the hub runs it,
+ *  plus the cassetteDaysLeft a later upstream change adds), cut to what this app reads. The pool device's
  *  Oct 5 19:45:03 batch arrived in this order: LastMeasurement before CassetteChecksLeft, freeChlorine
  *  and doseAdvice. statusMsg (before freeChlorine) and freeChlorineStatus (after the lab values) are in
  *  it since 2.5.2, which reads them for the FC ceiling hold. */
@@ -3217,7 +3217,7 @@ def WG_ORDER = ["CassettePercent", "CassetteStatus", "CassetteTimeLeft", "casset
                 "calciumHardness", "cyanuricAcid", "freeChlorineStatus", "freeChlorineTarget", "poolVolume",
                 "doseAdvice", "chlorineProductPct", "cassetteType", "cassetteInfo"]
 
-/** Device 4656 after the Oct 5 19:30 sample (read on Oct 6). */
+/** The live pool device after the Oct 5 19:30 sample (read on Oct 6). */
 def LIVE_OCT5 = [CassettePercent: 12.0G, CassetteStatus: "YELLOW", CassetteTimeLeft: "4 days left",
                  LastMeasurementHuman: "14 minutes ago", LastMeasurement: "2026-10-06T02:30:48.000Z",
                  CassetteChecksLeft: 24, freeChlorine: 5.6G, pH: 7.5G, totalAlkalinity: 97G, calciumHardness: 263G,
@@ -3252,7 +3252,7 @@ def liveWaterGuru = { app, Map values = null ->
 
 def epoch = { String iso -> Instant.parse(iso).toEpochMilli() }
 
-/** The live dose history (app 2200, Oct 6): every app dose since Sep 29, booked about 26 s after the
+/** The live dose history (the dosing app, Oct 6): every app dose since Sep 29, booked about 26 s after the
  *  19:45 refresh that brought in its sample. The Oct 3 phantom was voided on Oct 5 and is not in it. */
 def LIVE_DOSES = [[t: 1790736326145L, ml: "553.7637875"], [t: 1790822724556L, ml: "158.2182250"],
                   [t: 1790909125019L, ml: "474.6546750"], [t: 1790995524460L, ml: "711.9820125"],
@@ -3280,7 +3280,7 @@ check("2.4.3 fix 3: the live week replayed measures the real loss, each dose in 
     def wg = liveWaterGuru(app, LIVE_OCT5 + [LastMeasurement: "2026-09-29T02:30:31.000Z", freeChlorine: 6.0G])
     app.state.tankDoseHistory = []
     // [measurement time, FC WaterGuru sent for it, when the hub received it, the app dose that followed]
-    // from device 4656's events and app 2200's dose history. The 20:53 manual test on Oct 3 (received at
+    // from the pool device's events and the app's dose history. The 20:53 manual test on Oct 3 (received at
     // the 22:00 poll) has no dose; neither has the Oct 3 evening sample since its phantom was voided.
     def week = [["2026-09-30T02:30:50Z", 5.3G, "2026-09-30T02:45:04.811Z", LIVE_DOSES[0]],
                 ["2026-10-01T02:31:10Z", 5.8G, "2026-10-01T02:45:03.374Z", LIVE_DOSES[1]],
@@ -3314,7 +3314,7 @@ check("2.4.3 fix 3: the live week replayed measures the real loss, each dose in 
 check("2.4.3 fix 3: readings stored before 2.4.3 are left out, and the measured loss restarts from settled ones") {
     def app = newApp()
     def wg = liveWaterGuru(app, LIVE_OCT5)
-    // The end of app 2200's history on Oct 6, as 2.4.2 left it: each entry but Oct 4's is the previous sample's FC.
+    // The end of the live app's history on Oct 6, as 2.4.2 left it: each entry but Oct 4's is the previous sample's FC.
     app.state.fcHistory = [[t: 1790649031000L, fc: "5.2"], [t: 1790735450000L, fc: "6.0"], [t: 1790821870000L, fc: "5.3"],
                            [t: 1790908230000L, fc: "5.8"], [t: 1790994649000L, fc: "5.4"], [t: 1791081068000L, fc: "5.1"],
                            [t: 1791085986000L, fc: "5.4"], [t: 1791167427000L, fc: "4.7"], [t: 1791253848000L, fc: "4.7"]]
@@ -4215,7 +4215,7 @@ def lossPool = { app ->
 check("2.4.7: the live Oct 6 to 9 series skips the hand run's day and measures the other two, 0.2 ppm/day") {
     def app = newApp()
     def wg = lossPool(app)
-    // Live app 2200: Oct 6 19:31 FC 5.0, the app doses 791 mL; Oct 7 19:30 FC 5.6, the app's ON was lost and
+    // The live app: Oct 6 19:31 FC 5.0, the app doses 791 mL; Oct 7 19:30 FC 5.6, the app's ON was lost and
     // Chris ran the pump by hand (about 300 mL, booked only as a tank adjustment, so not in the dose history);
     // Oct 8 19:30 FC 5.9, the app doses 79 mL; Oct 9 19:31 FC 6.0.
     feedDailySamples(app, wg, [["2026-10-07T02:31:00Z", 5.0G, 791G], ["2026-10-08T02:30:00Z", 5.6G, null],
@@ -4757,7 +4757,7 @@ check("2.4.8 guard (g): APPROVAL with a 0.0 SLAM reading queues nothing and says
 }
 
 check("2.4.8 guard (h): live notice settings (autoRun off, daily digest on): the one summary says not pumped and why, no cap promise") {
-    // App 2200 runs autoRun=false, dailyDigest=true: the FREE CHLORINE text never goes out, so the daily summary,
+    // The live app runs autoRun=false, dailyDigest=true: the FREE CHLORINE text never goes out, so the daily summary,
     // sent before the BLOCKED notice, is the only place that can say why nothing was pumped.
     def live = { a -> a.autoRun = false; a.dailyDigest = true; a.digestTime = "2026-10-10T20:00:00.000-0700" }
     def app = newApp()
@@ -5703,8 +5703,8 @@ check("2.5.4 (j): the computed SLAM target is not capped at 28 (0.40 x CYA 80 = 
 //
 // Profiler 1.2.0 stops polling the pump plug: it listens to the plug's reports and refreshes only after the
 // ON and the OFF. These checks show that this app's start and run power evidence never needed the profiler's
-// refreshes. The plug is 4680 as configured on 2026-10-14 (it reports a change of 5 W or more on its own and
-// answers a refresh) plus a power report once a minute, which the real 4680 does not send: it reports power on its
+// refreshes. The plug is the pump plug as configured on 2026-10-14 (it reports a change of 5 W or more on its own and
+// answers a refresh) plus a power report once a minute, which the real plug does not send: it reports power on its
 // own only on a 5 W change or every 700 minutes (parameters 9 and 10), and its once-a-minute report (parameter 16)
 // is voltage. The minute report only adds evidence. No other app is subscribed or polling.
 
