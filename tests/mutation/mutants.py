@@ -638,7 +638,8 @@ mut("H14", "killed", "an em dash is back in the page warning",
     ("Outside SLAM no dose aims above \" +", "Outside SLAM no dose aims above \u2014 \" +"))
 mut("H15", "killed", "an em dash is back in the advice warning",
     ("ppm: outside SLAM no dose aims above", "ppm \u2014 outside SLAM no dose aims above"))
-mut("H16", "killed", "the ceiling reason wins over the 0.0 / big drop reason when both apply",
+mut("H16", "?", "the ceiling reason wins over the 0.0 / big drop reason when both apply (since 2.5.4 they never both apply: "
+    "the drop reason is set only in SLAM, where fcCeilingProblem returns null)",
     ("        if (suspect == null && pumpDosingMode()) suspect = ceiling\n",
      "        if (ceiling != null && pumpDosingMode()) suspect = ceiling\n"))
 
