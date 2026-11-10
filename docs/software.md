@@ -109,7 +109,7 @@ will use without setting an override.
 | **Source** | The WaterGuru pool device to read. |
 | **SLAM mode** | When on, FC target = `SLAM factor × CYA` (default factor 0.40, the [TFP](https://www.troublefreepool.com/) SLAM level), or the manual FC target when one is set. Recommended while recovering. Off by default: only a saved "on" turns it on. |
 | **SLAM factor** | The multiplier used in SLAM mode. Not used while a manual FC target is set. |
-| **Manual FC target override** | Pin the FC target directly (ppm, above 0 and at most 50); blank = compute it from CYA. With SLAM on this is the SLAM target. With SLAM off a target above 10 is capped to 10. |
+| **Manual FC target override** | Pin the FC target directly (ppm, above 0 and at most 50); blank = compute it from CYA. With SLAM on this is the SLAM target, capped to 28. With SLAM off a target above 10 is capped to 10. |
 | **Pool volume / chlorine strength %** | Blank = read from the device (`poolVolume`, `chlorineProductPct`). |
 | **Chlorine runway** | Show an estimate of the days until FC drops below the algae floor. Optional manual daily-loss override (ppm/day); blank = auto (measured from your samples, else a cover-aware estimate). |
 | **Use WaterGuru advice** | Pass through WaterGuru's own pH/TA/CH/CYA dose lines. |
@@ -266,7 +266,7 @@ the **Dashboard tile** toggle off to remove this pool's tile device.
 
 FC target is derived from CYA rather than a fixed number:
 
-- **SLAM mode on:** `target = slamFactor × CYA` (default `0.40 × CYA`), or the manual FC target when a valid one is set.
+- **SLAM mode on:** `target = slamFactor × CYA` (default `0.40 × CYA`), or the manual FC target when a valid one is set (capped to 28, see below).
 - **SLAM mode off (TFP):** `min = 0.075 × CYA`, `target = 0.115 × CYA`, or the manual FC target when a valid one is set (capped to 10, see below).
 
 When FC is below target, the dose of liquid chlorine is:
@@ -334,12 +334,16 @@ chlorine reaches about 8.5.
 
 In SLAM a reading above 10 doses toward the SLAM target: FC 12.0 under a SLAM target of 13.2 (0.40 x
 CYA 33) pumps the 1.2 ppm between them. WaterGuru's very high alert and its RED grade do not hold a
-SLAM dose. A SLAM reading of exactly 10.0 is still held, because it may be a higher reading reported
-as 10.0, and the 0.0 and big drop check above runs first. A SLAM target above 10 is kept and not
-warned. Since 2.5.4 SLAM mode on with a manual FC target is SLAM too: the manual target (above 0, at
-most 50 ppm) is the SLAM target, it is not capped, and only the SLAM checks and the pump limits apply.
-It is not limited to the SLAM factor times CYA. An invalid manual target is ignored with a warning,
-and the app uses the SLAM factor.
+SLAM dose. Since 2.5.4 a SLAM reading of exactly 10.0 doses too (2.5.3 held it, because WaterGuru
+then reported any higher reading as 10.0). Only the 0.0 and big drop check above and the pump limits
+apply in SLAM. A computed SLAM target above 10 is kept and not warned. Since 2.5.4 SLAM mode on with
+a manual FC target is SLAM too: the manual target (above 0, at most 50 ppm) is the SLAM target, and
+it is not limited to the SLAM factor times CYA. A manual target above 28 ppm is capped to 28.0 ppm in
+SLAM, so a typo such as 40 doses only toward 28: the FREE CHLORINE block shows the basis as "capped to
+28.0 ppm in SLAM" with a warning line, the daily summary reads "target 28.0 ppm (capped from 40.0 ppm
+in SLAM)", and the settings page banner names both numbers. The computed SLAM target (factor times
+CYA) is not capped. An invalid manual target is ignored with a warning, and the app uses the SLAM
+factor.
 
 ### Chlorine runway (algae forecast)
 

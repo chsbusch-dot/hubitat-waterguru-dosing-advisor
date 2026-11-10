@@ -604,10 +604,10 @@ mut("C13", "killed", "the manifest lists another profiler version than the code'
 
 
 # ---- 2.5.2 (WOR-921): no pump on an FC reading WaterGuru cannot confirm below the target (must be killed) ----
-mut("H1", "killed", "a reading of 10.0 or more pumps again (Oct 22: 10.0 stored, 16.2 real, 3000 mL pumped)",
-    ("    if (slam ? fc.compareTo(FC_READING_CEILING_PPM) == 0 : fc >= FC_READING_CEILING_PPM) {\n", "    if (false) {\n"))
+mut("H1", "?", "outside SLAM a reading of 10.0 or more no longer holds (since 2.5.3 the target is capped at 10, so such a reading is no dose anyway; since 2.5.4 nothing holds in SLAM)",
+    ("    if (fc >= FC_READING_CEILING_PPM) {\n", "    if (false) {\n"))
 mut("H2", "?", "outside SLAM only a reading above 10.0 holds (since 2.5.3 the target is capped at 10, so 10.0 is no dose anyway)",
-    (": fc >= FC_READING_CEILING_PPM) {\n", ": fc > FC_READING_CEILING_PPM) {\n"))
+    ("    if (fc >= FC_READING_CEILING_PPM) {\n", "    if (fc > FC_READING_CEILING_PPM) {\n"))
 mut("H3", "killed", "a WaterGuru 'Free Chlorine very high' alert no longer holds the pump",
     ("        if (l.contains(\"free chlorine\") && l.contains(\"very high\")) {\n", "        if (false) {\n"))
 mut("H4", "killed", "a plain 'Free Chlorine high' alert holds again (graded against WaterGuru's own 3.0 target)",
@@ -650,13 +650,15 @@ mut("Q1", "killed", "outside SLAM a target above 10 is not capped (a saved 14 do
 mut("Q2", "killed", "the SLAM target is capped too (SLAM 13.2 becomes 10, FC 12.0 is not dosed)",
     ("    if (!slam && target > FC_TARGET_CAP_PPM) {\n", "    if (target > FC_TARGET_CAP_PPM) {\n"))
 mut("Q3", "killed", "in SLAM any reading of 10 or more holds again (12.0 under 13.2 is not dosed)",
-    ("fc.compareTo(FC_READING_CEILING_PPM) == 0 :", "fc.compareTo(FC_READING_CEILING_PPM) >= 0 :"))
-mut("Q4", "killed", "in SLAM an exact 10.0 doses (the clipped value can mean more)",
-    ("slam ? fc.compareTo(FC_READING_CEILING_PPM) == 0 :", "slam ? false :"))
-mut("Q5", "killed", "in SLAM the very high alert and RED hold the pump again",
+    ("    if (slam) return null\n    if (fc >= FC_READING_CEILING_PPM) {\n", "    if (fc >= FC_READING_CEILING_PPM) {\n"),
+    ("    for (String line : (attrRaw(\"statusMsg\")", "    if (slam) return null\n    for (String line : (attrRaw(\"statusMsg\")"))
+mut("Q4", "killed", "in SLAM an exact 10.0 holds again (the 2.5.3 rule, removed by Chris 2026-11-09)",
+    ("    if (slam) return null\n    if (fc >= FC_READING_CEILING_PPM) {\n",
+     "    if (slam && fc.compareTo(FC_READING_CEILING_PPM) == 0) return \"held\"\n    if (slam) return null\n    if (fc >= FC_READING_CEILING_PPM) {\n"))
+mut("Q5", "killed", "in SLAM every outside-SLAM hold applies again (10 or more, very high, RED)",
     ("    if (slam) return null\n", ""))
 mut("Q6", "killed", "the daily summary does not say the target was capped",
-    ("\" (capped from ${n1(result.fcTargetAsked)} ppm outside SLAM)\" : \"\"", "\"\" : \"\""))
+    ("\" (capped from ${n1(result.fcTargetAsked)} ppm ${result?.fcSlam == true ? 'in' : 'outside'} SLAM)\" : \"\"", "\"\" : \"\""))
 mut("Q7", "killed", "the page warns in SLAM (the TFP target at CYA 100 is 11.5)",
     ("    if (slamMode == true) return null\n    BigDecimal manual", "    BigDecimal manual"))
 mut("Q8", "killed", "the page warns on a target of exactly 10",
@@ -668,7 +670,7 @@ mut("Q10", "killed", "a target of exactly 10 counts as capped",
 mut("Q11", "killed", "slamMode on with no CYA and no manual target counts as SLAM (WaterGuru's own target above 10 is not capped)",
     ("    if (!slam && target > FC_TARGET_CAP_PPM) {\n", "    if (slamMode != true && target > FC_TARGET_CAP_PPM) {\n"))
 mut("Q12", "killed", "in SLAM the very high alert holds the pump again (RED alone still does not)",
-    ("    if (slam) return null\n    for (String line", "    for (String line"),
+    ("    if (slam) return null\n    if (fc >= FC_READING_CEILING_PPM) {\n", "    if (!slam && fc >= FC_READING_CEILING_PPM) {\n"),
     ("    BigDecimal wgTarget = attrNum(\"freeChlorineTarget\") ?: 3G\n",
      "    if (slam) return null\n    BigDecimal wgTarget = attrNum(\"freeChlorineTarget\") ?: 3G\n"))
 mut("Q13", "killed", "in SLAM a RED grade holds the pump again",
@@ -705,6 +707,20 @@ mut("V9", "killed", "the page banner shows an invalid manual target as the targe
     ("    if (manual != null && manual > 0 && manual <= 50G) {\n        tgt =", "    if (manual != null) {\n        tgt ="))
 mut("V10", "killed", "a SLAM manual target is limited to the computed SLAM level (0.40 x CYA: a saved 14 at CYA 33 becomes 13.2)",
     (MANUAL_BASIS, "            if (cya) target = target.min(cya * 0.40G)\n" + MANUAL_BASIS))
+# Chris 2026-11-09: a SLAM manual target is capped at 28; the computed SLAM target is not capped.
+mut("V11", "killed", "a SLAM manual target is not capped at 28 (a typo such as 40 doses toward 40)",
+    ("            if (target > SLAM_MANUAL_TARGET_CAP_PPM) {\n", "            if (false) {\n"))
+mut("V12", "killed", "a SLAM manual target of exactly 28 counts as capped",
+    ("            if (target > SLAM_MANUAL_TARGET_CAP_PPM) {\n", "            if (target >= SLAM_MANUAL_TARGET_CAP_PPM) {\n"))
+mut("V13", "killed", "the computed SLAM target is capped at 28 too (0.40 x CYA 80 = 32 becomes 28)",
+    ("            basis = \"SLAM ${n2(factor)} x CYA ${n0(cya)}\"\n",
+     "            target = target.min(SLAM_MANUAL_TARGET_CAP_PPM)\n            basis = \"SLAM ${n2(factor)} x CYA ${n0(cya)}\"\n"))
+mut("V14", "killed", "the advice does not warn that a SLAM manual target was capped",
+    ("                warnings << \"Manual FC target ${n1(targetAsked)} ppm is capped to ${n1(target)} ppm: in SLAM no dose aims above ${n0(SLAM_MANUAL_TARGET_CAP_PPM)} ppm.\"\n", ""))
+mut("V15", "killed", "the daily summary says outside SLAM for a capped SLAM manual target",
+    ("${result?.fcSlam == true ? 'in' : 'outside'} SLAM)", "outside SLAM)"))
+mut("V16", "killed", "the SLAM page banner shows the uncapped manual target",
+    ("        if (manual > SLAM_MANUAL_TARGET_CAP_PPM) tgt = \" Current target ${n1(SLAM_MANUAL_TARGET_CAP_PPM)} ppm (manual target ${n1(manual)} ppm, capped to ${n0(SLAM_MANUAL_TARGET_CAP_PPM)} ppm in SLAM).\"\n", ""))
 
 
 def build(name):

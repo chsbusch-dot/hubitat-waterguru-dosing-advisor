@@ -5216,7 +5216,8 @@ check("2.5.2 (k): SLAM, FC 0.0 with a 'Free Chlorine very high' alert: held for 
 // ----------------------------------------------------------------------- 2.5.3 (WOR-939): FC 10 or more doses only in SLAM
 // Chris 2026-10-24: "always show real level, but outside slam do not dose beyong 10 fc." Outside SLAM the target is capped
 // at 10 and a reading of 10 or more doses nothing; in SLAM a reading above 10 doses toward the SLAM target (an exact 10.0
-// still holds: it is what WaterGuru's API sends for any reading of 10 or more). The measured FC is never clamped.
+// held until 2.5.4: it was what WaterGuru's API sent for any reading of 10 or more; Chris removed that hold on 2026-11-09
+// because integration 2.4.5 sends unclipped readings). The measured FC is never clamped.
 
 check("2.5.3 (a): outside SLAM, target 14, FC 12.0: advice, tile, notice and summary show 12.0 against the capped 10.0; nothing pumps, APPROVAL queues nothing") {
     def DASH = ~/[—–]|&mdash;|&ndash;/
@@ -5351,17 +5352,17 @@ check("2.5.3 (f): SLAM, FC 12.0 with the Oct 22 signals (very high alert, RED, a
     ceilingPumped(red, dr)
 }
 
-check("2.5.3 (g): SLAM, FC exactly 10.0 still holds (the API sends 10.0 for any reading of 10 or more); APPROVAL queues nothing") {
+check("2.5.3 (g), since 2.5.4: SLAM, FC exactly 10.0 doses toward the SLAM target (Chris 2026-11-09 removed the exact 10.0 hold); APPROVAL queues it") {
     def app = newApp()
     def d = slamApp(app)
     slamSample(app, d.wg, OCT10_SAMPLE + [freeChlorine: 10.0G])
-    ceilingBlocked(app, CEILING_10)
-    nothingBooked(app, d)
+    ceilingPumped(app, d)
+    Map r = app.computeAdvice()
+    expect(!r.text.contains(CEILING_10) && !r.text.contains("Not pumped") && app.n1(r.fcTarget) == "13.2", "no hold text, SLAM target: ${r.fcTarget} / ${r.text}")
     def ap = newApp()
     def da = slamApp(ap, "APPROVAL")
     slamSample(ap, da.wg, OCT10_SAMPLE + [freeChlorine: 10.0G])
-    expect(ap.state.pendingDose == null && ap.noticesMatching("queued").isEmpty(), "nothing queued: ${ap.state.pendingDose} / ${ap.noticesMatching('queued')}")
-    nothingBooked(ap, da)
+    expect(ap.state.pendingDose != null && ap.noticesMatching("BLOCKED").isEmpty(), "queued: ${ap.state.pendingDose} / ${ap.noticesMatching('BLOCKED')}")
 }
 
 check("2.5.3 (h): SLAM, the 2.4.8 guard still holds above 10: 0.0, and 16.0 to 11.9 (4.1 ppm down)") {
@@ -5462,7 +5463,7 @@ check("2.5.3 (k): a reading of 17.3 shows as 17.3 on the page, in the advice and
     }
 }
 
-check("2.5.3 (l): SLAM, 14.5 then an exact 10.0: the 2.4.8 drop reason wins over the exact 10.0 clip guard") {
+check("2.5.3 (l): SLAM, 14.5 then an exact 10.0: the 2.4.8 drop guard still holds (the exact 10.0 hold itself is gone since 2.5.4)") {
     def app = newApp()
     def d = slamApp(app)
     slamPrevious(app, d.wg, "2026-10-10T14:30:00.000Z", 14.5G)
@@ -5510,8 +5511,8 @@ check("2.5.4 (a): the Nov 8 replay: SLAM on, manual target 12, FC 8.6 with the v
            "the daily summary: ${adv.dailyChlorineSummary(r)}")
 }
 
-check("2.5.4 (b): SLAM on with a manual target: a reading of 10 or more (not exactly 10.0) doses, held only to the pump limits") {
-    [[14.0G, 12.0G, "1582"], [12.0G, 10.1G, "1503"]].each { List c ->
+check("2.5.4 (b): SLAM on with a manual target: a reading of 10 or more (an exact 10.0 too) doses, held only to the pump limits") {
+    [[14.0G, 12.0G, "1582"], [12.0G, 10.1G, "1503"], [12.0G, 10.0G, "1582"]].each { List c ->
         def a = newApp()
         def da = slamManualApp(a, "AUTO", c[0] as BigDecimal)
         slamSample(a, da.wg, OCT10_SAMPLE + OCT22_SIGNALS + [freeChlorine: c[1]])
@@ -5544,7 +5545,7 @@ check("2.5.4 (b): SLAM on with a manual target: a reading of 10 or more (not exa
            "what is left in the tank: ${dl.pump.commands} / ${low.state.activeDose} / ${low.noticesMatching('start requested')}")
 }
 
-check("2.5.4 (c): SLAM on with a manual target keeps the SLAM guards: 0.0, a drop of more than 4 ppm and an exact 10.0 hold; APPROVAL queues nothing") {
+check("2.5.4 (c): SLAM on with a manual target keeps the SLAM guards: 0.0 and a drop of more than 4 ppm hold; APPROVAL queues nothing") {
     def zero = newApp()
     def dz = slamManualApp(zero, "AUTO", 14.0G)
     slamSample(zero, dz.wg, OCT10_SAMPLE + [freeChlorine: 0.0G])
@@ -5556,14 +5557,9 @@ check("2.5.4 (c): SLAM on with a manual target keeps the SLAM guards: 0.0, a dro
     slamSample(drop, dd.wg, OCT10_SAMPLE + [freeChlorine: 11.9G])
     ceilingBlocked(drop, "FC fell 4.1 ppm since the previous sample (16.0 to 11.9 ppm), which in SLAM looks like a bad reading; check it before dosing")
     nothingBooked(drop, dd)
-    def ten = newApp()
-    def dt = slamManualApp(ten, "AUTO", 14.0G)
-    slamSample(ten, dt.wg, OCT10_SAMPLE + [freeChlorine: 10.0G])
-    ceilingBlocked(ten, CEILING_10)
-    nothingBooked(ten, dt)
     def ap = newApp()
     def da = slamManualApp(ap, "APPROVAL", 14.0G)
-    slamSample(ap, da.wg, OCT10_SAMPLE + [freeChlorine: 10.0G])
+    slamSample(ap, da.wg, OCT10_SAMPLE + [freeChlorine: 0.0G])
     expect(ap.state.pendingDose == null && ap.noticesMatching("queued").isEmpty(), "nothing queued: ${ap.state.pendingDose} / ${ap.noticesMatching('queued')}")
     nothingBooked(ap, da)
 }
@@ -5612,7 +5608,7 @@ check("2.5.4 (e): the page: SLAM on with a manual target above 10 shows no outsi
     expect(off.fcCeilingPageWarning()?.contains("FC target 14.0 ppm is above 10 ppm.") == true, "SLAM off warns: ${off.fcCeilingPageWarning()}")
 }
 
-check("2.5.4 (f): SLAM on with an invalid manual target falls through to the computed SLAM target and warns; 50 is the last valid manual target") {
+check("2.5.4 (f): SLAM on with an invalid manual target falls through to the computed SLAM target and warns; 50 is the last valid manual target (capped to 28 in SLAM)") {
     [60G, 0G, -1G, 50.1G].each { BigDecimal bad ->
         def app = newApp()
         def d = slamManualApp(app, "ADVISORY", bad)
@@ -5627,8 +5623,8 @@ check("2.5.4 (f): SLAM on with an invalid manual target falls through to the com
     def d = slamManualApp(app, "ADVISORY", 50.0G)
     slamSample(app, d.wg)
     Map r = app.computeAdvice()
-    expect(app.n1(r.fcTarget) == "50.0" && r.text.contains("(SLAM, manual target 50.0 ppm)") && !r.text.contains("Ignored invalid"),
-           "50 is valid: ${r.subMap(['fcTarget'])} / ${r.text}")
+    expect(app.n1(r.fcTarget) == "28.0" && app.n1(r.fcTargetAsked) == "50.0" && r.text.contains("(SLAM, manual target 50.0 ppm; capped to 28.0 ppm in SLAM)") &&
+           !r.text.contains("Ignored invalid"), "50 is valid and capped to 28: ${r.subMap(['fcTarget', 'fcTargetAsked'])} / ${r.text}")
 }
 
 check("2.5.4 (g): a reading at or above the target: SLAM with a manual target says maintain SLAM level, outside SLAM it says hold") {
@@ -5652,6 +5648,55 @@ check("2.5.4 (h): SLAM on with no CYA and no manual target is not SLAM: WaterGur
     Map r = app.computeAdvice()
     expect(app.n1(r.fcTarget) == "10.0" && app.n1(r.fcTargetAsked) == "12.0" && !r.text.contains("SLAM MODE ACTIVE") && r.text.contains("capped to 10.0 ppm outside SLAM"),
            "no SLAM target to use: ${r.subMap(['fcTarget', 'fcTargetAsked'])} / ${r.text}")
+}
+
+check("2.5.4 (i): SLAM on, a manual target above 28 is capped to 28 (Chris 2026-11-09): advice, summary and page say so; AUTO pumps to the limits; exactly 28 is not capped; SLAM off still caps to 10") {
+    def DASH = ~/[—–]|&mdash;|&ndash;/
+    def adv = newApp()
+    def d = slamManualApp(adv, "ADVISORY", 40.0G)
+    slamSample(adv, d.wg, OCT10_SAMPLE + [freeChlorine: 8.0G])
+    Map r = adv.computeAdvice()
+    expect(adv.n1(r.fcTarget) == "28.0" && adv.n1(r.fcTargetAsked) == "40.0" && r.text.contains("🚨 SLAM MODE ACTIVE") &&
+           r.text.contains("  FC 8.0 ppm  →  target 28.0 ppm  (SLAM, manual target 40.0 ppm; capped to 28.0 ppm in SLAM)") &&
+           r.text.contains("⚠ Manual FC target 40.0 ppm is capped to 28.0 ppm: in SLAM no dose aims above 28 ppm.") && !r.text.contains("outside SLAM") &&
+           !DASH.matcher(r.text).find(), "the capped SLAM advice: ${r.subMap(['fcTarget', 'fcTargetAsked'])} / ${r.text}")
+    String summary = adv.dailyChlorineSummary(r)
+    expect(summary.contains("target 28.0 ppm (capped from 40.0 ppm in SLAM)") && !summary.contains("outside SLAM"), "the daily summary: ${summary}")
+    String banner = adv.slamPageBanner()
+    expect(banner.contains("Current target 28.0 ppm (manual target 40.0 ppm, capped to 28 ppm in SLAM).") && !DASH.matcher(banner).find() &&
+           adv.fcCeilingPageWarning() == null, "the page banner: ${banner} / ${adv.fcCeilingPageWarning()}")
+    // AUTO: 20 ppm to 28 is far above the single-dose limit
+    def app = newApp()
+    def da = slamManualApp(app, "AUTO", 40.0G)
+    slamSample(app, da.wg, OCT10_SAMPLE + [freeChlorine: 8.0G])
+    ceilingPumped(app, da)
+    expect(bd(app.state.activeDose.mlRaw) == 3000G && app.state.activeDose.seconds == 815, "the single-dose limit: ${app.state.activeDose}")
+    // exactly 28 is not capped
+    def at = newApp()
+    def dt = slamManualApp(at, "ADVISORY", 28.0G)
+    slamSample(at, dt.wg, OCT10_SAMPLE + [freeChlorine: 8.0G])
+    Map rt = at.computeAdvice()
+    expect(at.n1(rt.fcTarget) == "28.0" && rt.fcTargetAsked == null && rt.text.contains("(SLAM, manual target 28.0 ppm)") && !rt.text.contains("capped") &&
+           at.slamPageBanner().contains("Current target 28.0 ppm (manual target).") && !at.dailyChlorineSummary(rt).contains("capped from"),
+           "28 is not capped: ${rt.subMap(['fcTarget', 'fcTargetAsked'])} / ${rt.text} / ${at.slamPageBanner()}")
+    // SLAM off: a manual 40 is capped to 10 as before
+    def off = newApp()
+    def doff = ceilingApp(off, "ADVISORY", 40.0G)
+    slamSample(off, doff.wg, OCT10_SAMPLE + [freeChlorine: 8.0G])
+    Map ro = off.computeAdvice()
+    expect(off.n1(ro.fcTarget) == "10.0" && off.n1(ro.fcTargetAsked) == "40.0" && ro.text.contains("capped to 10.0 ppm outside SLAM") &&
+           off.dailyChlorineSummary(ro).contains("(capped from 40.0 ppm outside SLAM)") && !ro.text.contains("SLAM MODE ACTIVE"),
+           "SLAM off: ${ro.subMap(['fcTarget', 'fcTargetAsked'])} / ${ro.text} / ${off.dailyChlorineSummary(ro)}")
+}
+
+check("2.5.4 (j): the computed SLAM target is not capped at 28 (0.40 x CYA 80 = 32.0)") {
+    def app = newApp()
+    def d = slamApp(app, "ADVISORY")
+    slamSample(app, d.wg, OCT10_SAMPLE + [cyanuricAcid: 80G, freeChlorine: 8.0G])
+    Map r = app.computeAdvice()
+    expect(app.n1(r.fcTarget) == "32.0" && r.fcTargetAsked == null && r.text.contains("(SLAM 0.40 x CYA 80)") && !r.text.contains("capped") &&
+           !app.dailyChlorineSummary(r).contains("capped from") && app.slamPageBanner().contains("Current target &asymp; 32.0 ppm (0.40 &times; CYA 80)."),
+           "the computed target: ${r.subMap(['fcTarget', 'fcTargetAsked'])} / ${r.text} / ${app.slamPageBanner()}")
 }
 
 // =========================================================================== WOR-716 (Pump Power Profiler 1.2.0)
