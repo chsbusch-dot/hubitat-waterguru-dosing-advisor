@@ -127,7 +127,7 @@
  *           fault; check the reading before dosing" (or "FC fell 6.1 ppm since the previous sample (12.6 to 6.5
  *           ppm), which in SLAM looks like a bad reading; check it before dosing") and reserves nothing; APPROVAL
  *           queues nothing and sends the same notice. The FREE CHLORINE block keeps the capped advice and adds
- *           "Not pumped: <reason>.", and the daily summary (the only text when autoRun is off, as on 2200) reads
+ *           "Not pumped: <reason>.", and the daily summary (the only text when autoRun is off, as live) reads
  *           "Daily pool chlorine: not pumped. <reason>." with no cap note. Normal SLAM nights (Oct 10: 6.0
  *           then 5.2) still pump the capped 3000 mL.
  *   2.4.7 - The daily FC loss in the summary (WOR-752), and new pump runtime defaults. The loss figure feeds

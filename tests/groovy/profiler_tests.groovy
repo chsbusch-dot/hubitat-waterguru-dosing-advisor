@@ -4,7 +4,7 @@
  * The profiler's own methods run against the same stubbed Hubitat runtime as the child app's suite,
  * with a fake meter that follows the hub rule measured on 2026-10-04: a report whose value did not
  * change leaves the reading's date where it was, and reaches only subscribers that opted out of
- * duplicate filtering. runPlug models plug 4680 as configured on 2026-10-14. File Manager is
+ * duplicate filtering. runPlug models the pump plug as configured on 2026-10-14. File Manager is
  * HubitatStub.fileStore, which can be told to fail a listing, a read or a write.
  *
  * The "Gets:" checks count the profiler's refreshes in a 13.5 minute run (the Oct 12 and 13 runs were
@@ -103,7 +103,7 @@ def at = { String hhmmss -> Date.parse("yyyy-MM-dd HH:mm:ss.SSS Z", "2026-10-03 
 int GETS_PER_REFRESH = 6
 
 /**
- * A fresh profiler installed at `start`, with the live settings of instance 2214. fallbackSecs and
+ * A fresh profiler installed at `start`, with the live profiler's settings. fallbackSecs and
  * tailSecs are left unset, as on the live instance until Done is pressed after an update, so the
  * defaults apply; sampleSecs 5 and tailSamples 3 are only read by 1.1.x (the GET_COUNT_ONLY run).
  */
@@ -137,7 +137,7 @@ def deliver = { app, meter, String attr, def v ->
 def switchTo = { app, meter, String v -> deliver(app, meter, "switch", v) }
 
 /**
- * Plug 4680 (Zooz ZEN05, mesh node 72): a power report on a change of 5 W or more (parameter 9), one every
+ * The pump plug (Zooz ZEN05, classic mesh): a power report on a change of 5 W or more (parameter 9), one every
  * `periodicSecs` (null for none), and an answer to every refresh
  * about 0.5 s later with its switch, power, amperage and voltage. The tests mostly use periodicSecs 60, which
  * sends more power reports than the real plug: its periodic power report (parameter 10) is every 700 minutes,
@@ -178,7 +178,7 @@ def runPlug = { app, meter, long untilMs, Map p ->
     return other
 }
 
-/** The pump's draw as plug 4680 showed it on Oct 12 and 13: nothing for 2.8 s after the ON, 7.6 W in the
+/** The pump's draw as the pump plug showed it on Oct 12 and 13: nothing for 2.8 s after the ON, 7.6 W in the
  *  first report, then 7.1 W easing to 6.7 W by the OFF, nothing from 1.5 s after it. */
 def pumpWatts = { long on, long off ->
     return { long t ->

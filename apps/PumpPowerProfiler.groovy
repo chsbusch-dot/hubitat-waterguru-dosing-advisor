@@ -55,7 +55,7 @@ import groovy.transform.Field
 // Rows kept for a summary file that could not be read or written, until a later save succeeds.
 @Field static final int SUMMARY_BACKLOG_MAX = 60
 
-// 1.2.0 sampling. The plug reports power on its own only on a change (4680: parameter 9, 5 W) or every 700
+// 1.2.0 sampling. The plug reports power on its own only on a change (parameter 9, 5 W) or every 700
 // minutes (parameter 10); its once-a-minute report is voltage (parameter 16). Steady-run power therefore comes
 // from refresh answers: the dosing app refreshes the plug every 10 s during a dose, and the profiler listens and
 // refreshes only around the switch changes, or when the device has gone quiet for fallbackSecs.

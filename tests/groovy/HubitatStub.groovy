@@ -103,8 +103,8 @@ abstract class HubitatStub extends Script {
      *   - a changed value updates the stored state, value AND date, and reaches every subscriber;
      *   - an UNCHANGED value is still stored and delivered as an event with isStateChange:false and
      *     a fresh event date, but only to subscribers that opted out of duplicate filtering
-     *     (filterEvents:false), and it does NOT advance currentState(attr).date. Live evidence: plug
-     *     4674 logged "switch off (digital)" with isStateChange:false at 10:14:09, 11:31:23 and
+     *     (filterEvents:false), and it does NOT advance currentState(attr).date. Live evidence: the pump
+     *     plug logged "switch off (digital)" with isStateChange:false at 10:14:09, 11:31:23 and
      *     11:31:56 PDT while currentState('switch').date stayed 2026-10-04T02:48:31Z.
      *
      * Until 2.4.1 this stub re-dated the unchanged value, the opposite of the hub, which is why the
@@ -131,7 +131,7 @@ abstract class HubitatStub extends Script {
      * Each event reaches its subscribers as it is written, so a LastMeasurement handler runs while the
      * rest of the sample (freeChlorine, CassetteChecksLeft, doseAdvice) still holds the previous one.
      * That is what the live hub showed: 2.4.2's onNewSample stored the previous sample's FC for 7 of the
-     * 8 samples from Sep 29 to Oct 5 (app 2200's state.fcHistory against device 4656's events).
+     * 8 samples from Sep 29 to Oct 5 (the dosing app's state.fcHistory against the pool device's events).
      */
     def deliverSourceBatch(def device, List<List> batch, boolean force = false) {
         batch.each { pair ->
