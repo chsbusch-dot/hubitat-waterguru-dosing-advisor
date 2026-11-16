@@ -1,13 +1,13 @@
 {
     "packageName": "WaterGuru Dosing Advisor",
     "author": "Chris Busch",
-    "version": "2.5.4",
+    "version": "2.5.5",
     "minimumHEVersion": "2.3.0",
-    "dateReleased": "2026-11-09",
+    "dateReleased": "2026-11-16",
     "documentationLink": "https://github.com/chsbusch-dot/hubitat-waterguru-dosing-advisor/blob/main/README.md",
     "communityLink": "https://github.com/chsbusch-dot/hubitat-waterguru-dosing-advisor",
     "licenseFile": "https://raw.githubusercontent.com/chsbusch-dot/hubitat-waterguru-dosing-advisor/main/LICENSE",
-    "releaseNotes": "2.5.4 - With SLAM on, a manual FC target now works as the SLAM target. Before this release the app treated SLAM on with a manual target as outside SLAM, so a target above 10 was capped to 10.0 ppm and a WaterGuru very high alert held the pump. Now a manual target (above 0, at most 50 ppm) is the SLAM target, capped to 28 ppm: a typo such as 40 doses only toward 28, and the advice, the daily summary and the settings page say so. It is not limited to the SLAM factor times CYA, and the computed SLAM target is not capped. In SLAM a reading of exactly 10.0 is no longer held (WaterGuru now sends unclipped readings), so only the SLAM checks (a 0.0 reading, a drop of more than 4 ppm) and the pump limits apply. The advice and the settings page say SLAM and name the target. With SLAM off nothing changes: a manual target above 10 is capped to 10.0 ppm. Code update only, no need to press Done.",
+    "releaseNotes": "2.5.5 - A second low-tank warning: days of dosing left. New setting \"PushOver low-tank warning at days of dosing left\" (default 14, 0 turns it off) sends one PushOver warning per tank when the tank will run empty in fewer than that many days at the recent daily use. The recent daily use is the chlorine booked over the last 14 days, so a SLAM stretch stops counting 14 days after it ends and a rise in use shows within 14 days. Marking the tank full or correcting the estimate re-arms the warning. The percent warning is unchanged. The tank runway line now shows days until empty beside days until the percent threshold. The warning never blocks or changes a dose. Code update only, no need to press Done.",
     "apps": [
         {
             "id": "2644cf65-7fd6-4f3a-9bad-cd7f47393c11",

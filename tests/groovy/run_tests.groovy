@@ -533,17 +533,18 @@ check("a THROWING switch read must not abort any stop path") {
 
 check("computeTankRunway: ongoing zero-dose days lower the measured rate") {
     def app = newApp()
+    // 2.5.5: both doses stay inside the 14-day window, so the span runs from the first dose to now.
     primeTank(app, 56781.176760G, 50000G,
-              [[app.clockMs - 10 * DAY_MS, 1000], [app.clockMs, 1000]])
+              [[app.clockMs - 5 * DAY_MS, 1000], [app.clockMs, 1000]])
 
     def before = app.computeTankRunway()
-    app.clockMs = app.clockMs + (10 * DAY_MS)        // ten more days, no dose
+    app.advance(5 * DAY_MS)                          // five more days, no dose
     def after = app.computeTankRunway()
 
-    expect(Math.abs((before.dailyUse as BigDecimal).doubleValue() - 200.0d) < 0.01d,
-           "sanity: the first measurement should be 200 mL/day, got ${before.dailyUse}")
-    expect(Math.abs((after.dailyUse as BigDecimal).doubleValue() - 100.0d) < 0.01d,
-           "ten zero-dose days should halve the rate, got ${after.dailyUse}")
+    expect(Math.abs((before.dailyUse as BigDecimal).doubleValue() - 400.0d) < 0.01d,
+           "sanity: the first measurement should be 400 mL/day, got ${before.dailyUse}")
+    expect(Math.abs((after.dailyUse as BigDecimal).doubleValue() - 200.0d) < 0.01d,
+           "five zero-dose days should halve the rate, got ${after.dailyUse}")
     expect((after.days as BigDecimal) > (before.days as BigDecimal),
            "and the runway should lengthen")
 }
@@ -5759,6 +5760,166 @@ check("WOR-716 control: with this app's own refreshes unanswered, the 1 minute r
     expect(app.noticesMatching("no fresh power reading").size() == 1, "for missing reports: ${app.noticesMatching('power LOST')}")
 }
 
+// ----------------------------------------------------------------------- 2.5.5 (WOR-1234): the days-left tank warning
+
+def RUNWAY_NOTICE = "Chlorine tank runs out in about"
+def TANK_15_GAL = 56781.176760G
+
+/** `days` daily doses of `ml`, the newest one day before now, oldest first (as the history is kept). */
+def dailyDoses = { app, int days, BigDecimal ml, int newestDaysAgo = 1 ->
+    ((days + newestDaysAgo - 1)..newestDaysAgo).collect { [app.clockMs - it * DAY_MS, ml] }
+}
+
+/** A day passes, then the pump's dose is booked the way a confirmed start books it. */
+def dayOfDosing = { app, BigDecimal ml ->
+    app.advance(DAY_MS)
+    app.recordTankUse(ml)
+}
+
+check("2.5.5 (WOR-1234): the days-left warning goes out once, when the runway crosses the limit") {
+    def app = newApp()
+    // 500 mL a day for 10 days, 8000 mL left: 16 days of dosing, above the default 14.
+    primeTank(app, TANK_15_GAL, 8000G, dailyDoses(app, 10, 500G))
+    expect(app.tankRunwayLine(app.computeTankRunway()).startsWith("⏳ Tank runway: ~16.0 days of dosing left until empty, ~4.6 days until it drops below 10%"),
+           "the page shows days to empty and days to the percent threshold: ${app.tankRunwayLine(app.computeTankRunway())}")
+    dayOfDosing(app, 500G)                                    // 7500 mL: 15 days
+    dayOfDosing(app, 500G)                                    // 7000 mL: exactly 14 days, not fewer
+    expect(app.noticesMatching(RUNWAY_NOTICE).isEmpty(), "no warning at 15 or exactly 14 days: ${app.notices}")
+    dayOfDosing(app, 500G)                                    // 6500 mL: 13 days
+    expect(app.noticesMatching(RUNWAY_NOTICE) == ["WaterGuru dosing: Chlorine tank runs out in about 13.0 days of dosing (warning set at 14 days): " +
+                                                  "6500 mL left (11%), using 500 mL/day over the last 13.0 days. Refill it, then press Mark chlorine tank full."],
+           "one warning naming days, mL, percent, mL/day and what to do: ${app.notices}")
+    expect(app.state.tankRunwayAlerted == true, "the warning is latched for this tank")
+    dayOfDosing(app, 500G)                                    // 6000 mL: 12 days, still short
+    expect(app.noticesMatching(RUNWAY_NOTICE).size() == 1, "the next dose does not repeat it: ${app.noticesMatching(RUNWAY_NOTICE)}")
+    expect(app.noticesMatching("Chlorine tank LOW").isEmpty(), "control: the percent warning is a separate one and not due yet")
+}
+
+check("2.5.5 (WOR-1234): no days-left warning while the runway is still learning") {
+    def app = newApp()
+    primeTank(app, TANK_15_GAL, 20000G, [[app.clockMs, 1000]])
+    app.checkTankRunwayAlertSafely()                          // one dose: no rate yet
+    app.advance(60_000L)
+    app.recordTankUse(1000G)                                  // two doses a minute apart: still no rate
+    expect(app.computeTankRunway().state == "learning", "sanity: the runway is learning: ${app.computeTankRunway()}")
+    expect(app.noticesMatching(RUNWAY_NOTICE).isEmpty() && app.state.tankRunwayAlerted != true,
+           "no warning from a rate that does not exist yet: ${app.notices}")
+    dayOfDosing(app, 1000G)                                   // a day of history: about 3000 mL/day, 17000 mL left
+    expect(app.noticesMatching(RUNWAY_NOTICE).size() == 1, "control: once the rate is known the short runway warns: ${app.notices}")
+}
+
+check("2.5.5 (WOR-1234): 0 turns the days-left warning off, and a save applies a new limit at once") {
+    def app = newApp()
+    app.tankLowDays = "0"
+    primeTank(app, TANK_15_GAL, 8000G, dailyDoses(app, 10, 500G))
+    4.times { dayOfDosing(app, 500G) }                        // down to 12 days
+    expect(app.noticesMatching(RUNWAY_NOTICE).isEmpty() && app.state.tankRunwayAlerted != true, "0 is off: ${app.notices}")
+    app.tankLowDays = "10"
+    app.initialize()                                          // Done: 12 days is not under 10
+    expect(app.noticesMatching(RUNWAY_NOTICE).isEmpty(), "12 days left is above a 10-day limit: ${app.notices}")
+    app.tankLowDays = "14"
+    app.initialize()                                          // Done again: the save checks the runway
+    expect(app.noticesMatching(RUNWAY_NOTICE).size() == 1 && app.noticesMatching(RUNWAY_NOTICE)[0].contains("(warning set at 14 days)"),
+           "the save sends the warning without waiting for the next dose: ${app.notices}")
+    app.initialize()
+    expect(app.noticesMatching(RUNWAY_NOTICE).size() == 1, "another save does not repeat it")
+}
+
+check("2.5.5 (WOR-1234): Mark chlorine tank full re-arms the warning for the next tank") {
+    def app = newApp()
+    primeTank(app, TANK_15_GAL, 6500G, dailyDoses(app, 13, 500G))
+    app.recordTankUse(500G)                                   // 6000 mL at about 500 mL/day: 12 days
+    expect(app.noticesMatching(RUNWAY_NOTICE).size() == 1, "sanity: the first tank warned: ${app.notices}")
+    app.resetTankFull()
+    expect(app.state.tankRunwayAlerted == false, "a full tank is armed again")
+    expect(app.noticesMatching(RUNWAY_NOTICE).size() == 1, "a full tank does not warn")
+    // The new tank drains (set directly: the months of doses in between change nothing here).
+    app.state.tankRemainingMl = "6600"
+    dayOfDosing(app, 500G)
+    expect(app.noticesMatching(RUNWAY_NOTICE).size() == 2, "the second tank gets its own warning: ${app.noticesMatching(RUNWAY_NOTICE)}")
+}
+
+check("2.5.5 (WOR-1234): a tank adjustment or a voided dose re-arms the warning, with one notice each") {
+    def app = newApp()
+    // 1000 mL a day for 14 days, 10000 mL left: 10 days.
+    primeTank(app, TANK_15_GAL, 10000G, dailyDoses(app, 14, 1000G))
+    app.checkTankRunwayAlertSafely()
+    expect(app.noticesMatching(RUNWAY_NOTICE).size() == 1, "sanity: warned once: ${app.notices}")
+    app.tankAdjustMl = -500
+    app.applyTankAdjustment()                                 // 9500 mL: still short, so a fresh warning with the new figures
+    expect(app.noticesMatching(RUNWAY_NOTICE).size() == 2 && app.noticesMatching(RUNWAY_NOTICE)[1].contains("9500 mL left"),
+           "the adjustment re-arms and the corrected estimate warns once, not twice: ${app.noticesMatching(RUNWAY_NOTICE)}")
+    Long newest = app.state.tankDoseHistory[-1].t as Long
+    app.voidDoseKey = newest.toString()
+    app.voidRecordedDose()                                    // 1000 mL back: 10500 mL at about 929 mL/day, still short
+    expect(app.noticesMatching(RUNWAY_NOTICE).size() == 3 && app.noticesMatching(RUNWAY_NOTICE)[2].contains("10500 mL left"),
+           "a voided dose re-arms it the same way: ${app.noticesMatching(RUNWAY_NOTICE)}")
+    app.tankAdjustMl = 40000
+    app.applyTankAdjustment()                                 // 50500 mL: weeks of runway
+    expect(app.noticesMatching(RUNWAY_NOTICE).size() == 3 && app.state.tankRunwayAlerted == false,
+           "an adjustment that ends the shortage sends nothing and leaves it armed: ${app.noticesMatching(RUNWAY_NOTICE)}")
+}
+
+check("2.5.5 (WOR-1234): the runway rising back above the limit re-arms the warning") {
+    def app = newApp()
+    // A warning went out while use was high; use has since dropped to 100 mL every five days.
+    primeTank(app, TANK_15_GAL, 30000G, [[app.clockMs - 10 * DAY_MS, 100], [app.clockMs - 5 * DAY_MS, 100]])
+    app.state.tankRunwayAlerted = true
+    app.recordTankUse(100G)                                   // 29900 mL at 30 mL/day: years
+    expect(app.state.tankRunwayAlerted == false && app.notices.isEmpty(), "a long runway re-arms quietly: ${app.notices}")
+    int day = 0
+    while (app.noticesMatching(RUNWAY_NOTICE).isEmpty() && day < 10) { dayOfDosing(app, 3000G); day++ }
+    expect(day == 5, "use rising to 3000 mL a day brings the runway under 14 days on day 5 and warns again: day ${day}, ${app.notices}")
+}
+
+check("2.5.5 (WOR-1234): SLAM-era doses do not keep the warning on once use falls (no early false alarm)") {
+    def app = newApp()
+    // Ten SLAM days at 3000 mL, then twenty at 500 mL: 30 entries, the history's limit.
+    primeTank(app, TANK_15_GAL, 12000G, dailyDoses(app, 10, 3000G, 21) + dailyDoses(app, 20, 500G))
+    app.recordTankUse(500G)                                   // 11500 mL; the oldest SLAM dose leaves the history
+    List h = app.state.tankDoseHistory
+    BigDecimal wholeRate = (h.collect { new BigDecimal(it.ml) }.sum() as BigDecimal) * DAY_MS / (app.clockMs - (h[0].t as Long))
+    expect(11500G / wholeRate < 14G, "control: the whole history would call this ${11500G / wholeRate} days and warn")
+    expect(app.noticesMatching(RUNWAY_NOTICE).isEmpty(), "the last 14 days say about 21 days left, so no warning: ${app.notices}")
+    expect(app.tankRunwayLine(app.computeTankRunway()) ==
+           "⏳ Tank runway: ~21.5 days of dosing left until empty, ~10.9 days until it drops below 10% (average 536 mL/day over the last 14.0 days).",
+           "the page uses the same recent rate: ${app.tankRunwayLine(app.computeTankRunway())}")
+}
+
+check("2.5.5 (WOR-1234): a rise in use warns even when the older history was light (no missed alarm)") {
+    def app = newApp()
+    // Twenty days at 500 mL, then ten at 2000 mL.
+    primeTank(app, TANK_15_GAL, 20000G, dailyDoses(app, 20, 500G, 11) + dailyDoses(app, 10, 2000G))
+    app.recordTankUse(2000G)                                  // 18000 mL
+    List h = app.state.tankDoseHistory
+    BigDecimal wholeRate = (h.collect { new BigDecimal(it.ml) }.sum() as BigDecimal) * DAY_MS / (app.clockMs - (h[0].t as Long))
+    expect(18000G / wholeRate >= 14G, "control: the whole history would call this ${18000G / wholeRate} days and stay quiet")
+    expect(app.noticesMatching(RUNWAY_NOTICE) == ["WaterGuru dosing: Chlorine tank runs out in about 10.5 days of dosing (warning set at 14 days): " +
+                                                  "18000 mL left (32%), using 1714 mL/day over the last 14.0 days. Refill it, then press Mark chlorine tank full."],
+           "the last 14 days say 10.5 days left: ${app.notices}")
+}
+
+check("2.5.5 (WOR-1234): with no dose in the last 14 days the runway falls back to the whole history") {
+    def app = newApp()
+    primeTank(app, TANK_15_GAL, 50000G, [[app.clockMs - 30 * DAY_MS, 1000], [app.clockMs - 20 * DAY_MS, 1000]])
+    Map runway = app.computeTankRunway()
+    expect(runway.state == "ok" && Math.abs((runway.dailyUse as BigDecimal).doubleValue() - 2000.0d / 30.0d) < 0.01d &&
+           Math.abs((runway.spanDays as BigDecimal).doubleValue() - 30.0d) < 0.01d,
+           "2000 mL over 30 days, not learning: ${runway}")
+}
+
+check("2.5.5 (WOR-1234): a short runway never blocks or shortens a dose") {
+    def app = newApp()
+    def pump = hubPlug(app)
+    primeTank(app, TANK_15_GAL, 6500G, dailyDoses(app, 13, 500G))
+    app.checkTankRunwayAlertSafely()
+    expect(app.noticesMatching(RUNWAY_NOTICE).size() == 1, "sanity: the warning is out: ${app.notices}")
+    def dose = confirmedHubStart(app, pump)
+    expect(dose?.startConfirmed == true && dose.ml?.toString() == "475" && dose.seconds == 129,
+           "the 475 mL dose starts and runs its full 129 s: ${dose}")
+    expect(app.noticesMatching(RUNWAY_NOTICE).size() == 1, "booking it does not repeat the warning")
+}
+
 // ----------------------------------------------------------------------- 2.5.0 (WOR-741): no em or en dash in what users read
 
 def DASHES = ~/[\u2014\u2013]|&mdash;|&ndash;/
@@ -5776,7 +5937,9 @@ check("2.5.0 change 6: no em or en dash in the page, the banners or the advice t
     List texts = [app.state.lastPreview, app.slamPageBanner(), app.dosingStatusHtml(), app.nextCycleHtml(),
                   app.scheduledStopMessage([startConfirmed: false, ml: "237"]),
                   app.runwayLine([state: "below", floor: 2.5G]), app.runwayLine([state: "holding", floor: 2.5G]),
-                  app.tankRunwayLine([state: "learning", pct: 10G, n: 0])]
+                  app.tankRunwayLine([state: "learning", pct: 10G, n: 0]),
+                  app.tankRunwayLine([state: "ok", pct: 10G, days: 5G, daysToEmpty: 6G, dailyUse: 500G, spanDays: 14G]),
+                  app.tankRunwayLine([state: "below", pct: 10G, days: 0G, daysToEmpty: 6G, dailyUse: 500G, spanDays: 14G])]
     ["STARTING", "RUNNING", "FAULT"].each { kind ->
         app.state.activeDose = [ml: "237", startConfirmed: kind != "STARTING", fault: kind == "FAULT" ? "power-loss" : null, stopAt: app.clockMs]
         texts << app.dosingStatusHtml()

@@ -20,8 +20,10 @@ U1-U4 one 2.5.0 save rule each, N1-N6 one notice-slot or stopOpen() rule each an
 default, the profiler in the manifest; S1-S3, TG1-TG7 re-anchored to doseCap/fcReadingProblem, S2 retired),
 and for WOR-921 H1-H16 one 2.5.2 FC-ceiling rule each (the 10.0 reading, the WaterGuru very high signals, the
 plain high alert and the decrease advice kept out, the target warning, two dashes put back, and the 0.0 / big
-drop reason winning over the ceiling), and for WOR-1149 V1-V10 one 2.5.4 SLAM manual target behaviour each;
-every one of those must be killed by the tests that guard it.
+drop reason winning over the ceiling), for WOR-1149 V1-V16 one 2.5.4 SLAM manual target behaviour each, and
+for WOR-1234 RW1-RW17 one 2.5.5 days-left tank warning rule each (the 14-day rate window and its fallback, days
+to empty, the limit and 0 = off, the latch and its four re-arms, the two check points, the notice and the page
+line); every one of those must be killed by the tests that guard it.
 
 A mutant edits the child app unless it is declared with mutp(), which edits the profiler, or with
 target=PARENT or target=MANIFEST, which edit the parent app or packageManifest.json. Each mutant
@@ -722,6 +724,49 @@ mut("V15", "killed", "the daily summary says outside SLAM for a capped SLAM manu
     ("${result?.fcSlam == true ? 'in' : 'outside'} SLAM)", "outside SLAM)"))
 mut("V16", "killed", "the SLAM page banner shows the uncapped manual target",
     ("        if (manual > SLAM_MANUAL_TARGET_CAP_PPM) tgt = \" Current target ${n1(SLAM_MANUAL_TARGET_CAP_PPM)} ppm (manual target ${n1(manual)} ppm, capped to ${n0(SLAM_MANUAL_TARGET_CAP_PPM)} ppm in SLAM).\"\n", ""))
+
+# ---- 2.5.5 (WOR-1234): the days-left tank warning, each rule reverted (must be killed) ----
+# Not mutated, as equivalent: the `limit <= 0G` guard (tankLowDaysLimit() returns 0 for off, and days left is
+# never negative, so 0 re-arms and returns anyway) and the window's half-day test (a window under half a day
+# means the whole history is under half a day too, which is learning either way).
+mut("RW1", "killed", "the daily use is the whole dose history again, not the last 14 days (a SLAM stretch keeps the rate high)",
+    ("    boolean windowed = !recent.isEmpty() && (windowEnd - recentFrom) / 86400000G >= 0.5G\n",
+     "    boolean windowed = false\n"))
+mut("RW2", "killed", "a 14-day window with no dose in it reads as learning instead of falling back to the whole history",
+    ("    boolean windowed = !recent.isEmpty() && (windowEnd", "    boolean windowed = (windowEnd"))
+mut("RW3", "killed", "days left counts to the percent threshold instead of to empty",
+    ("    BigDecimal daysLeft = runway?.daysToEmpty as BigDecimal\n", "    BigDecimal daysLeft = runway?.days as BigDecimal\n"))
+mut("RW4", "killed", "the default warning limit is 10 days, not 14",
+    ("@Field static final BigDecimal TANK_LOW_DAYS_DEFAULT   = 14G", "@Field static final BigDecimal TANK_LOW_DAYS_DEFAULT   = 10G"))
+mut("RW5", "killed", "0 does not turn the warning off (it falls back to the default)",
+    ("    return limit > 0G ? limit : 0G\n", "    return limit > 0G ? limit : TANK_LOW_DAYS_DEFAULT\n"))
+mut("RW6", "killed", "exactly the limit warns (fewer than 14 days becomes 14 or fewer)",
+    ("    if (daysLeft >= limit) {\n", "    if (daysLeft > limit) {\n"))
+mut("RW7", "killed", "no latch: every dose under the limit repeats the warning",
+    ("    if (state.tankRunwayAlerted == true) return\n", ""))
+mut("RW8", "killed", "a learning runway (no rate) is not skipped",
+    ("    if (daysLeft == null) return\n", ""))
+mut("RW9", "killed", "Mark chlorine tank full does not re-arm the warning",
+    ("    state.tankRunwayAlerted = false             // 2.5.5: a new tank gets its own days-left warning\n", ""))
+mut("RW10", "killed", "a tank adjustment does not re-arm the warning",
+    ("    state.tankRunwayAlerted = false\n    debitTank(before - after)                 // a negative debit puts chlorine back\n",
+     "    debitTank(before - after)                 // a negative debit puts chlorine back\n"))
+mut("RW11", "killed", "a voided dose does not re-arm the warning",
+    ("        state.tankRunwayAlerted = false       // 2.5.5: a correction re-arms the days-left warning (see applyTankAdjustment)\n", ""))
+mut("RW12", "killed", "the runway rising back to the limit or above does not re-arm the warning",
+    ("    if (daysLeft >= limit) {\n        state.tankRunwayAlerted = false\n        return\n    }\n",
+     "    if (daysLeft >= limit) {\n        return\n    }\n"))
+mut("RW13", "killed", "a tank debit (a booked dose) does not check the warning",
+    ("    // 2.5.5 (WOR-1234): the days-left warning. A notice only, guarded like the preview below.\n    checkTankRunwayAlertSafely()\n", ""))
+mut("RW14", "killed", "a settings save does not check the warning (a new limit waits for the next dose)",
+    ("    // 2.5.5 (WOR-1234): a save checks the runway warning, so a new tankLowDays applies at once.\n    checkTankRunwayAlertSafely()\n", ""))
+mut("RW15", "killed", "the warning does not say what to do (refill, then Mark chlorine tank full)",
+    ("                 \"Refill it, then press Mark chlorine tank full.\"\n", "                 \"\"\n"))
+mut("RW16", "killed", "an em dash is in the days-left warning",
+    ("\"Refill it, then press Mark chlorine tank full.\"", "\"Refill it — then press Mark chlorine tank full.\""))
+mut("RW17", "killed", "the page runway line shows only the days to the percent threshold, not the days to empty",
+    ("~${n1(runway.daysToEmpty)} days of dosing left until empty, ~${n1(runway.days)} days until it drops below",
+     "~${n1(runway.days)} days until it drops below"))
 
 
 def build(name):
