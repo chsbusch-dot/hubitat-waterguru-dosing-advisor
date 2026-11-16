@@ -166,6 +166,7 @@ other settings shape the dose.
 | **Arm an independent emergency cutoff for every pump run** | on | A second, independent OFF timer for every pump start, retried until the switch freshly reports off. The last backstop. | yes |
 | **Independent emergency cutoff after this many minutes** | 15 | When the cutoff fires. It must be later than the maximum runtime, or no dose can start and the page shows the problem in red. | yes |
 | **Chlorine container capacity** and **low-tank warning percent** | 1 gal, 20 % | The tank estimate: a dose larger than what is estimated to remain is blocked (in SLAM mode capped to it), and a low tank sends a warning. | yes |
+| **PushOver low-tank warning at days of dosing left** | 14 | One warning when the tank will run empty in fewer than this many days at the recent daily use: the mL booked over the last 14 days, or the whole dose history while that window holds no dose. Days of dosing means days until the tank is empty, not until it reaches the low-tank percent. One warning per tank: *Mark chlorine tank full* or a correction re-arms it, and so does the runway rising back above the limit. No warning while the runway is still learning. It never blocks a dose. 0 turns it off. Since 2.5.5. | no |
 
 Two checks run before every start and are reported like any other block:
 
@@ -213,7 +214,7 @@ confirmed still reserves its sample and daily volume, but writes no `lastDose*` 
 | `tankCapacityMl` | mL | Configured container capacity. |
 | `tankRemainingMl` | mL | Estimated remaining inventory: capacity minus recorded app-controlled doses. |
 | `tankPercent` | % | `tankRemainingMl` as a percentage of capacity. |
-| `tankRunwayDays` | days | Estimated days until inventory reaches the configured low-tank threshold. `-1` while there is not yet enough dose history. |
+| `tankRunwayDays` | days | Estimated days until inventory reaches the configured low-tank threshold. Since 2.5.5 at the recent daily use (the mL booked over the last 14 days), not the whole dose history. `-1` while there is not yet enough dose history. |
 | `freeChlorine` | ppm | The reading this calculation used. |
 | `targetFreeChlorine` | ppm | The FC target this app computed: CYA-aware, or your manual override. |
 | `lastCalcEpochMs` | epoch ms | The same instant as `lastCalc`, as epoch milliseconds. `lastCalc` is a formatted date string that cannot be parsed reliably off the hub, so an external tool should use this one. |

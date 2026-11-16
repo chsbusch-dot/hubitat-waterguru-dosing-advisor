@@ -27,6 +27,18 @@
  * All doses are ESTIMATES. Always confirm with your own test kit before adding.
  *
  * Version history
+ *   2.5.5 - Days-left tank warning (WOR-1234, Chris 2026-11-15: "a pushover alert once chlorine tank volume is below
+ *           2 weeks of dosing or something like 20%"). New setting tankLowDays (default 14, 0 = off): one PushOver
+ *           warning per tank once fewer than that many days of dosing are left, days until EMPTY at the recent daily
+ *           use, through the same notifier as the percent warning (tankLowPercent, unchanged). The latch
+ *           state.tankRunwayAlerted is re-armed by Mark chlorine tank full, by a correction (adjustment or voided
+ *           dose) and by the runway rising back to the limit or above; no warning while the runway is learning. It is
+ *           checked after each tank debit and on a save. The daily use is now the mL booked over the last
+ *           TANK_RATE_WINDOW_DAYS 14 days to now (the whole history while that window holds no dose), so a SLAM
+ *           stretch stops inflating it 14 days after it ends and a rise in use shows within 14 days. The runway line
+ *           shows days to empty beside days to the percent threshold, and the tank section shows it too. The tile's
+ *           tankRunwayDays stays days to the percent threshold, now at the recent rate; no new attribute. Nothing
+ *           here starts, stops, sizes or blocks a dose.
  *   2.5.4 - SLAM on with a manual FC target is SLAM (WOR-1149, Chris 2026-11-08: "slam is on. fc is set to 12 ppm but
  *           it's not dosing"). computeFc's manual branch never set slam, so with 2.5.3 a manual target of 12 was capped
  *           to 10.0 and the outside-SLAM holds applied: the very high alert held every 19:45 dose from Nov 2 to Nov 8
@@ -359,7 +371,7 @@
 
 import groovy.transform.Field
 
-def appVersion() { "2.5.4" }
+def appVersion() { "2.5.5" }
 
 definition(
     name:        "WaterGuru Dosing Advisor Pool",
@@ -419,6 +431,11 @@ preferences {
 // device reports one.
 @Field static final int        RUNWAY_HISTORY_MAX      = 30
 @Field static final int        TANK_DOSE_HISTORY_MAX   = 30
+// 2.5.5 (WOR-1234): the tank runway's daily use is the mL booked over the last this-many days to now, so
+// it follows the current regime: a SLAM stretch leaves the rate 14 days after it ends, and a rise in use
+// shows within 14 days. The whole history is the fallback while that window holds no dose.
+@Field static final int        TANK_RATE_WINDOW_DAYS   = 14
+@Field static final BigDecimal TANK_LOW_DAYS_DEFAULT   = 14G
 
 // Stop verification. A stop is only "stopped" once the switch reports it, so these bound the
 // RETRIES, never the confirmation: the independent emergency cutoff stays armed until the
@@ -600,6 +617,12 @@ def mainPage() {
             input "tankLowPercent", "decimal",
                 title: "PushOver low-tank warning at remaining percent",
                 defaultValue: 20, required: true
+            input "tankLowDays", "decimal",
+                title: "PushOver low-tank warning at days of dosing left (0 = off)",
+                defaultValue: 14, required: true
+            paragraph "<small>Days of dosing left means days until the tank is EMPTY at the recent daily use " +
+                      "(mL booked over the last ${TANK_RATE_WINDOW_DAYS} days). One warning per tank: Mark chlorine tank full " +
+                      "or a correction re-arms it, and so does the runway rising back above the limit. It never blocks a dose.</small>"
             paragraph tankStatusHtml()
 
             // Corrections for any install. Each value is saved on change, the line under it says
@@ -980,8 +1003,10 @@ private String tankStatusHtml() {
         return "Tank inventory is <b>not initialized</b>. Press <i>Mark chlorine tank full / reset inventory</i> after confirming the container is full. AUTO dosing will remain blocked until then."
     }
     BigDecimal pct = cap > 0 ? (remaining * 100G / cap) : 0G
+    String runway = tankRunwayLine(computeTankRunway())
     return "Estimated remaining: <b>${n0(remaining)} mL / ${n2(remaining / ML_PER_US_GALLON)} gal (${n0(pct)}%)</b>. " +
-           "This estimate subtracts pump-planned volume; reset it whenever the container is replaced or refilled."
+           "This estimate subtracts pump-planned volume; reset it whenever the container is replaced or refilled." +
+           (runway ? "<br>${runway}" : "")
 }
 
 /**
@@ -1190,6 +1215,9 @@ def initialize() {
     // way: a save sends a stop notice of its own (safeStopPump).
     if (!stopOpen()) state.remove("pendingStopNotice")
     state.remove("pendingEmergencyNotice")
+
+    // 2.5.5 (WOR-1234): a save checks the runway warning, so a new tankLowDays applies at once.
+    checkTankRunwayAlertSafely()
 
     // Populate the tile right away so it is never blank after a save.
     refreshTile()
@@ -3521,6 +3549,7 @@ private void resetTankFull() {
     state.tankRemainingMl = cap.toString()
     state.tankLastRefill = now()
     state.tankLowAlerted = false
+    state.tankRunwayAlerted = false             // 2.5.5: a new tank gets its own days-left warning
     Map refreshed = computeAdvice()
     state.lastPreview = refreshed.text
     updateTileDevice(refreshed)
@@ -3562,6 +3591,9 @@ private void applyTankAdjustment() {
         return
     }
     BigDecimal after = clampTank(before + delta, cap)
+    // 2.5.5 (WOR-1234): a correction re-arms the days-left warning before the debit, so the debit checks it
+    // once on the corrected estimate (re-arming after it would send a second copy of a warning it just sent).
+    state.tankRunwayAlerted = false
     debitTank(before - after)                 // a negative debit puts chlorine back
     rearmLowTankAlert()
     state.lastTankCorrection = [kind: "adjust", at: now(), requestedMl: delta.toString(),
@@ -3640,6 +3672,7 @@ private void voidRecordedDose() {
     BigDecimal after = before
     if (cap != null && before != null && ml > 0G) {
         after = clampTank(before + ml, cap)
+        state.tankRunwayAlerted = false       // 2.5.5: a correction re-arms the days-left warning (see applyTankAdjustment)
         debitTank(before - after)
         rearmLowTankAlert()
     }
@@ -3735,6 +3768,9 @@ private void debitTank(BigDecimal ml) {
         sendPumpNotice(msg)
     }
 
+    // 2.5.5 (WOR-1234): the days-left warning. A notice only, guarded like the preview below.
+    checkTankRunwayAlertSafely()
+
     // Display-only, but confirmDoseStart() calls recordTankUse() as part of the confirmed-start
     // bookkeeping, so this must not be able to throw into the ledger bookkeeping that precedes it.
     try {
@@ -3793,6 +3829,47 @@ private List tankDoseHistory() {
     return history
 }
 
+/**
+ * The tank's recent daily use: [dailyUse, n, spanDays], dailyUse null while there is no rate to give.
+ *
+ * Elapsed days, not dose count. An average of mL per DOSE is not mL per DAY, and skipped dosing days make
+ * it overstate the runway. Total delivered volume over the span those doses were delivered across is a
+ * time-weighted average, so irregular intervals are handled correctly and a week of skipped doses lowers
+ * the rate instead of being ignored.
+ *
+ * 2.5.5 (WOR-1234): the volume is the mL booked over the last TANK_RATE_WINDOW_DAYS days to now, over that
+ * window (or from the first dose on record, when the history is younger), so the rate follows the current
+ * regime: up to 2.5.4 it was the whole history (up to TANK_DOSE_HISTORY_MAX doses), and a SLAM stretch kept
+ * the rate high for weeks after it ended. The whole history is the fallback while the window holds no dose
+ * or covers under half a day.
+ */
+private Map tankDailyUse() {
+    List entries = tankDoseHistory().findAll {
+        it?.t instanceof Number && toBD(it?.ml) != null && toBD(it?.ml) > 0
+    }
+    if (!entries) return [n: 0]
+
+    Long firstT = entries.collect { it.t as Long }.min()
+    Long lastT = entries.collect { it.t as Long }.max()
+    // Elapsed time runs to NOW, not to the last dose. Ten days without a dose is ten days in which
+    // the tank was not drawn down, and the rate has to reflect that -- measuring only first-dose to
+    // last-dose made ongoing skipped days invisible.
+    Long windowEnd = Math.max(lastT, now())
+    Long windowStart = windowEnd - (TANK_RATE_WINDOW_DAYS as Long) * 86400000L
+    List recent = entries.findAll { (it.t as Long) >= windowStart }
+    Long recentFrom = Math.max(windowStart, firstT)
+    boolean windowed = !recent.isEmpty() && (windowEnd - recentFrom) / 86400000G >= 0.5G
+    List used = windowed ? recent : entries
+    BigDecimal volume = used.collect { toBD(it.ml) }.sum(0G)
+    BigDecimal spanDays = (windowEnd - (windowed ? recentFrom : firstT)) / 86400000G
+
+    // Under about half a day there is no interval worth measuring a daily rate over -- one dose,
+    // or two inside the same hour, would otherwise produce a wildly high rate and a runway near
+    // zero. "Learning" is the honest answer until real time has passed.
+    if (volume <= 0 || spanDays < 0.5G) return [n: used.size(), spanDays: spanDays]
+    return [dailyUse: volume / spanDays, n: used.size(), spanDays: spanDays]
+}
+
 private Map computeTankRunway() {
     BigDecimal cap = tankCapacityMl()
     BigDecimal remaining = tankRemainingMl()
@@ -3802,42 +3879,75 @@ private Map computeTankRunway() {
     if (lowPct < 0) lowPct = 0G
     if (lowPct > 100) lowPct = 100G
     BigDecimal threshold = cap * lowPct / 100G
-    if (remaining <= threshold) return [state: "below", pct: lowPct, days: 0G]
-
-    // Elapsed days, not dose count. An average of mL per DOSE is not mL per DAY, and skipped
-    // dosing days make it overstate the runway. Total delivered volume over the span those
-    // doses were delivered across is a time-weighted average, so irregular intervals are handled
-    // correctly and a week of skipped doses lowers the rate instead of being ignored.
-    List entries = tankDoseHistory().findAll {
-        it?.t instanceof Number && toBD(it?.ml) != null && toBD(it?.ml) > 0
+    Map use = tankDailyUse()
+    BigDecimal dailyUse = use.dailyUse as BigDecimal
+    // 2.5.5: days until EMPTY at the recent daily use, beside the days until the percent threshold. The
+    // tile's tankRunwayDays stays the latter (0 once at or below it).
+    Map rate = dailyUse != null
+        ? [dailyUse: dailyUse, daysToEmpty: remaining / dailyUse, n: use.n, spanDays: use.spanDays]
+        : [:]
+    if (remaining <= threshold) return [state: "below", pct: lowPct, days: 0G] + rate
+    if (dailyUse == null) {
+        return use.spanDays != null ? [state: "learning", pct: lowPct, n: use.n, spanDays: use.spanDays]
+                                    : [state: "learning", pct: lowPct, n: 0]
     }
-    if (!entries) return [state: "learning", pct: lowPct, n: 0]
+    return [state: "ok", pct: lowPct, days: (remaining - threshold) / dailyUse] + rate
+}
 
-    BigDecimal volume = entries.collect { toBD(it.ml) }.sum(0G)
-    Long firstT = entries.collect { it.t as Long }.min()
-    Long lastT = entries.collect { it.t as Long }.max()
-    // Elapsed time runs to NOW, not to the last dose. Ten days without a dose is ten days in which
-    // the tank was not drawn down, and the rate has to reflect that -- measuring only first-dose to
-    // last-dose made ongoing skipped days invisible.
-    Long windowEnd = Math.max(lastT, now())
-    BigDecimal spanDays = (windowEnd - firstT) / 86400000G
+/** tankLowDays as a limit in days; 0 (or a negative entry) turns the days-left warning off. */
+private BigDecimal tankLowDaysLimit() {
+    BigDecimal limit = firstNum(tankLowDays, TANK_LOW_DAYS_DEFAULT)
+    return limit > 0G ? limit : 0G
+}
 
-    // Under about half a day there is no interval worth measuring a daily rate over -- one dose,
-    // or two inside the same hour, would otherwise produce a wildly high rate and a runway near
-    // zero. "Learning" is the honest answer until real time has passed.
-    if (volume <= 0 || spanDays < 0.5G) {
-        return [state: "learning", pct: lowPct, n: entries.size(), spanDays: spanDays]
+/**
+ * 2.5.5 (WOR-1234): one PushOver warning per tank once fewer than tankLowDays days of dosing are left,
+ * days until EMPTY at the recent daily use. The state.tankRunwayAlerted latch keeps it to one: Mark chlorine
+ * tank full and a correction (an adjustment or a voided dose) re-arm it, and so does the runway rising back
+ * to the limit or above. No warning while the runway is learning (no rate). A notice and nothing else: it
+ * never blocks, sizes, starts or stops a dose.
+ */
+private void checkTankRunwayAlert() {
+    BigDecimal limit = tankLowDaysLimit()
+    if (limit <= 0G) return
+    Map runway = computeTankRunway()
+    BigDecimal daysLeft = runway?.daysToEmpty as BigDecimal
+    if (daysLeft == null) return
+    if (daysLeft >= limit) {
+        state.tankRunwayAlerted = false
+        return
     }
+    if (state.tankRunwayAlerted == true) return
+    state.tankRunwayAlerted = true
+    BigDecimal cap = tankCapacityMl()
+    BigDecimal remaining = tankRemainingMl()
+    String msg = "Chlorine tank runs out in about ${n1(daysLeft)} days of dosing (warning set at ${daysText(limit)} days): " +
+                 "${n0(remaining)} mL left (${n0(remaining * 100G / cap)}%), using ${n0(runway.dailyUse)} mL/day over the last ${n1(runway.spanDays)} days. " +
+                 "Refill it, then press Mark chlorine tank full."
+    log.warn "WaterGuru Dosing Advisor: ${msg}"
+    sendPumpNotice(msg)
+}
 
-    BigDecimal dailyUse = volume / spanDays
-    BigDecimal days = (remaining - threshold) / dailyUse
-    return [state: "ok", pct: lowPct, days: days, dailyUse: dailyUse,
-            n: entries.size(), spanDays: spanDays]
+/** The runway warning from paths that must not throw: a dose's bookkeeping, a save, a correction. */
+private void checkTankRunwayAlertSafely() {
+    try {
+        checkTankRunwayAlert()
+    } catch (e) {
+        log.warn "WaterGuru Dosing Advisor: tank runway warning check failed: ${e.message}"
+    }
+}
+
+/** A day count as the user typed it: 14 stays 14, 10.5 stays 10.5. */
+private String daysText(BigDecimal d) {
+    return d.remainder(1G).compareTo(0G) == 0 ? n0(d) : n1(d)
 }
 
 private String tankRunwayLine(Map runway) {
     switch (runway?.state) {
         case "below":
+            if (runway.daysToEmpty != null) {
+                return "⏳ Tank runway: inventory is at/below the ${n0(runway.pct)}% low-tank threshold; ~${n1(runway.daysToEmpty)} days of dosing left until empty (average ${n0(runway.dailyUse)} mL/day over the last ${n1(runway.spanDays)} days)."
+            }
             return "⏳ Tank runway: inventory is at/below the ${n0(runway.pct)}% low-tank threshold."
         case "learning":
             // With doses on record but under half a day of history, a completed dose is not what is missing.
@@ -3847,8 +3957,7 @@ private String tankRunwayLine(Map runway) {
             }
             return "⏳ Tank runway: learning; a completed app-controlled dose is needed to estimate days until ${n0(runway.pct)}%."
         case "ok":
-            String samples = runway.n == 1 ? "dose sample" : "dose samples"
-            return "⏳ Tank runway: ~${n1(runway.days)} days until inventory drops below ${n0(runway.pct)}% (average ${n0(runway.dailyUse)} mL/day measured over ${n1(runway.spanDays)} days)."
+            return "⏳ Tank runway: ~${n1(runway.daysToEmpty)} days of dosing left until empty, ~${n1(runway.days)} days until it drops below ${n0(runway.pct)}% (average ${n0(runway.dailyUse)} mL/day over the last ${n1(runway.spanDays)} days)."
         default:
             return ""
     }
