@@ -33,6 +33,34 @@ It adds two things the integration cannot do:
 
 ---
 
+## How it works
+
+The pod tests the water, the WaterGuru Integration brings each reading to the hub, and the
+advisor turns it into dosing advice. The advisor only switches the pump in APPROVAL or AUTO mode.
+
+```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 260}}}%%
+flowchart TD
+    pod["WaterGuru SmartPod<br>tests the pool water"] -->|readings| cloud["WaterGuru cloud"]
+    cloud --> integ
+    subgraph hub["Hubitat hub"]
+        integ["WaterGuru Integration + device<br>(bdwilson, installed separately)"] --> advisor["WaterGuru Dosing Advisor<br>parent app<br>one child per pool"]
+        advisor --> tile["Dosing Tile<br>on your dashboard"]
+        profiler["Pump Power Profiler<br>(optional)"]
+    end
+    advisor -->|dosing advice| notifier["Notifier<br>(Pushover, Telegram, etc.)"]
+    advisor -->|"APPROVAL or AUTO mode only"| plug["Smart plug"]
+    plug --> pump["Chlorine pump<br>doses the pool"]
+    plug -.->|power readings| profiler
+    cloud -.-> collector["InfluxDB and Grafana collector<br>(optional)<br>runs off the hub"]
+    tile -.->|doses and tank level| collector
+    classDef optional stroke-dasharray: 5 5
+    class profiler,collector optional
+```
+
+Dashed boxes are optional. See the [diagrams page](docs/diagrams.md) for detailed hardware and
+dosing-sequence drawings.
+
 ## Documentation
 
 | Guide | What it covers |
@@ -64,6 +92,22 @@ It adds two things the integration cannot do:
    the WaterGuru device and a notification device.
 4. The pool starts in **ADVISORY** mode: it calculates and notifies, and never starts a pump. Before
    you connect one, read [Safety](#safety) and the [hardware guide](docs/hardware.md).
+
+```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 260}}}%%
+flowchart TD
+    s1["1. Install the WaterGuru Integration"] --> s2["2. Install this package<br>in HPM: Install, From a URL"]
+    s2 --> s3["3. Add a pool<br>pick the WaterGuru device<br>and a notifier"]
+    s3 --> s4["4. ADVISORY mode<br>check the advice<br>against your own test kit"]
+    s4 -.->|optional: add a pump| s5["5. Build the pump<br>set the plug's auto-off<br>calibrate the rate"]
+    s5 --> s6["6. APPROVAL mode<br>start and watch<br>several doses yourself"]
+    s6 --> s7["7. AUTO mode"]
+    classDef optional stroke-dasharray: 5 5
+    class s5,s6,s7 optional
+```
+
+For optional steps 5 to 7, follow the [hardware guide](docs/hardware.md), its
+[calibration](docs/hardware.md#calibration) section and [Before you use AUTO](#before-you-use-auto).
 
 
 ## Safety
