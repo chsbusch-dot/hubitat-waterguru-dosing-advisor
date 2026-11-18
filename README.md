@@ -39,6 +39,7 @@ The pod tests the water, the WaterGuru Integration brings each reading to the hu
 advisor turns it into dosing advice. The advisor only switches the pump in APPROVAL or AUTO mode.
 
 ```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 260}}}%%
 flowchart TD
     pod["WaterGuru SmartPod<br>tests the pool water"] -->|readings| cloud["WaterGuru cloud"]
     cloud --> integ
@@ -93,6 +94,7 @@ dosing-sequence drawings.
    you connect one, read [Safety](#safety) and the [hardware guide](docs/hardware.md).
 
 ```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 260}}}%%
 flowchart TD
     s1["1. Install the WaterGuru Integration"] --> s2["2. Install this package<br>in HPM: Install, From a URL"]
     s2 --> s3["3. Add a pool<br>pick the WaterGuru device<br>and a notifier"]
